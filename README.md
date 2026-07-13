@@ -63,6 +63,10 @@ as a skill: `npx skills add maxgfr/secretgate`.
 | Secrets already in context before install | history is not rewritten | start a fresh session |
 | Agent-side hook timeout/kill | agents fail open by design | secretgate keeps p95 tiny; its own errors fail CLOSED on pre-events |
 
+> A blocked prompt is never sent to the LLM, but Claude Code still echoes your
+> `Original prompt:` back to your **local** terminal — that's your own input on
+> your own screen, not exfiltration. The credential does not reach the API.
+
 ## False positives
 
 Narrowest fix first:

@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -483,8 +483,25 @@ export async function run(argv: string[], io: Io): Promise<number> {
   return command(rest, io);
 }
 
+// Are we the process entrypoint? Compare REAL paths: the installed hook
+// invokes the pinned bundle under ~/.secretgate, and on macOS common homes
+// (/tmp, /var, and some corporate setups) resolve through symlinks — so
+// `import.meta.url` (real) and `process.argv[1]` (as-typed) diverge. Without
+// realpath the guard would silently fail and the hook would emit nothing
+// (fail-open). Resolve both sides before comparing.
+function isProcessEntrypoint(): boolean {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  const selfPath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(selfPath) === realpathSync(argv1);
+  } catch {
+    return import.meta.url === pathToFileURL(argv1).href;
+  }
+}
+
 /* node:coverage ignore next -- process entrypoint, exercised via the bundle smoke */
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isProcessEntrypoint()) {
   run(process.argv.slice(2), {
     stdout: (s) => process.stdout.write(s),
     stderr: (s) => process.stderr.write(s),

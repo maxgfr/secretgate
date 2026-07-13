@@ -26,11 +26,15 @@ printf 'CI_TOKEN=%s\nDEBUG=1\n' "$TOKEN" > ci-values.txt
 node "$ROOT/scripts/secretgate.mjs" install --claude-code --project
 echo "--- project hooks installed; running claude -p scenarios ---"
 
-echo "[1/3] prompt with a pasted token must be blocked"
+echo "[1/3] prompt with a pasted token must be blocked BEFORE reaching the model"
 OUT1="$(claude -p "here is the token: $TOKEN — use it" 2>&1 || true)"
-echo "$OUT1" | grep -q "secretgate blocked this prompt" || { echo "FAIL: prompt was not blocked"; exit 1; }
-echo "$OUT1" | grep -q "$TOKEN" && { echo "FAIL: raw token echoed back"; exit 1; }
-echo "  ok — blocked with a redacted copy"
+# Security property: the block prevents the prompt from being sent to the LLM.
+# (Claude Code still echoes the user's own 'Original prompt:' to the LOCAL
+# terminal — that is not exfiltration; the token never left the machine.)
+echo "$OUT1" | grep -q "operation blocked by hook" || { echo "FAIL: prompt was not blocked"; exit 1; }
+echo "$OUT1" | grep -q "secretgate blocked this prompt" || { echo "FAIL: block reason missing"; exit 1; }
+echo "$OUT1" | grep -q "SECRETGATE_" || { echo "FAIL: no redacted copy offered"; exit 1; }
+echo "  ok — blocked before reaching the model, with a redacted copy to resend"
 
 echo "[2/3] reading a token-bearing file must reach the model redacted"
 OUT2="$(claude -p "read ci-values.txt and tell me VERBATIM the exact value of CI_TOKEN" 2>&1)"

@@ -79,7 +79,7 @@ var init_gitleaks_bin = __esm({
 });
 
 // src/cli.ts
-import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync8, readdirSync, statSync } from "fs";
+import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync8, readdirSync, realpathSync, statSync } from "fs";
 import { homedir as homedir4 } from "os";
 import { dirname as dirname2, join as join6, relative, resolve } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -5679,7 +5679,17 @@ ${USAGE}`);
   }
   return command(rest, io);
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function isProcessEntrypoint() {
+  const argv1 = process.argv[1];
+  if (!argv1) return false;
+  const selfPath = fileURLToPath(import.meta.url);
+  try {
+    return realpathSync(selfPath) === realpathSync(argv1);
+  } catch {
+    return import.meta.url === pathToFileURL(argv1).href;
+  }
+}
+if (isProcessEntrypoint()) {
   run(process.argv.slice(2), {
     stdout: (s) => process.stdout.write(s),
     stderr: (s) => process.stderr.write(s)

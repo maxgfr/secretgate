@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -87,6 +87,21 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     const s2 = JSON.parse(readFileSync(settingsPath, "utf8"));
     expect(s2.hooks?.UserPromptSubmit).toBeUndefined();
     expect(s2.permissions?.deny ?? []).not.toContain("Read(**/.env)");
+  });
+
+  it("runs when invoked through a SYMLINKED path (macOS /tmp, symlinked homes)", async () => {
+    // Regression: the entrypoint guard compared as-typed vs real paths, so a
+    // symlinked invocation exited 0 with no output (silent fail-open).
+    const linkDir = join(home, "linked");
+    symlinkSync(join(__dirname, "..", ".."), linkDir);
+    const linkedBundle = join(linkDir, "scripts", "secretgate.mjs");
+    const r = await new Promise<{ stdout: string; code: number }>((res) => {
+      const child = execFile("node", [linkedBundle, "hook", "claude-code", "user-prompt-submit"], { env }, (_e, stdout) => {
+        res({ stdout, code: child.exitCode ?? 0 });
+      });
+      child.stdin!.end(JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: home, prompt: `token ${FAKE.githubPat}` }));
+    });
+    expect(JSON.parse(r.stdout).decision).toBe("block");
   });
 
   it("status reports wiring per agent and vault health", async () => {
