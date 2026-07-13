@@ -1,0 +1,5 @@
+source: https://raw.githubusercontent.com/gitleaks/gitleaks/09242ce9c8a60d9b051fc2d166f9e849b88c7ac0/config/gitleaks.toml
+commit: 09242ce9c8a60d9b051fc2d166f9e849b88c7ac0
+license: MIT (gitleaks, https://github.com/gitleaks/gitleaks/blob/master/LICENSE)
+fetched: 2026-07-13
+refresh: pnpm run rules:sync
