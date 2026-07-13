@@ -27,7 +27,8 @@ describe("installClaudeCode", () => {
     const s = read();
     expect(s.hooks.UserPromptSubmit[0].hooks[0].command).toBe(`${command} hook claude-code user-prompt-submit`);
     expect(s.hooks.PreToolUse[0].matcher).toBe("Read|Grep|Edit|Write|MultiEdit|NotebookEdit|Bash");
-    expect(s.hooks.PostToolUse[0].matcher).toBe("Read|Bash|Grep|Glob|WebFetch");
+    // PostToolUse redacts EVERY tool's output (incl. MCP/custom), so matcher is "*"
+    expect(s.hooks.PostToolUse[0].matcher).toBe("*");
     for (const rule of CC_DENY_RULES) expect(s.permissions.deny).toContain(rule);
   });
 

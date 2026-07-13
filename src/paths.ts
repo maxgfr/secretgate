@@ -28,8 +28,10 @@ export const EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.templ
 // alike; `~` is expanded by the caller when needed.
 export function sensitivePathMatch(path: string): string | undefined {
   const normalized = path.replaceAll("\\", "/");
-  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g))) return undefined;
-  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g));
+  // case-insensitive: on macOS/Windows `.ENV` and `.env` are the SAME file, so
+  // matching case-sensitively would let `Read(".ENV")` / `cat .ENV` slip past.
+  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g, true))) return undefined;
+  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g, true));
 }
 
 // Commands that print file contents to stdout — the ones that would leak a

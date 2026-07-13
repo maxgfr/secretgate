@@ -143,7 +143,7 @@ function isAllowedValue(secret, allowlist) {
 function isDisabledRule(ruleId, allowlist) {
   return allowlist?.rules?.includes(ruleId) ?? false;
 }
-function pathMatchesGlob(path, glob) {
+function pathMatchesGlob(path, glob, caseInsensitive = false) {
   let re = "";
   let i = 0;
   while (i < glob.length) {
@@ -169,7 +169,7 @@ function pathMatchesGlob(path, glob) {
       i++;
     }
   }
-  return new RegExp(`^(?:${re})$`).test(path);
+  return new RegExp(`^(?:${re})$`, caseInsensitive ? "i" : "").test(path);
 }
 function isAllowedPath(path, allowlist) {
   if (!path || !allowlist?.paths?.length) return false;
@@ -196,8 +196,8 @@ var SENSITIVE_GLOBS = [
 var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
 function sensitivePathMatch(path) {
   const normalized = path.replaceAll("\\", "/");
-  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g))) return void 0;
-  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g));
+  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g, true))) return void 0;
+  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g, true));
 }
 var READ_COMMANDS = /* @__PURE__ */ new Set([
   "cat",
@@ -4499,6 +4499,12 @@ var GLOBAL_ALLOWLIST = {
 };
 
 // src/engine/scanner.ts
+var ScanBudgetError = class extends Error {
+  constructor(ms) {
+    super(`scan exceeded its ${ms}ms budget`);
+    this.name = "ScanBudgetError";
+  }
+};
 var PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
 function compileAllowlist(a) {
   return {
@@ -4510,6 +4516,41 @@ function compileAllowlist(a) {
   };
 }
 var IIN = /^(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|2(?:22[1-9]|2[3-9]\d|[3-6]\d{2}|7[01]\d|720)\d{12}|3[47]\d{13}|6(?:011|5\d{2})\d{12})$/;
+var PLACEHOLDER_WORDS = /* @__PURE__ */ new Set([
+  "password",
+  "passwd",
+  "pass",
+  "secret",
+  "changeme",
+  "change-me",
+  "example",
+  "examplepassword",
+  "test",
+  "testpassword",
+  "token",
+  "your_password",
+  "yourpassword",
+  "admin",
+  "root",
+  "user",
+  "username",
+  "guest",
+  "none",
+  "null",
+  "redacted",
+  "hunter2",
+  "placeholder"
+]);
+function looksLikePlaceholder(v) {
+  const low = v.toLowerCase();
+  if (PLACEHOLDER_WORDS.has(low)) return true;
+  if (/^[*x•.\-_]+$/.test(v)) return true;
+  if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true;
+  if (/^%[a-z_]+%$/i.test(v)) return true;
+  if (/^<[^>]+>$/.test(v)) return true;
+  if (/^[a-z]+$/.test(low) && new Set(low).size <= 3) return true;
+  return false;
+}
 var BUILTIN_RULES = [
   {
     id: "credit-card-number",
@@ -4520,6 +4561,31 @@ var BUILTIN_RULES = [
       const digits = secret.replace(/[ -]/g, "");
       return IIN.test(digits) && luhnValid(digits);
     }
+  },
+  // Credentials embedded in a URL / connection string: scheme://[user]:PASSWORD@host
+  // (postgres, mysql, mongodb+srv, redis, amqp, https basic-auth, …). gitleaks
+  // ships no generic rule for this and it is an extremely common leak. The
+  // captured group is the PASSWORD; a placeholder-ish value is skipped.
+  {
+    id: "url-credentials",
+    re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:([^\s:/@]{3,256})@[^\s]+/dgi,
+    keywords: ["://"],
+    allowlists: [],
+    post: (secret) => !looksLikePlaceholder(secret)
+  },
+  // QUOTED password / secret assignment with a BROADER value charset than
+  // gitleaks' generic-api-key (which stops at `[\w.=-]`, missing `$!@#…`).
+  // Quoted-only on purpose: an unquoted value can't be told apart from ordinary
+  // code (`secret === undefined`, `apiKey = getKey()`), which floods false
+  // positives — quoted values after a secret keyword are almost always literals.
+  // Entropy-gated and placeholder-filtered.
+  {
+    id: "password-assignment",
+    re: /(?:password|passwd|pwd|secret|access[_-]?key|api[_-]?key|auth[_-]?token)["']?\s*(?:[:=]|:=|=>)\s*(?:"([^"\n]{6,200})"|'([^'\n]{6,200})'|`([^`\n]{6,200})`)/dgi,
+    keywords: ["password", "passwd", "pwd", "secret", "key", "token"],
+    entropy: 3,
+    allowlists: [],
+    post: (secret) => !looksLikePlaceholder(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret)
   }
 ];
 var COMPILED = [
@@ -4595,7 +4661,9 @@ function scan(text, cfg = {}) {
   const starts = lineStarts(text);
   const pragmaLines = pragmaAllowedLines(text);
   const findings = [];
+  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
   for (const rule of COMPILED) {
+    if (performance.now() > deadline) throw new ScanBudgetError(cfg.deadlineMs);
     if (isDisabledRule(rule.id, cfg.allowlist)) continue;
     if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;

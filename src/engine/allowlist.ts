@@ -25,7 +25,9 @@ export function isDisabledRule(ruleId: string, allowlist: UserAllowlist | undefi
 
 // Minimal glob matcher for path allowlists: `**` crosses directories, `*`
 // stays within one segment, `?` matches one character. Anchored on both ends.
-export function pathMatchesGlob(path: string, glob: string): boolean {
+// `caseInsensitive` is used for sensitive-file matching so `.ENV` / `ID_RSA`
+// can't evade the deny on case-insensitive filesystems (macOS/Windows).
+export function pathMatchesGlob(path: string, glob: string, caseInsensitive = false): boolean {
   let re = "";
   let i = 0;
   while (i < glob.length) {
@@ -54,7 +56,7 @@ export function pathMatchesGlob(path: string, glob: string): boolean {
       i++;
     }
   }
-  return new RegExp(`^(?:${re})$`).test(path);
+  return new RegExp(`^(?:${re})$`, caseInsensitive ? "i" : "").test(path);
 }
 
 export function isAllowedPath(path: string | undefined, allowlist: UserAllowlist | undefined): boolean {

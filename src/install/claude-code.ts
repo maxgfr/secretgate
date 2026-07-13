@@ -1,31 +1,46 @@
 import { type EditReport, editJsonFile } from "./json-merge.js";
 
 // Deny rules complement the hooks: they also apply where tool hooks don't fire
-// (e.g. cat/head/tail inside Bash, and — partially — @file mentions). Kept
-// narrower than the hook layer so .env.example & co stay readable: the hook is
-// the precise, exemption-aware layer.
+// — notably @file mentions, which inline a file's content WITHOUT firing tool
+// hooks. Kept close to parity with paths.ts SENSITIVE_GLOBS so @file can't pull
+// in a key the hook layer would have denied. .env.example & co stay readable
+// because the hook is the precise, exemption-aware layer (deny globs can't
+// express negation, so we avoid the broad `**/.env.*` here).
 export const CC_DENY_RULES = [
   "Read(**/.env)",
   "Read(**/.env.local)",
   "Read(**/.env.*.local)",
   "Read(**/*.pem)",
+  "Read(**/*.key)",
   "Read(**/id_rsa*)",
   "Read(**/id_ed25519*)",
+  "Read(**/id_ecdsa*)",
   "Read(~/.aws/**)",
+  "Read(**/.aws/**)",
   "Read(~/.ssh/**)",
+  "Read(**/.ssh/**)",
   "Read(~/.kube/config)",
+  "Read(**/.kube/config)",
   "Read(**/.netrc)",
   "Read(**/.npmrc)",
+  "Read(**/.docker/config.json)",
+  "Read(**/credentials.json)",
 ];
 
 // Identifies OUR hook entries regardless of how the CLI is invoked
 // (`secretgate hook claude-code …`, `node …/secretgate.mjs hook claude-code …`).
 const MARKER = "hook claude-code";
 
+// PostToolUse redaction is the linchpin control, so it fires on EVERY tool
+// (matcher "*") — an allow-list would silently miss MCP tools, custom tools and
+// any future tool, letting their output reach the model unredacted. The
+// deep-walk handles whatever shape the result has. PreToolUse stays targeted:
+// its deny/restore logic only applies to the file/shell tools named here, and
+// any secret an MCP read tool pulls in is still redacted by PostToolUse.
 const EVENTS: Array<{ event: string; arg: string; matcher?: string }> = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
   { event: "PreToolUse", arg: "pre-tool-use", matcher: "Read|Grep|Edit|Write|MultiEdit|NotebookEdit|Bash" },
-  { event: "PostToolUse", arg: "post-tool-use", matcher: "Read|Bash|Grep|Glob|WebFetch" },
+  { event: "PostToolUse", arg: "post-tool-use", matcher: "*" },
 ];
 
 interface HookGroup {

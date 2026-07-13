@@ -17,17 +17,20 @@ into a file                          -> the REAL value lands on disk
 ## Install
 
 secretgate ships as an **agent skill** — there is no npm package to publish or
-trust. One install, then a one-time wiring:
+trust. Install the skill, then run `init` once:
 
 ```bash
-npx skills add maxgfr/secretgate                       # installs the skill + bundle
-node .claude/skills/secretgate/scripts/secretgate.mjs install --all   # wires the hooks
-node .claude/skills/secretgate/scripts/secretgate.mjs status          # doctor
+npx skills add maxgfr/secretgate                            # installs the skill + bundle
+node .claude/skills/secretgate/scripts/secretgate.mjs init  # wires the agents on this machine AND self-tests
 ```
 
+`init` auto-detects Claude Code / Codex / OpenCode, wires each, then **proves
+the firewall fires** — it spawns the real hook with a fake secret and confirms
+the prompt is blocked and tool output is redacted before declaring success.
+
 Even simpler: after `npx skills add`, just tell your agent **"install
-secretgate"** — the skill activates and runs the wiring for you. Restart the
-agent session afterwards (hooks load at startup).
+secretgate"** — the skill activates and runs `init` for you. Restart the agent
+session afterwards (hooks load at startup).
 
 Once wired, protection is **fully automatic and deterministic**: the hooks — not
 the model — scan and redact on every prompt and tool call. You never invoke
@@ -37,10 +40,12 @@ anything per-use.
 
 - **Detection engine**: 221 rules converted from [gitleaks](https://github.com/gitleaks/gitleaks)'
   default config (vendored, pinned, `pnpm run rules:sync` to refresh) + per-rule
-  entropy thresholds + upstream stopword allowlists + a Luhn/IIN-gated
-  credit-card rule. Zero runtime dependencies, single bundled `.mjs`, ~50ms per
-  scan. If the real `gitleaks` binary is installed, `secretgate scan` runs it
-  as a second engine (hybrid).
+  entropy thresholds + upstream stopword allowlists + secretgate built-ins for
+  Luhn/IIN-gated credit cards, **URL-embedded credentials** (`postgres://user:pass@…`,
+  basic-auth URLs) and **quoted passwords with punctuation** that gitleaks' generic
+  rule misses. Zero runtime dependencies, single bundled `.mjs`, ~50ms per scan.
+  If the real `gitleaks` binary is installed, `secretgate scan` runs it as a
+  second engine (hybrid).
 - **Redact-and-restore**: each secret maps to a stable `SECRETGATE_<hmac>`
   placeholder (per-install salt, vault at `~/.secretgate/vault.json`, 0600).
   The model only ever sees placeholders; consistent across sessions, restored
@@ -58,19 +63,27 @@ anything per-use.
 |---|---|---|---|
 | Secret pasted in a prompt | ✅ blocked + redacted copy | ✅ blocked + redacted copy | ✅ redacted in place |
 | Agent reads a sensitive file | ✅ hook deny + `permissions.deny` | ✅ hook deny | ✅ hook deny (`.env` also denied by OpenCode itself) |
-| Secret in tool/bash output | ✅ redacted (`updatedToolOutput`) | ❌ upstream: output rewrite parsed but not applied | ✅ redacted (incl. grep/glob) |
+| Secret in **any** tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ❌ upstream: output rewrite parsed but not applied | ✅ redacted (incl. grep/glob) |
 | Placeholder written to a file | ✅ real value restored | ✅ real value restored | ✅ real value restored |
+| Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ❌ (no output control) | plugin best-effort |
+
+**Fail-closed by design.** If a scan crashes, times out against a crafted
+payload, or the output is too large to scan, secretgate **withholds** the tool
+output (a notice replaces it) rather than letting unscanned content through. A
+per-scan wall-clock budget stops a maliciously slow payload from stalling a hook
+past the agent's timeout (which would otherwise fail open).
 
 **Not covered — know your residual risk:**
 
 | Gap | Why | Mitigation |
 |---|---|---|
-| Claude Code `@file` mentions | inlined without firing tool hooks | `permissions.deny` rules cover the common sensitive files |
+| Claude Code `@file` mentions | inlined without firing tool hooks | `permissions.deny` rules (broadened to cover keys, `.aws`, `.ssh`, `credentials.json`, …) block the common sensitive files |
+| Codex tool **output** | upstream can't rewrite tool output yet | prompts + tool inputs are protected; tool output is not — prefer Claude Code / OpenCode for output-heavy work |
 | `codex exec` (non-interactive) | upstream bug: hooks don't fire (0.137–0.138) | interactive sessions only for now |
+| Low-entropy secrets (`password: hunter2`) | indistinguishable from prose without huge false positives | catches strong/quoted passwords; use a real password manager |
+| Restore → off-machine exfil | a prompt-injected agent could write a placeholder to a file (restored to the real value) then `git push` / upload it | Bash restore is **off** by default; the secret never reaches the model, only a file the agent already had write access to |
 | Images / clipboard / screenshots | no hook surface | — |
-| MCP tool traffic | not routed through these hooks | scope MCP servers carefully |
 | Secrets already in context before install | history is not rewritten | start a fresh session |
-| Agent-side hook timeout/kill | agents fail open by design | secretgate keeps p95 tiny; its own errors fail CLOSED on pre-events |
 
 > A blocked prompt is never sent to the LLM, but Claude Code still echoes your
 > `Original prompt:` back to your **local** terminal — that's your own input on
@@ -92,6 +105,7 @@ Projects can commit shared entries in `.secretgate.json`:
 ## Commands
 
 ```
+secretgate init       Install for the agents on this machine + verify the firewall fires
 secretgate install    --claude-code|--codex|--opencode|--all [--project]
 secretgate uninstall  (same flags — removes exactly what install added)
 secretgate status     doctor: wiring, engines, vault health, limitations

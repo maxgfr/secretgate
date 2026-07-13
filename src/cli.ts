@@ -1,5 +1,6 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
@@ -28,6 +29,7 @@ const USAGE = `secretgate ${VERSION} — local secrets firewall for coding agent
 Usage: secretgate <command> [options]
 
 Commands:
+  init        One-shot: install for the agents on this machine and verify the firewall fires
   install     Wire secretgate into an agent (--claude-code | --codex | --opencode | --all)
   uninstall   Remove exactly what install added
   status      Doctor: what is wired, versions, vault health, known limitations
@@ -41,6 +43,24 @@ Options:
   --version   Print the version
   --help      Print this help
 `;
+
+// Read stdin, but STOP once we exceed `cap` bytes — an unbounded read would OOM
+// (and crash) the hook on a huge tool output, which the agent treats as
+// fail-open. Returns whether the stream was truncated so the caller can
+// fail CLOSED instead of scanning a partial payload.
+async function readIoStdinCapped(io: Io, cap: number): Promise<{ text: string; truncated: boolean }> {
+  if (io.stdin) {
+    const text = await io.stdin();
+    return { text, truncated: text.length > cap };
+  }
+  let data = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) {
+    data += chunk;
+    if (data.length > cap) return { text: data.slice(0, cap), truncated: true };
+  }
+  return { text: data, truncated: false };
+}
 
 async function readIoStdin(io: Io): Promise<string> {
   if (io.stdin) return io.stdin();
@@ -222,10 +242,16 @@ async function cmdVault(args: string[], io: Io): Promise<number> {
   return 2;
 }
 
-// Hooks fire on every prompt/tool call — cap what we are willing to buffer.
-// An oversized or unreadable stdin yields a non-JSON sentinel, which the
-// handlers treat as fail-closed for pre events and fail-open for post events.
-const STDIN_CAP = 5 * 1024 * 1024;
+// Hooks fire on every prompt/tool call. HARD_READ_CAP is the OOM guard (stop
+// reading past it); SCAN_CAP is the largest payload we will scan — beyond it we
+// fail CLOSED (block / deny / withhold). SCAN_CAP is deliberately small so that
+// even the slowest single rule over it stays well under the in-scan wall-clock
+// deadline (a rule's regex is atomic — the deadline is only checked between
+// rules). The deadline bounds the aggregate; the cap bounds any one rule. A
+// larger prompt/output is withheld, never leaked. Real tool outputs are far
+// under 2 MB.
+const HARD_READ_CAP = 64 * 1024 * 1024;
+const SCAN_CAP = 2 * 1024 * 1024;
 
 async function cmdHook(args: string[], io: Io): Promise<number> {
   const [agent, event] = args;
@@ -235,8 +261,9 @@ async function cmdHook(args: string[], io: Io): Promise<number> {
   }
   let raw: string;
   try {
-    raw = await readIoStdin(io);
-    if (raw.length > STDIN_CAP) raw = "__SECRETGATE_OVERSIZED__";
+    const read = await readIoStdinCapped(io, HARD_READ_CAP);
+    // Truncated or over the scan cap -> non-JSON sentinel -> handler fails CLOSED.
+    raw = read.truncated || read.text.length > SCAN_CAP ? "__SECRETGATE_OVERSIZED__" : read.text;
   } catch {
     raw = "__SECRETGATE_STDIN_ERROR__";
   }
@@ -301,44 +328,156 @@ function claudeSettingsPath(project: boolean): string {
   return project ? join(process.cwd(), ".claude", "settings.json") : join(homedir(), ".claude", "settings.json");
 }
 
+function installForAgents(flags: AgentFlags, io: Io): void {
+  if (flags.claudeCode) {
+    const settingsPath = claudeSettingsPath(flags.project);
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
+    io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
+    if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}\n`);
+    io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
+    io.stdout("claude-code: note — @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
+  }
+  if (flags.opencode) {
+    const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
+    io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
+    io.stdout("opencode: restart OpenCode so the plugin loads.\n");
+  }
+  if (flags.codex) {
+    const dir = codexHome();
+    mkdirSync(dir, { recursive: true });
+    const r = installCodex({ codexDir: dir, command: installedCliCommand() });
+    io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})\n`);
+    for (const g of r.guidance) io.stdout(`${g}\n`);
+    io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
+  }
+}
+
+function handleInstallError(err: unknown, io: Io): number | undefined {
+  if (err instanceof SettingsParseError) {
+    io.stderr(`${err.message}\n`);
+    return 2;
+  }
+  if (err instanceof Error && /hooks = false|refusing/.test(err.message)) {
+    io.stderr(`${err.message}\n`);
+    return 2;
+  }
+  return undefined;
+}
+
 async function cmdInstall(args: string[], io: Io): Promise<number> {
   const flags = parseAgentFlags(args, io);
   if (!flags) return 2;
   try {
-    if (flags.claudeCode) {
-      const settingsPath = claudeSettingsPath(flags.project);
-      mkdirSync(dirname(settingsPath), { recursive: true });
-      const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
-      io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
-      if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}\n`);
-      io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
-      io.stdout("claude-code: note — @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
-    }
-    if (flags.opencode) {
-      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
-      io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
-      io.stdout("opencode: restart OpenCode so the plugin loads.\n");
-    }
-    if (flags.codex) {
-      const dir = codexHome();
-      mkdirSync(dir, { recursive: true });
-      const r = installCodex({ codexDir: dir, command: installedCliCommand() });
-      io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})\n`);
-      for (const g of r.guidance) io.stdout(`${g}\n`);
-      io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
-    }
+    installForAgents(flags, io);
   } catch (err) {
-    if (err instanceof SettingsParseError) {
-      io.stderr(`${err.message}\n`);
-      return 2;
-    }
-    if (err instanceof Error && /hooks = false|refusing/.test(err.message)) {
-      io.stderr(`${err.message}\n`);
-      return 2;
-    }
+    const code = handleInstallError(err, io);
+    if (code !== undefined) return code;
     throw err;
   }
   return 0;
+}
+
+// Which agents are present on this machine (config dir / home exists).
+function detectAgents(): AgentFlags {
+  return {
+    claudeCode: existsSync(join(homedir(), ".claude")),
+    codex: existsSync(codexHome()),
+    opencode: existsSync(opencodeConfigDir()),
+    project: false,
+  };
+}
+
+// End-to-end self-test: spawn the EXACT wired bundle with a synthetic event and
+// confirm it (1) blocks a secret-bearing prompt and (2) redacts a secret in
+// tool output. Runs against a throwaway vault so the real one stays clean.
+function verifyClaudeCodeWiring(io: Io): boolean {
+  const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
+  const self = fileURLToPath(import.meta.url);
+  const bundle = existsSync(pinned) ? pinned : self;
+  // high-entropy fake token, built by concatenation (never a literal in-repo)
+  const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
+  const tmpHome = mkdtempSync(join(tmpdir(), "secretgate-verify-"));
+  const env = { ...process.env, SECRETGATE_HOME: tmpHome };
+  const runHook = (event: string, payload: unknown): any => {
+    const out = execFileSync("node", [bundle, "hook", "claude-code", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+    return out.trim() ? JSON.parse(out) : {};
+  };
+  let ok = true;
+  try {
+    const block = runHook("user-prompt-submit", { hook_event_name: "UserPromptSubmit", cwd: tmpHome, prompt: `deploy with ${fake}` });
+    if (block.decision === "block" && !JSON.stringify(block).includes(fake)) {
+      io.stdout("  ✓ a secret pasted in a prompt is blocked (and the raw value is not echoed)\n");
+    } else {
+      io.stdout("  ✗ prompt block FAILED — a pasted secret would reach the model\n");
+      ok = false;
+    }
+    const post = runHook("post-tool-use", {
+      hook_event_name: "PostToolUse",
+      cwd: tmpHome,
+      tool_name: "Bash",
+      tool_input: { command: "env" },
+      tool_response: `PATH=/bin\nTOKEN=${fake}\n`,
+    });
+    const redacted = post?.hookSpecificOutput?.updatedToolOutput ?? "";
+    if (typeof redacted === "string" && redacted.includes("SECRETGATE_") && !redacted.includes(fake)) {
+      io.stdout("  ✓ a secret in tool output is redacted before the model sees it\n");
+    } else {
+      io.stdout("  ✗ tool-output redaction FAILED — a secret would reach the model\n");
+      ok = false;
+    }
+  } catch (err) {
+    io.stdout(`  ✗ could not run the wired hook: ${err instanceof Error ? err.message.split("\n")[0] : "unknown"}\n`);
+    ok = false;
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+  return ok;
+}
+
+// `init` — the one-shot: install for the agents on this machine (or the ones
+// named), then PROVE the protection actually fires end-to-end.
+async function cmdInit(args: string[], io: Io): Promise<number> {
+  let flags: AgentFlags;
+  const explicit = args.some((a) => a.startsWith("--") && a !== "--project");
+  if (explicit) {
+    const parsed = parseAgentFlags(args, io);
+    if (!parsed) return 2;
+    flags = parsed;
+  } else {
+    flags = detectAgents();
+    flags.project = args.includes("--project");
+    if (!flags.claudeCode && !flags.codex && !flags.opencode) {
+      io.stdout("secretgate: no agent config found — defaulting to Claude Code.\n");
+      flags.claudeCode = true;
+    } else {
+      const found = [flags.claudeCode && "Claude Code", flags.codex && "Codex", flags.opencode && "OpenCode"].filter(Boolean).join(", ");
+      io.stdout(`secretgate: detected ${found} — wiring ${found === "Claude Code" ? "it" : "them"}.\n`);
+    }
+  }
+
+  io.stdout("\n== install ==\n");
+  try {
+    installForAgents(flags, io);
+  } catch (err) {
+    const code = handleInstallError(err, io);
+    if (code !== undefined) return code;
+    throw err;
+  }
+
+  io.stdout("\n== verify the firewall actually fires ==\n");
+  let ok = true;
+  if (flags.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
+  if (flags.codex) io.stdout("  · codex: prompt/tool-input protection installed (tool-output redaction is not possible on Codex yet).\n");
+  if (flags.opencode) io.stdout("  · opencode: plugin installed; restart OpenCode to load it.\n");
+
+  io.stdout("\n");
+  if (ok) {
+    io.stdout("secretgate is active. Restart your agent session so the hooks load, then you're protected.\n");
+    return 0;
+  }
+  io.stderr("secretgate: verification FAILED — protection may not be active. Run `secretgate status` and re-run `secretgate init`.\n");
+  return 1;
 }
 
 async function cmdUninstall(args: string[], io: Io): Promise<number> {
@@ -449,6 +588,7 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
 type Command = (args: string[], io: Io) => Promise<number> | number;
 
 const commands: Record<string, Command> = {
+  init: cmdInit,
   scan: cmdScan,
   pipe: cmdPipe,
   allow: cmdAllow,

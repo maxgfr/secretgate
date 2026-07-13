@@ -48,6 +48,13 @@ describe("sensitivePathMatch — real .env only", () => {
     expect(sensitivePathMatch("/proj/.env.example")).toBeUndefined();
     expect(sensitivePathMatch("/proj/.env.sample")).toBeUndefined();
   });
+
+  it("catches case variants so .ENV / ID_RSA can't evade on macOS/Windows", () => {
+    expect(sensitivePathMatch("/proj/.ENV")).toBeDefined();
+    expect(sensitivePathMatch("/proj/.Env")).toBeDefined();
+    expect(sensitivePathMatch("/home/u/.SSH/ID_RSA")).toBeDefined();
+    expect(sensitivePathMatch("/proj/SECRET.PEM")).toBeDefined();
+  });
 });
 
 describe("commandTouchesSensitivePath — read commands only", () => {

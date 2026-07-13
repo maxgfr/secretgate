@@ -79,8 +79,9 @@ var init_gitleaks_bin = __esm({
 });
 
 // src/cli.ts
-import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync8, readdirSync, realpathSync, statSync } from "fs";
-import { homedir as homedir4 } from "os";
+import { execFileSync } from "child_process";
+import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync2, readFileSync as readFileSync8, readdirSync, realpathSync, rmSync as rmSync3, statSync } from "fs";
+import { homedir as homedir4, tmpdir as tmpdir2 } from "os";
 import { dirname as dirname2, join as join6, relative, resolve } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
@@ -230,7 +231,7 @@ function isAllowedValue(secret, allowlist) {
 function isDisabledRule(ruleId, allowlist) {
   return allowlist?.rules?.includes(ruleId) ?? false;
 }
-function pathMatchesGlob(path, glob) {
+function pathMatchesGlob(path, glob, caseInsensitive = false) {
   let re = "";
   let i = 0;
   while (i < glob.length) {
@@ -256,7 +257,7 @@ function pathMatchesGlob(path, glob) {
       i++;
     }
   }
-  return new RegExp(`^(?:${re})$`).test(path);
+  return new RegExp(`^(?:${re})$`, caseInsensitive ? "i" : "").test(path);
 }
 function isAllowedPath(path, allowlist) {
   if (!path || !allowlist?.paths?.length) return false;
@@ -4534,6 +4535,12 @@ var GLOBAL_ALLOWLIST = {
 };
 
 // src/engine/scanner.ts
+var ScanBudgetError = class extends Error {
+  constructor(ms) {
+    super(`scan exceeded its ${ms}ms budget`);
+    this.name = "ScanBudgetError";
+  }
+};
 var PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
 function compileAllowlist(a) {
   return {
@@ -4545,6 +4552,41 @@ function compileAllowlist(a) {
   };
 }
 var IIN = /^(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|2(?:22[1-9]|2[3-9]\d|[3-6]\d{2}|7[01]\d|720)\d{12}|3[47]\d{13}|6(?:011|5\d{2})\d{12})$/;
+var PLACEHOLDER_WORDS = /* @__PURE__ */ new Set([
+  "password",
+  "passwd",
+  "pass",
+  "secret",
+  "changeme",
+  "change-me",
+  "example",
+  "examplepassword",
+  "test",
+  "testpassword",
+  "token",
+  "your_password",
+  "yourpassword",
+  "admin",
+  "root",
+  "user",
+  "username",
+  "guest",
+  "none",
+  "null",
+  "redacted",
+  "hunter2",
+  "placeholder"
+]);
+function looksLikePlaceholder(v) {
+  const low = v.toLowerCase();
+  if (PLACEHOLDER_WORDS.has(low)) return true;
+  if (/^[*x•.\-_]+$/.test(v)) return true;
+  if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true;
+  if (/^%[a-z_]+%$/i.test(v)) return true;
+  if (/^<[^>]+>$/.test(v)) return true;
+  if (/^[a-z]+$/.test(low) && new Set(low).size <= 3) return true;
+  return false;
+}
 var BUILTIN_RULES = [
   {
     id: "credit-card-number",
@@ -4555,6 +4597,31 @@ var BUILTIN_RULES = [
       const digits = secret.replace(/[ -]/g, "");
       return IIN.test(digits) && luhnValid(digits);
     }
+  },
+  // Credentials embedded in a URL / connection string: scheme://[user]:PASSWORD@host
+  // (postgres, mysql, mongodb+srv, redis, amqp, https basic-auth, …). gitleaks
+  // ships no generic rule for this and it is an extremely common leak. The
+  // captured group is the PASSWORD; a placeholder-ish value is skipped.
+  {
+    id: "url-credentials",
+    re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:([^\s:/@]{3,256})@[^\s]+/dgi,
+    keywords: ["://"],
+    allowlists: [],
+    post: (secret) => !looksLikePlaceholder(secret)
+  },
+  // QUOTED password / secret assignment with a BROADER value charset than
+  // gitleaks' generic-api-key (which stops at `[\w.=-]`, missing `$!@#…`).
+  // Quoted-only on purpose: an unquoted value can't be told apart from ordinary
+  // code (`secret === undefined`, `apiKey = getKey()`), which floods false
+  // positives — quoted values after a secret keyword are almost always literals.
+  // Entropy-gated and placeholder-filtered.
+  {
+    id: "password-assignment",
+    re: /(?:password|passwd|pwd|secret|access[_-]?key|api[_-]?key|auth[_-]?token)["']?\s*(?:[:=]|:=|=>)\s*(?:"([^"\n]{6,200})"|'([^'\n]{6,200})'|`([^`\n]{6,200})`)/dgi,
+    keywords: ["password", "passwd", "pwd", "secret", "key", "token"],
+    entropy: 3,
+    allowlists: [],
+    post: (secret) => !looksLikePlaceholder(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret)
   }
 ];
 var COMPILED = [
@@ -4633,7 +4700,9 @@ function scan(text, cfg = {}) {
   const starts = lineStarts(text);
   const pragmaLines = pragmaAllowedLines(text);
   const findings = [];
+  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
   for (const rule of COMPILED) {
+    if (performance.now() > deadline) throw new ScanBudgetError(cfg.deadlineMs);
     if (isDisabledRule(rule.id, cfg.allowlist)) continue;
     if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
@@ -4703,8 +4772,8 @@ var SENSITIVE_GLOBS = [
 var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
 function sensitivePathMatch(path) {
   const normalized = path.replaceAll("\\", "/");
-  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g))) return void 0;
-  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g));
+  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g, true))) return void 0;
+  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g, true));
 }
 var READ_COMMANDS = /* @__PURE__ */ new Set([
   "cat",
@@ -4772,26 +4841,54 @@ function restorePlaceholders(text, vault) {
 // src/hooks/walk.ts
 function mapStrings(value, fn) {
   let changed = false;
-  const visit = (v) => {
-    if (typeof v === "string") {
-      const mapped = fn(v);
-      if (mapped !== v) changed = true;
-      return mapped;
-    }
-    if (Array.isArray(v)) return v.map(visit);
-    if (v !== null && typeof v === "object") {
-      const out = {};
-      for (const [k, inner] of Object.entries(v)) out[k] = visit(inner);
-      return out;
-    }
-    return v;
+  const map = (s) => {
+    const out = fn(s);
+    if (out !== s) changed = true;
+    return out;
   };
-  return { value: visit(value), changed };
+  if (typeof value === "string") return { value: map(value), changed };
+  if (value === null || typeof value !== "object") return { value, changed };
+  const root = Array.isArray(value) ? [] : {};
+  const stack = [{ src: value, dest: root }];
+  while (stack.length > 0) {
+    const { src, dest } = stack.pop();
+    if (Array.isArray(src)) {
+      for (let i = 0; i < src.length; i++) {
+        const v = src[i];
+        if (typeof v === "string") dest[i] = map(v);
+        else if (v !== null && typeof v === "object") {
+          dest[i] = Array.isArray(v) ? [] : {};
+          stack.push({ src: v, dest: dest[i] });
+        } else dest[i] = v;
+      }
+    } else {
+      for (const key of Object.keys(src)) {
+        const mappedKey = map(key);
+        const v = src[key];
+        if (typeof v === "string") dest[mappedKey] = map(v);
+        else if (v !== null && typeof v === "object") {
+          dest[mappedKey] = Array.isArray(v) ? [] : {};
+          stack.push({ src: v, dest: dest[mappedKey] });
+        } else dest[mappedKey] = v;
+      }
+    }
+  }
+  return { value: root, changed };
 }
 
 // src/hooks/claude-code.ts
 var ALLOW_TAG = "[allow-secret]";
 var PASS = { stdout: "", exit: 0 };
+var SCAN_DEADLINE_MS = 5e3;
+function withholdOutput(reason) {
+  return {
+    stdout: JSON.stringify({
+      systemMessage: `secretgate: ${reason} \u2014 tool output withheld`,
+      hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: `[secretgate withheld this tool output: ${reason}]` }
+    }),
+    exit: 0
+  };
+}
 async function handleClaudeCode(event, rawStdin) {
   try {
     const input = JSON.parse(rawStdin);
@@ -4806,7 +4903,8 @@ async function handleClaudeCode(event, rawStdin) {
         return { stdout: "", exit: 2 };
     }
   } catch (err) {
-    const reason = `secretgate internal error \u2014 failing closed (${err instanceof Error ? err.message.slice(0, 200) : "unknown"})`;
+    const detail = err instanceof Error ? err.message.slice(0, 200) : "unknown";
+    const reason = `secretgate could not scan this safely (${detail}), failing closed`;
     if (event === "user-prompt-submit") {
       return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
     }
@@ -4818,7 +4916,7 @@ async function handleClaudeCode(event, rawStdin) {
         exit: 0
       };
     }
-    return PASS;
+    return withholdOutput(reason);
   }
 }
 function userPromptSubmit(input) {
@@ -4826,7 +4924,7 @@ function userPromptSubmit(input) {
   if (prompt.includes(ALLOW_TAG)) return PASS;
   const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : void 0);
   const vault = new Vault();
-  const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist });
+  const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS });
   if (r.findings.length === 0) return PASS;
   const rules = [...new Set(r.findings.map((f) => f.ruleId))].join(", ");
   const reason = [
@@ -4923,7 +5021,7 @@ function postToolUse(input) {
   const vault = new Vault();
   let redactions = 0;
   const { value, changed } = mapStrings(input.tool_response, (s) => {
-    const r = redactText(s, vault, `claude-code:${toolName}`, { allowlist: cfg.allowlist });
+    const r = redactText(s, vault, `claude-code:${toolName}`, { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS });
     redactions += r.replaced.length;
     return r.text;
   });
@@ -5036,19 +5134,26 @@ var CC_DENY_RULES = [
   "Read(**/.env.local)",
   "Read(**/.env.*.local)",
   "Read(**/*.pem)",
+  "Read(**/*.key)",
   "Read(**/id_rsa*)",
   "Read(**/id_ed25519*)",
+  "Read(**/id_ecdsa*)",
   "Read(~/.aws/**)",
+  "Read(**/.aws/**)",
   "Read(~/.ssh/**)",
+  "Read(**/.ssh/**)",
   "Read(~/.kube/config)",
+  "Read(**/.kube/config)",
   "Read(**/.netrc)",
-  "Read(**/.npmrc)"
+  "Read(**/.npmrc)",
+  "Read(**/.docker/config.json)",
+  "Read(**/credentials.json)"
 ];
 var MARKER = "hook claude-code";
 var EVENTS = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
   { event: "PreToolUse", arg: "pre-tool-use", matcher: "Read|Grep|Edit|Write|MultiEdit|NotebookEdit|Bash" },
-  { event: "PostToolUse", arg: "post-tool-use", matcher: "Read|Bash|Grep|Glob|WebFetch" }
+  { event: "PostToolUse", arg: "post-tool-use", matcher: "*" }
 ];
 function withoutOurGroups(groups) {
   if (!Array.isArray(groups)) return [];
@@ -5280,6 +5385,7 @@ var USAGE = `secretgate ${VERSION} \u2014 local secrets firewall for coding agen
 Usage: secretgate <command> [options]
 
 Commands:
+  init        One-shot: install for the agents on this machine and verify the firewall fires
   install     Wire secretgate into an agent (--claude-code | --codex | --opencode | --all)
   uninstall   Remove exactly what install added
   status      Doctor: what is wired, versions, vault health, known limitations
@@ -5293,6 +5399,19 @@ Options:
   --version   Print the version
   --help      Print this help
 `;
+async function readIoStdinCapped(io, cap) {
+  if (io.stdin) {
+    const text = await io.stdin();
+    return { text, truncated: text.length > cap };
+  }
+  let data = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) {
+    data += chunk;
+    if (data.length > cap) return { text: data.slice(0, cap), truncated: true };
+  }
+  return { text: data, truncated: false };
+}
 async function readIoStdin(io) {
   if (io.stdin) return io.stdin();
   let data = "";
@@ -5462,7 +5581,8 @@ async function cmdVault(args, io) {
   io.stderr("vault: expected 'list' or 'clear'\n");
   return 2;
 }
-var STDIN_CAP = 5 * 1024 * 1024;
+var HARD_READ_CAP = 64 * 1024 * 1024;
+var SCAN_CAP = 2 * 1024 * 1024;
 async function cmdHook(args, io) {
   const [agent, event] = args;
   if (!agent || !event) {
@@ -5471,8 +5591,8 @@ async function cmdHook(args, io) {
   }
   let raw;
   try {
-    raw = await readIoStdin(io);
-    if (raw.length > STDIN_CAP) raw = "__SECRETGATE_OVERSIZED__";
+    const read = await readIoStdinCapped(io, HARD_READ_CAP);
+    raw = read.truncated || read.text.length > SCAN_CAP ? "__SECRETGATE_OVERSIZED__" : read.text;
   } catch {
     raw = "__SECRETGATE_STDIN_ERROR__";
   }
@@ -5524,51 +5644,152 @@ function opencodePluginSource() {
 function claudeSettingsPath(project) {
   return project ? join6(process.cwd(), ".claude", "settings.json") : join6(homedir4(), ".claude", "settings.json");
 }
+function installForAgents(flags, io) {
+  if (flags.claudeCode) {
+    const settingsPath = claudeSettingsPath(flags.project);
+    mkdirSync4(dirname2(settingsPath), { recursive: true });
+    const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
+    io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
+`);
+    if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}
+`);
+    io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
+    io.stdout("claude-code: note \u2014 @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
+  }
+  if (flags.opencode) {
+    const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
+    io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})
+`);
+    io.stdout("opencode: restart OpenCode so the plugin loads.\n");
+  }
+  if (flags.codex) {
+    const dir = codexHome();
+    mkdirSync4(dir, { recursive: true });
+    const r = installCodex({ codexDir: dir, command: installedCliCommand() });
+    io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
+`);
+    for (const g of r.guidance) io.stdout(`${g}
+`);
+    io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
+  }
+}
+function handleInstallError(err, io) {
+  if (err instanceof SettingsParseError) {
+    io.stderr(`${err.message}
+`);
+    return 2;
+  }
+  if (err instanceof Error && /hooks = false|refusing/.test(err.message)) {
+    io.stderr(`${err.message}
+`);
+    return 2;
+  }
+  return void 0;
+}
 async function cmdInstall(args, io) {
   const flags = parseAgentFlags(args, io);
   if (!flags) return 2;
   try {
-    if (flags.claudeCode) {
-      const settingsPath = claudeSettingsPath(flags.project);
-      mkdirSync4(dirname2(settingsPath), { recursive: true });
-      const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
-      io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
-`);
-      if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}
-`);
-      io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
-      io.stdout("claude-code: note \u2014 @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
-    }
-    if (flags.opencode) {
-      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
-      io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})
-`);
-      io.stdout("opencode: restart OpenCode so the plugin loads.\n");
-    }
-    if (flags.codex) {
-      const dir = codexHome();
-      mkdirSync4(dir, { recursive: true });
-      const r = installCodex({ codexDir: dir, command: installedCliCommand() });
-      io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
-`);
-      for (const g of r.guidance) io.stdout(`${g}
-`);
-      io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
-    }
+    installForAgents(flags, io);
   } catch (err) {
-    if (err instanceof SettingsParseError) {
-      io.stderr(`${err.message}
-`);
-      return 2;
-    }
-    if (err instanceof Error && /hooks = false|refusing/.test(err.message)) {
-      io.stderr(`${err.message}
-`);
-      return 2;
-    }
+    const code = handleInstallError(err, io);
+    if (code !== void 0) return code;
     throw err;
   }
   return 0;
+}
+function detectAgents() {
+  return {
+    claudeCode: existsSync5(join6(homedir4(), ".claude")),
+    codex: existsSync5(codexHome()),
+    opencode: existsSync5(opencodeConfigDir()),
+    project: false
+  };
+}
+function verifyClaudeCodeWiring(io) {
+  const pinned = join6(defaultVaultHome(), "bin", "secretgate.mjs");
+  const self = fileURLToPath(import.meta.url);
+  const bundle = existsSync5(pinned) ? pinned : self;
+  const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
+  const tmpHome = mkdtempSync2(join6(tmpdir2(), "secretgate-verify-"));
+  const env = { ...process.env, SECRETGATE_HOME: tmpHome };
+  const runHook = (event, payload) => {
+    const out = execFileSync("node", [bundle, "hook", "claude-code", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+    return out.trim() ? JSON.parse(out) : {};
+  };
+  let ok = true;
+  try {
+    const block = runHook("user-prompt-submit", { hook_event_name: "UserPromptSubmit", cwd: tmpHome, prompt: `deploy with ${fake}` });
+    if (block.decision === "block" && !JSON.stringify(block).includes(fake)) {
+      io.stdout("  \u2713 a secret pasted in a prompt is blocked (and the raw value is not echoed)\n");
+    } else {
+      io.stdout("  \u2717 prompt block FAILED \u2014 a pasted secret would reach the model\n");
+      ok = false;
+    }
+    const post = runHook("post-tool-use", {
+      hook_event_name: "PostToolUse",
+      cwd: tmpHome,
+      tool_name: "Bash",
+      tool_input: { command: "env" },
+      tool_response: `PATH=/bin
+TOKEN=${fake}
+`
+    });
+    const redacted = post?.hookSpecificOutput?.updatedToolOutput ?? "";
+    if (typeof redacted === "string" && redacted.includes("SECRETGATE_") && !redacted.includes(fake)) {
+      io.stdout("  \u2713 a secret in tool output is redacted before the model sees it\n");
+    } else {
+      io.stdout("  \u2717 tool-output redaction FAILED \u2014 a secret would reach the model\n");
+      ok = false;
+    }
+  } catch (err) {
+    io.stdout(`  \u2717 could not run the wired hook: ${err instanceof Error ? err.message.split("\n")[0] : "unknown"}
+`);
+    ok = false;
+  } finally {
+    rmSync3(tmpHome, { recursive: true, force: true });
+  }
+  return ok;
+}
+async function cmdInit(args, io) {
+  let flags;
+  const explicit = args.some((a) => a.startsWith("--") && a !== "--project");
+  if (explicit) {
+    const parsed = parseAgentFlags(args, io);
+    if (!parsed) return 2;
+    flags = parsed;
+  } else {
+    flags = detectAgents();
+    flags.project = args.includes("--project");
+    if (!flags.claudeCode && !flags.codex && !flags.opencode) {
+      io.stdout("secretgate: no agent config found \u2014 defaulting to Claude Code.\n");
+      flags.claudeCode = true;
+    } else {
+      const found = [flags.claudeCode && "Claude Code", flags.codex && "Codex", flags.opencode && "OpenCode"].filter(Boolean).join(", ");
+      io.stdout(`secretgate: detected ${found} \u2014 wiring ${found === "Claude Code" ? "it" : "them"}.
+`);
+    }
+  }
+  io.stdout("\n== install ==\n");
+  try {
+    installForAgents(flags, io);
+  } catch (err) {
+    const code = handleInstallError(err, io);
+    if (code !== void 0) return code;
+    throw err;
+  }
+  io.stdout("\n== verify the firewall actually fires ==\n");
+  let ok = true;
+  if (flags.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
+  if (flags.codex) io.stdout("  \xB7 codex: prompt/tool-input protection installed (tool-output redaction is not possible on Codex yet).\n");
+  if (flags.opencode) io.stdout("  \xB7 opencode: plugin installed; restart OpenCode to load it.\n");
+  io.stdout("\n");
+  if (ok) {
+    io.stdout("secretgate is active. Restart your agent session so the hooks load, then you're protected.\n");
+    return 0;
+  }
+  io.stderr("secretgate: verification FAILED \u2014 protection may not be active. Run `secretgate status` and re-run `secretgate init`.\n");
+  return 1;
 }
 async function cmdUninstall(args, io) {
   const flags = parseAgentFlags(args, io);
@@ -5673,6 +5894,7 @@ async function cmdStatus(_args, io) {
   return 0;
 }
 var commands = {
+  init: cmdInit,
   scan: cmdScan,
   pipe: cmdPipe,
   allow: cmdAllow,

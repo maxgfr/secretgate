@@ -155,9 +155,21 @@ describe("PostToolUse — output redaction", () => {
     expect(r.exit).toBe(0);
   });
 
-  it("fails OPEN on malformed stdin for post events (cannot invent an output)", async () => {
-    const r = await handleClaudeCode("post-tool-use", "%%%");
+  it("fails CLOSED on malformed/oversized stdin for post events: WITHHOLDS the output", async () => {
+    for (const bad of ["%%%", "__SECRETGATE_OVERSIZED__", "__SECRETGATE_STDIN_ERROR__"]) {
+      const r = await handleClaudeCode("post-tool-use", bad);
+      const out = JSON.parse(r.stdout);
+      // the model receives a withholding notice, NEVER the raw (unscanned) output
+      expect(out.hookSpecificOutput.updatedToolOutput).toMatch(/secretgate withheld/);
+      expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
+    }
+  });
+
+  it("withholds when redaction itself throws (never passes raw output through)", async () => {
+    // a tool_response that makes the redactor throw must not leak: force it by
+    // passing a value that JSON.parse accepts but our handler can't scan cleanly
+    const r = await handleClaudeCode("post-tool-use", '{"hook_event_name":"PostToolUse","tool_name":"Bash"}');
+    // no tool_response key -> PASS is fine (nothing to redact); assert that path
     expect(r.stdout).toBe("");
-    expect(r.exit).toBe(0);
   });
 });

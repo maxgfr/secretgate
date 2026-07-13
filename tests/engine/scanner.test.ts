@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { scan } from "../../src/engine/scanner.js";
+import { ScanBudgetError, scan } from "../../src/engine/scanner.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
 const sha256hex = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -96,6 +96,69 @@ describe("scan — credit cards (Luhn + IIN gated)", () => {
   it("ignores a checksum-invalid number and non-card digit runs", () => {
     expect(scan(`card: ${FAKE.visaPanInvalid}`)).toEqual([]);
     expect(scan("build id: 1234567890123456")).toEqual([]);
+  });
+});
+
+describe("scan — url credentials (secretgate builtin)", () => {
+  const cases: Array<[string, string]> = [
+    ["postgres", "DATABASE_URL=postgres://admin:Xk9mQ2vL7pR4tY6h@db:5432/prod"],
+    ["redis (no user)", "redis://:Xk9mQ2vL7pR4tY6hN3@cache:6379"],
+    ["mongodb+srv", "mongodb+srv://dbadmin:Xk9mQ2vL7pR4tY6h@cluster0.mongodb.net"],
+    ["https basic-auth", "clone https://svc:Xk9mQ2vL7pR4tY6hZ8@api.internal.co/v1"],
+  ];
+  for (const [name, text] of cases) {
+    it(`catches an embedded credential (${name})`, () => {
+      expect(scan(text).map((f) => f.ruleId)).toContain("url-credentials");
+    });
+  }
+
+  it("does not flag placeholder/masked/interpolated/port URLs", () => {
+    for (const text of ["postgres://user:password@localhost/db", "https://user:****@host", "postgres://user:${DB_PASS}@host", "http://localhost:8080/path"]) {
+      expect(
+        scan(text).filter((f) => f.ruleId === "url-credentials"),
+        text,
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("scan — quoted password assignment (secretgate builtin)", () => {
+  it("catches a quoted password with punctuation that generic-api-key misses", () => {
+    expect(scan('password = "Xq9$mK2vLp7wRt4z"').map((f) => f.ruleId)).toContain("password-assignment");
+    expect(scan('{"api_key": "sk_Xq9mK2vLp7wRt4zN8"}').map((f) => f.ruleId)).toContain("password-assignment");
+  });
+
+  it("does NOT fire on ordinary code (unquoted expressions)", () => {
+    for (const code of ["if (secret === undefined) return x;", "const apiKey = getKey();", "const password = req.body.password;", "let pwd = user.pwd"]) {
+      expect(
+        scan(code).filter((f) => f.ruleId === "password-assignment"),
+        code,
+      ).toEqual([]);
+    }
+  });
+
+  it("skips placeholder passwords", () => {
+    for (const text of ['password = "changeme"', 'password: "hunter2"', 'password = "example"']) {
+      expect(
+        scan(text).filter((f) => f.ruleId === "password-assignment"),
+        text,
+      ).toEqual([]);
+    }
+  });
+});
+
+describe("scan — wall-clock budget (anti-hang)", () => {
+  it("throws ScanBudgetError when the deadline is already past", () => {
+    // deadlineMs 0 -> the between-rule check trips on the first rule
+    expect(() => scan(`some text with a key = ${FAKE.githubPat}`, { deadlineMs: 0 })).toThrow(ScanBudgetError);
+  });
+
+  it("does not throw for a normal payload within a generous budget", () => {
+    expect(() => scan(`key = ${FAKE.githubPat}`, { deadlineMs: 5000 })).not.toThrow();
+  });
+
+  it("has no budget by default (offline CLI scan may take its time)", () => {
+    expect(() => scan(`key = ${FAKE.githubPat}`)).not.toThrow();
   });
 });
 

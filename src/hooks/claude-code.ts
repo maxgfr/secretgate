@@ -12,11 +12,27 @@ export interface HookResult {
 
 const ALLOW_TAG = "[allow-secret]";
 const PASS: HookResult = { stdout: "", exit: 0 };
+// Wall-clock budget per hook scan. Well under a typical agent hook timeout so a
+// crafted payload can't stall the hook into a fail-open timeout; on exceed the
+// scan throws and we fail closed.
+const SCAN_DEADLINE_MS = 5000;
 
-// Every handler is wrapped fail-closed for PRE events: if secretgate itself
-// crashes on malformed input, the prompt/tool call is blocked rather than
-// silently let through. POST events fail open — the tool already ran and we
-// cannot invent the redacted output we failed to compute.
+// Fail CLOSED on every event. If secretgate crashes or the payload is too big to
+// scan (a non-JSON sentinel from cmdHook), we never let unscanned content reach
+// the model: a prompt is blocked, a tool call is denied, and — critically — a
+// tool RESULT is WITHHELD (replaced with a notice via updatedToolOutput) rather
+// than passed through raw. The old "fail open on post" was the one path by which
+// an unscanned secret (e.g. a >20 MB log) could still reach the model.
+function withholdOutput(reason: string): HookResult {
+  return {
+    stdout: JSON.stringify({
+      systemMessage: `secretgate: ${reason} — tool output withheld`,
+      hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: `[secretgate withheld this tool output: ${reason}]` },
+    }),
+    exit: 0,
+  };
+}
+
 export async function handleClaudeCode(event: string, rawStdin: string): Promise<HookResult> {
   try {
     const input = JSON.parse(rawStdin) as Record<string, any>;
@@ -31,7 +47,8 @@ export async function handleClaudeCode(event: string, rawStdin: string): Promise
         return { stdout: "", exit: 2 };
     }
   } catch (err) {
-    const reason = `secretgate internal error — failing closed (${err instanceof Error ? err.message.slice(0, 200) : "unknown"})`;
+    const detail = err instanceof Error ? err.message.slice(0, 200) : "unknown";
+    const reason = `secretgate could not scan this safely (${detail}), failing closed`;
     if (event === "user-prompt-submit") {
       return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
     }
@@ -43,7 +60,7 @@ export async function handleClaudeCode(event: string, rawStdin: string): Promise
         exit: 0,
       };
     }
-    return PASS;
+    return withholdOutput(reason);
   }
 }
 
@@ -52,7 +69,7 @@ function userPromptSubmit(input: Record<string, any>): HookResult {
   if (prompt.includes(ALLOW_TAG)) return PASS;
   const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : undefined);
   const vault = new Vault();
-  const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist });
+  const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS });
   if (r.findings.length === 0) return PASS;
   const rules = [...new Set(r.findings.map((f) => f.ruleId))].join(", ");
   const reason = [
@@ -162,7 +179,7 @@ function postToolUse(input: Record<string, any>): HookResult {
   const vault = new Vault();
   let redactions = 0;
   const { value, changed } = mapStrings(input.tool_response, (s) => {
-    const r = redactText(s, vault, `claude-code:${toolName}`, { allowlist: cfg.allowlist });
+    const r = redactText(s, vault, `claude-code:${toolName}`, { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS });
     redactions += r.replaced.length;
     return r.text;
   });

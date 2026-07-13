@@ -20,6 +20,24 @@ export interface ScanConfig {
   /** enables path-based allowlists (upstream global + user globs) */
   sourcePath?: string;
   allowlist?: UserAllowlist;
+  /**
+   * Wall-clock budget in ms. Running all rules over a large adversarial payload
+   * (every keyword present unlocks all rules) is linear but slow; without a
+   * budget a crafted input could stall a hook past the agent's timeout, which
+   * is fail-open. When set, scan throws ScanBudgetError past the budget so the
+   * hook fails CLOSED (block/deny/withhold). Left unset for the offline `scan`
+   * CLI, which may take its time over a whole repo.
+   */
+  deadlineMs?: number;
+}
+
+// Thrown when a scan exceeds its wall-clock budget — callers in the hook path
+// treat this like any other failure and fail closed.
+export class ScanBudgetError extends Error {
+  constructor(ms: number) {
+    super(`scan exceeded its ${ms}ms budget`);
+    this.name = "ScanBudgetError";
+  }
 }
 
 // secretgate's own placeholders are ALREADY-redacted text — they must never be
@@ -64,6 +82,46 @@ function compileAllowlist(a: GenAllowlist): CompiledAllowlist {
 // is a secretgate built-in, gated by BOTH a Luhn checksum and a major-network
 // IIN prefix — an arbitrary digit run never fires it.
 const IIN = /^(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|2(?:22[1-9]|2[3-9]\d|[3-6]\d{2}|7[01]\d|720)\d{12}|3[47]\d{13}|6(?:011|5\d{2})\d{12})$/;
+
+// Placeholder-ish values that appear in docs/examples and are NOT real secrets.
+// Applied to the URL-credential and password rules to keep false positives low.
+const PLACEHOLDER_WORDS = new Set([
+  "password",
+  "passwd",
+  "pass",
+  "secret",
+  "changeme",
+  "change-me",
+  "example",
+  "examplepassword",
+  "test",
+  "testpassword",
+  "token",
+  "your_password",
+  "yourpassword",
+  "admin",
+  "root",
+  "user",
+  "username",
+  "guest",
+  "none",
+  "null",
+  "redacted",
+  "hunter2",
+  "placeholder",
+]);
+
+function looksLikePlaceholder(v: string): boolean {
+  const low = v.toLowerCase();
+  if (PLACEHOLDER_WORDS.has(low)) return true;
+  if (/^[*x•.\-_]+$/.test(v)) return true; // masked ***, xxxx, ----
+  if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true; // ${VAR} / $VAR interpolation
+  if (/^%[a-z_]+%$/i.test(v)) return true; // %VAR%
+  if (/^<[^>]+>$/.test(v)) return true; // <your-password>
+  if (/^[a-z]+$/.test(low) && new Set(low).size <= 3) return true; // aaaa, abcabc
+  return false;
+}
+
 const BUILTIN_RULES: CompiledRule[] = [
   {
     id: "credit-card-number",
@@ -74,6 +132,31 @@ const BUILTIN_RULES: CompiledRule[] = [
       const digits = secret.replace(/[ -]/g, "");
       return IIN.test(digits) && luhnValid(digits);
     },
+  },
+  // Credentials embedded in a URL / connection string: scheme://[user]:PASSWORD@host
+  // (postgres, mysql, mongodb+srv, redis, amqp, https basic-auth, …). gitleaks
+  // ships no generic rule for this and it is an extremely common leak. The
+  // captured group is the PASSWORD; a placeholder-ish value is skipped.
+  {
+    id: "url-credentials",
+    re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:([^\s:/@]{3,256})@[^\s]+/dgi,
+    keywords: ["://"],
+    allowlists: [],
+    post: (secret) => !looksLikePlaceholder(secret),
+  },
+  // QUOTED password / secret assignment with a BROADER value charset than
+  // gitleaks' generic-api-key (which stops at `[\w.=-]`, missing `$!@#…`).
+  // Quoted-only on purpose: an unquoted value can't be told apart from ordinary
+  // code (`secret === undefined`, `apiKey = getKey()`), which floods false
+  // positives — quoted values after a secret keyword are almost always literals.
+  // Entropy-gated and placeholder-filtered.
+  {
+    id: "password-assignment",
+    re: /(?:password|passwd|pwd|secret|access[_-]?key|api[_-]?key|auth[_-]?token)["']?\s*(?:[:=]|:=|=>)\s*(?:"([^"\n]{6,200})"|'([^'\n]{6,200})'|`([^`\n]{6,200})`)/dgi,
+    keywords: ["password", "passwd", "pwd", "secret", "key", "token"],
+    entropy: 3,
+    allowlists: [],
+    post: (secret) => !looksLikePlaceholder(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret),
   },
 ];
 
@@ -168,8 +251,12 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
   const starts = lineStarts(text);
   const pragmaLines = pragmaAllowedLines(text);
   const findings: Finding[] = [];
+  const deadline = cfg.deadlineMs !== undefined ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
 
   for (const rule of COMPILED) {
+    // Check the wall-clock budget between rules (a single rule stays linear;
+    // the aggregate over all rules is the cost we bound).
+    if (performance.now() > deadline) throw new ScanBudgetError(cfg.deadlineMs!);
     if (isDisabledRule(rule.id, cfg.allowlist)) continue;
     // Scoped rules apply only to matching files; without a path (prompts,
     // tool output) they still run — recall over precision.

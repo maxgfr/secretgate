@@ -104,6 +104,36 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     expect(JSON.parse(r.stdout).decision).toBe("block");
   });
 
+  it("init auto-detects Claude Code, installs, and self-verifies the firewall fires", async () => {
+    // simulate Claude Code being present
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const r = await runBundle(["init"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("detected Claude Code");
+    expect(r.stdout).toContain("a secret pasted in a prompt is blocked");
+    expect(r.stdout).toContain("a secret in tool output is redacted");
+    expect(r.stdout).toContain("secretgate is active");
+    // and it never printed the raw fake token
+    expect(r.stdout).not.toMatch(/ghp_[A-Za-z0-9]{36}/);
+  });
+
+  it("PostToolUse fails CLOSED on an oversized tool output (withholds, never leaks)", async () => {
+    // >20MB tool_response containing a token must be WITHHELD, not passed raw
+    const big = "x".repeat(21 * 1024 * 1024);
+    const payload = JSON.stringify({
+      hook_event_name: "PostToolUse",
+      cwd: home,
+      tool_name: "Bash",
+      tool_input: { command: "cat big.log" },
+      tool_response: `${big}\nTOKEN=${FAKE.githubPat}\n`,
+    });
+    const r = await runBundle(["hook", "claude-code", "post-tool-use"], payload);
+    const out = JSON.parse(r.stdout);
+    expect(out.hookSpecificOutput.updatedToolOutput).toMatch(/secretgate withheld/);
+    expect(r.stdout).not.toContain(FAKE.githubPat);
+  });
+
   it("status reports wiring per agent and vault health", async () => {
     await runBundle(["install", "--claude-code"]);
     const r = await runBundle(["status"]);
