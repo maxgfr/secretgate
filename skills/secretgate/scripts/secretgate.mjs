@@ -5645,58 +5645,62 @@ function claudeSettingsPath(project) {
   return project ? join6(process.cwd(), ".claude", "settings.json") : join6(homedir4(), ".claude", "settings.json");
 }
 function installForAgents(flags, io) {
+  const outcome = { installed: { claudeCode: false, codex: false, opencode: false }, errors: [] };
+  const attempt = (name, fn) => {
+    try {
+      fn();
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.split("\n")[0] : String(err);
+      io.stderr(`${name}: could not install \u2014 ${msg}
+`);
+      outcome.errors.push(`${name}: ${msg}`);
+      return false;
+    }
+  };
   if (flags.claudeCode) {
-    const settingsPath = claudeSettingsPath(flags.project);
-    mkdirSync4(dirname2(settingsPath), { recursive: true });
-    const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
-    io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
+    outcome.installed.claudeCode = attempt("claude-code", () => {
+      const settingsPath = claudeSettingsPath(flags.project);
+      mkdirSync4(dirname2(settingsPath), { recursive: true });
+      const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
+      io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
-    if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}
+      if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}
 `);
-    io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
-    io.stdout("claude-code: note \u2014 @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
+      io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
+      io.stdout("claude-code: note \u2014 @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
+    });
   }
   if (flags.opencode) {
-    const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
-    io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})
+    outcome.installed.opencode = attempt("opencode", () => {
+      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
+      io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
-    io.stdout("opencode: restart OpenCode so the plugin loads.\n");
+      io.stdout("opencode: restart OpenCode so the plugin loads.\n");
+    });
   }
   if (flags.codex) {
-    const dir = codexHome();
-    mkdirSync4(dir, { recursive: true });
-    const r = installCodex({ codexDir: dir, command: installedCliCommand() });
-    io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
+    outcome.installed.codex = attempt("codex", () => {
+      const dir = codexHome();
+      mkdirSync4(dir, { recursive: true });
+      const r = installCodex({ codexDir: dir, command: installedCliCommand() });
+      io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
 `);
-    for (const g of r.guidance) io.stdout(`${g}
+      for (const g of r.guidance) io.stdout(`${g}
 `);
-    io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
+      io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
+    });
   }
-}
-function handleInstallError(err, io) {
-  if (err instanceof SettingsParseError) {
-    io.stderr(`${err.message}
-`);
-    return 2;
-  }
-  if (err instanceof Error && /hooks = false|refusing/.test(err.message)) {
-    io.stderr(`${err.message}
-`);
-    return 2;
-  }
-  return void 0;
+  return outcome;
 }
 async function cmdInstall(args, io) {
   const flags = parseAgentFlags(args, io);
   if (!flags) return 2;
-  try {
-    installForAgents(flags, io);
-  } catch (err) {
-    const code = handleInstallError(err, io);
-    if (code !== void 0) return code;
-    throw err;
-  }
-  return 0;
+  const outcome = installForAgents(flags, io);
+  const requested = [flags.claudeCode, flags.codex, flags.opencode].filter(Boolean).length;
+  const done = Object.values(outcome.installed).filter(Boolean).length;
+  if (done === 0) return 2;
+  return done < requested ? 1 : 0;
 }
 function detectAgents() {
   return {
@@ -5771,24 +5775,24 @@ async function cmdInit(args, io) {
     }
   }
   io.stdout("\n== install ==\n");
-  try {
-    installForAgents(flags, io);
-  } catch (err) {
-    const code = handleInstallError(err, io);
-    if (code !== void 0) return code;
-    throw err;
-  }
+  const outcome = installForAgents(flags, io);
   io.stdout("\n== verify the firewall actually fires ==\n");
   let ok = true;
-  if (flags.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
-  if (flags.codex) io.stdout("  \xB7 codex: prompt/tool-input protection installed (tool-output redaction is not possible on Codex yet).\n");
-  if (flags.opencode) io.stdout("  \xB7 opencode: plugin installed; restart OpenCode to load it.\n");
+  if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
+  if (outcome.installed.codex) io.stdout("  \xB7 codex: prompt/tool-input protection installed (tool-output redaction is not possible on Codex yet).\n");
+  if (outcome.installed.opencode) io.stdout("  \xB7 opencode: plugin installed; restart OpenCode to load it.\n");
+  if (!outcome.installed.claudeCode && !outcome.installed.codex && !outcome.installed.opencode) {
+    io.stdout("  (nothing installed to verify)\n");
+    ok = false;
+  }
+  for (const e of outcome.errors) io.stdout(`  \u2717 ${e}
+`);
   io.stdout("\n");
-  if (ok) {
+  if (ok && outcome.errors.length === 0) {
     io.stdout("secretgate is active. Restart your agent session so the hooks load, then you're protected.\n");
     return 0;
   }
-  io.stderr("secretgate: verification FAILED \u2014 protection may not be active. Run `secretgate status` and re-run `secretgate init`.\n");
+  io.stderr("secretgate: some agents did not install/verify cleanly \u2014 review the messages above, then re-run `secretgate init`.\n");
   return 1;
 }
 async function cmdUninstall(args, io) {

@@ -328,54 +328,67 @@ function claudeSettingsPath(project: boolean): string {
   return project ? join(process.cwd(), ".claude", "settings.json") : join(homedir(), ".claude", "settings.json");
 }
 
-function installForAgents(flags: AgentFlags, io: Io): void {
-  if (flags.claudeCode) {
-    const settingsPath = claudeSettingsPath(flags.project);
-    mkdirSync(dirname(settingsPath), { recursive: true });
-    const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
-    io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
-    if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}\n`);
-    io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
-    io.stdout("claude-code: note — @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
-  }
-  if (flags.opencode) {
-    const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
-    io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
-    io.stdout("opencode: restart OpenCode so the plugin loads.\n");
-  }
-  if (flags.codex) {
-    const dir = codexHome();
-    mkdirSync(dir, { recursive: true });
-    const r = installCodex({ codexDir: dir, command: installedCliCommand() });
-    io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})\n`);
-    for (const g of r.guidance) io.stdout(`${g}\n`);
-    io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
-  }
+interface InstallOutcome {
+  installed: { claudeCode: boolean; codex: boolean; opencode: boolean };
+  errors: string[];
 }
 
-function handleInstallError(err: unknown, io: Io): number | undefined {
-  if (err instanceof SettingsParseError) {
-    io.stderr(`${err.message}\n`);
-    return 2;
+// Install each requested agent INDEPENDENTLY: one agent failing (e.g. its
+// plugin bundle is missing, or its config is corrupt) must not abort the others
+// or the self-test. Errors are collected and reported, never thrown out.
+function installForAgents(flags: AgentFlags, io: Io): InstallOutcome {
+  const outcome: InstallOutcome = { installed: { claudeCode: false, codex: false, opencode: false }, errors: [] };
+  const attempt = (name: string, fn: () => void): boolean => {
+    try {
+      fn();
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message.split("\n")[0] : String(err);
+      io.stderr(`${name}: could not install — ${msg}\n`);
+      outcome.errors.push(`${name}: ${msg}`);
+      return false;
+    }
+  };
+
+  if (flags.claudeCode) {
+    outcome.installed.claudeCode = attempt("claude-code", () => {
+      const settingsPath = claudeSettingsPath(flags.project);
+      mkdirSync(dirname(settingsPath), { recursive: true });
+      const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
+      io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
+      if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}\n`);
+      io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
+      io.stdout("claude-code: note — @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
+    });
   }
-  if (err instanceof Error && /hooks = false|refusing/.test(err.message)) {
-    io.stderr(`${err.message}\n`);
-    return 2;
+  if (flags.opencode) {
+    outcome.installed.opencode = attempt("opencode", () => {
+      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
+      io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
+      io.stdout("opencode: restart OpenCode so the plugin loads.\n");
+    });
   }
-  return undefined;
+  if (flags.codex) {
+    outcome.installed.codex = attempt("codex", () => {
+      const dir = codexHome();
+      mkdirSync(dir, { recursive: true });
+      const r = installCodex({ codexDir: dir, command: installedCliCommand() });
+      io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})\n`);
+      for (const g of r.guidance) io.stdout(`${g}\n`);
+      io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
+    });
+  }
+  return outcome;
 }
 
 async function cmdInstall(args: string[], io: Io): Promise<number> {
   const flags = parseAgentFlags(args, io);
   if (!flags) return 2;
-  try {
-    installForAgents(flags, io);
-  } catch (err) {
-    const code = handleInstallError(err, io);
-    if (code !== undefined) return code;
-    throw err;
-  }
-  return 0;
+  const outcome = installForAgents(flags, io);
+  const requested = [flags.claudeCode, flags.codex, flags.opencode].filter(Boolean).length;
+  const done = Object.values(outcome.installed).filter(Boolean).length;
+  if (done === 0) return 2; // nothing installed
+  return done < requested ? 1 : 0; // partial success reported as non-zero
 }
 
 // Which agents are present on this machine (config dir / home exists).
@@ -457,26 +470,26 @@ async function cmdInit(args: string[], io: Io): Promise<number> {
   }
 
   io.stdout("\n== install ==\n");
-  try {
-    installForAgents(flags, io);
-  } catch (err) {
-    const code = handleInstallError(err, io);
-    if (code !== undefined) return code;
-    throw err;
-  }
+  const outcome = installForAgents(flags, io);
 
   io.stdout("\n== verify the firewall actually fires ==\n");
   let ok = true;
-  if (flags.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
-  if (flags.codex) io.stdout("  · codex: prompt/tool-input protection installed (tool-output redaction is not possible on Codex yet).\n");
-  if (flags.opencode) io.stdout("  · opencode: plugin installed; restart OpenCode to load it.\n");
+  // Verify only what actually installed.
+  if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
+  if (outcome.installed.codex) io.stdout("  · codex: prompt/tool-input protection installed (tool-output redaction is not possible on Codex yet).\n");
+  if (outcome.installed.opencode) io.stdout("  · opencode: plugin installed; restart OpenCode to load it.\n");
+  if (!outcome.installed.claudeCode && !outcome.installed.codex && !outcome.installed.opencode) {
+    io.stdout("  (nothing installed to verify)\n");
+    ok = false;
+  }
+  for (const e of outcome.errors) io.stdout(`  ✗ ${e}\n`);
 
   io.stdout("\n");
-  if (ok) {
+  if (ok && outcome.errors.length === 0) {
     io.stdout("secretgate is active. Restart your agent session so the hooks load, then you're protected.\n");
     return 0;
   }
-  io.stderr("secretgate: verification FAILED — protection may not be active. Run `secretgate status` and re-run `secretgate init`.\n");
+  io.stderr("secretgate: some agents did not install/verify cleanly — review the messages above, then re-run `secretgate init`.\n");
   return 1;
 }
 

@@ -20,7 +20,7 @@
     "rules:convert": "node scripts/convert-rules.mjs",
     "rules:sync": "node scripts/sync-rules.mjs",
     "verify:bundle": "node scripts/verify-skill-bundle.mjs",
-    "check:build": "node scripts/convert-rules.mjs --check && tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/secretgate.mjs scripts/secretgate-opencode.mjs skills/secretgate/scripts/secretgate.mjs src/engine/rules.gen.ts && node scripts/verify-skill-bundle.mjs",
+    "check:build": "node scripts/convert-rules.mjs --check && tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/secretgate.mjs scripts/secretgate-opencode.mjs skills/secretgate/scripts/secretgate.mjs skills/secretgate/scripts/secretgate-opencode.mjs src/engine/rules.gen.ts && node scripts/verify-skill-bundle.mjs",
     "demo": "sh -c 'printf \"aws key AKIA%s ok\" Q7R2M3XBL4WPZ6TK | node scripts/secretgate.mjs scan - --json; [ $? -eq 1 ]'",
     "release": "semantic-release"
   },

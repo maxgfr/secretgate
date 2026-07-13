@@ -38,16 +38,17 @@ if (!existsSync(skillMd)) {
   desc.length > DESC_MAX ? bad(`SKILL.md description is ${desc.length} chars (max ${DESC_MAX})`) : ok(`SKILL.md description ${desc.length} chars (<= ${DESC_MAX})`);
 }
 
-const rootBundle = join(root, "scripts", "secretgate.mjs");
-const skillBundle = join(skillDir, "scripts", "secretgate.mjs");
-if (!existsSync(rootBundle)) {
-  bad("missing scripts/secretgate.mjs — run `pnpm run build`");
-} else if (!existsSync(skillBundle)) {
-  bad("missing skills/secretgate/scripts/secretgate.mjs — run `pnpm run build`");
-} else {
-  readFileSync(rootBundle, "utf8") === readFileSync(skillBundle, "utf8")
-    ? ok("skill engine is byte-identical to the tested bundle")
-    : bad("skill engine differs from scripts/secretgate.mjs — run `pnpm run build`");
+// Both the CLI and the OpenCode plugin bundle must ship in the skill dir, and
+// be byte-identical to the tested root bundles. `install --opencode` copies the
+// plugin from beside the CLI, so a missing plugin bundle breaks `init` on any
+// machine that has OpenCode.
+for (const name of ["secretgate.mjs", "secretgate-opencode.mjs"]) {
+  const rootBundle = join(root, "scripts", name);
+  const skillBundle = join(skillDir, "scripts", name);
+  if (!existsSync(rootBundle)) bad(`missing scripts/${name} — run \`pnpm run build\``);
+  else if (!existsSync(skillBundle)) bad(`missing skills/secretgate/scripts/${name} — run \`pnpm run build\``);
+  else if (readFileSync(rootBundle, "utf8") !== readFileSync(skillBundle, "utf8")) bad(`skill ${name} differs from scripts/${name} — run \`pnpm run build\``);
+  else ok(`skill ${name} is byte-identical to the tested bundle`);
 }
 
 if (errors.length > 0) {

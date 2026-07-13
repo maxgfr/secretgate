@@ -26,7 +26,8 @@
           "CHANGELOG.md",
           "scripts/secretgate.mjs",
           "scripts/secretgate-opencode.mjs",
-          "skills/secretgate/scripts/secretgate.mjs"
+          "skills/secretgate/scripts/secretgate.mjs",
+          "skills/secretgate/scripts/secretgate-opencode.mjs"
         ],
         "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
       }
