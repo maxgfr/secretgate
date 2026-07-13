@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.0.1](https://github.com/maxgfr/secretgate/compare/v1.0.0...v1.0.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* **ci:** use a high-entropy fake token in the Node-18 floor pipe smoke (low-entropy token was filtered by the entropy gate) ([657a368](https://github.com/maxgfr/secretgate/commit/657a368a469cc86648937ad5dc7af2f5db346e05)), closes [hi#entropy](https://github.com/hi/issues/entropy)
+
 # 1.0.0 (2026-07-13)
 
 

@@ -4671,7 +4671,7 @@ function restorePlaceholders(text, vault) {
 }
 
 // src/version.ts
-var VERSION = "1.0.0";
+var VERSION = "1.0.1";
 
 // src/adapters/opencode-plugin.ts
 var ALLOW_TAG = "[allow-secret]";
