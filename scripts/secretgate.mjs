@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync6, readdirSync, statSync } from "fs";
-import { homedir as homedir3 } from "os";
-import { dirname as dirname2, join as join4, relative, resolve } from "path";
+import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync7, readdirSync, statSync } from "fs";
+import { homedir as homedir4 } from "os";
+import { dirname as dirname2, join as join5, relative, resolve } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 // src/config.ts
@@ -4714,10 +4714,42 @@ function deny(reason) {
     exit: 0
   };
 }
-var RESTORE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+function normalizeToolName(name) {
+  switch (name.toLowerCase()) {
+    case "bash":
+    case "shell":
+    case "exec":
+    case "local_shell":
+    case "localshell":
+    case "run_command":
+      return "Bash";
+    case "read":
+    case "read_file":
+    case "view":
+    case "open_file":
+      return "Read";
+    case "grep":
+    case "search":
+      return "Grep";
+    case "write":
+    case "write_file":
+    case "create_file":
+      return "Write";
+    case "edit":
+    case "multiedit":
+    case "notebookedit":
+    case "str_replace":
+    case "apply_patch":
+    case "patch":
+      return "Edit";
+    default:
+      return name;
+  }
+}
+var RESTORE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit"]);
 var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep"]);
 function preToolUse(input) {
-  const toolName = String(input.tool_name ?? "");
+  const toolName = normalizeToolName(String(input.tool_name ?? ""));
   const toolInput = input.tool_input ?? {};
   const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : void 0);
   if (READ_TOOLS.has(toolName)) {
@@ -4769,6 +4801,12 @@ function postToolUse(input) {
     }),
     exit: 0
   };
+}
+
+// src/hooks/codex.ts
+async function handleCodex(event, rawStdin) {
+  if (event === "post-tool-use") return { stdout: "", exit: 0 };
+  return handleClaudeCode(event, rawStdin);
 }
 
 // src/install/allow-store.ts
@@ -4913,44 +4951,187 @@ function uninstallClaudeCode({ settingsPath }) {
   });
 }
 
-// src/install/opencode.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, rmSync, writeFileSync } from "fs";
+// src/install/codex.ts
+import { randomBytes as randomBytes4 } from "crypto";
+import { closeSync as closeSync4, copyFileSync as copyFileSync2, existsSync as existsSync2, openSync as openSync4, readFileSync as readFileSync5, renameSync as renameSync4, writeSync as writeSync4 } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join3 } from "path";
+
+// src/install/toml-touch.ts
+var BLOCK_START = "# >>> secretgate managed >>>";
+var BLOCK_END = "# <<< secretgate managed <<<";
+var OUR_LINE = "hooks = true # secretgate";
+var MANUAL_SNIPPET = `[features]
+hooks = true`;
+function featuresTableRange(lines) {
+  const start = lines.findIndex((l) => /^\s*\[features\]\s*(#.*)?$/.test(l));
+  if (start === -1) return void 0;
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^\s*\[/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  return { start, end };
+}
+function enableHooksFeature(content) {
+  const lines = content.split("\n");
+  const range = featuresTableRange(lines);
+  if (range) {
+    const table = lines.slice(range.start + 1, range.end);
+    if (table.some((l) => /^\s*hooks\s*=\s*true\b/.test(l))) return { content, changed: false };
+    if (table.some((l) => /^\s*hooks\s*=\s*false\b/.test(l))) {
+      throw new Error(`config.toml sets 'hooks = false' explicitly \u2014 not overriding it. Enable hooks manually:
+${MANUAL_SNIPPET}`);
+    }
+    if (table.some((l) => /^\s*hooks\s*=/.test(l))) {
+      throw new Error(`config.toml has an unrecognized 'hooks =' setting under [features] \u2014 edit it manually:
+${MANUAL_SNIPPET}`);
+    }
+    const next = [...lines.slice(0, range.start + 1), OUR_LINE, ...lines.slice(range.start + 1)];
+    return { content: next.join("\n"), changed: true };
+  }
+  const block = [BLOCK_START, "[features]", "hooks = true", BLOCK_END, ""].join("\n");
+  const base = content === "" || content.endsWith("\n") ? content : `${content}
+`;
+  return { content: `${base}${base === "" ? "" : "\n"}${block}`, changed: true };
+}
+function disableHooksFeature(content) {
+  let changed = false;
+  let out = content;
+  const blockRe = new RegExp(`\\n?${BLOCK_START}[\\s\\S]*?${BLOCK_END}\\n?`, "g");
+  if (blockRe.test(out)) {
+    out = out.replace(blockRe, "\n");
+    changed = true;
+  }
+  const lines = out.split("\n");
+  const kept = lines.filter((l) => l.trim() !== OUR_LINE);
+  if (kept.length !== lines.length) {
+    out = kept.join("\n");
+    changed = true;
+  }
+  return { content: changed ? out.replace(/\n{3,}/g, "\n\n") : content, changed };
+}
+
+// src/install/codex.ts
+var MARKER2 = "hook codex";
+function codexHome() {
+  return process.env.CODEX_HOME ?? join3(homedir2(), ".codex");
+}
+function withoutOurGroups2(groups) {
+  if (!Array.isArray(groups)) return [];
+  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !String(h.command ?? "").includes(MARKER2)) })).filter((g) => g.hooks.length > 0);
+}
+var EVENTS2 = [
+  { event: "UserPromptSubmit", arg: "user-prompt-submit" },
+  { event: "PreToolUse", arg: "pre-tool-use", matcher: ".*" }
+];
+function writeTextWithBackup(path, content) {
+  if (existsSync2(path)) {
+    const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
+    copyFileSync2(path, `${path}.secretgate-backup-${stamp}`);
+  }
+  const tmp = `${path}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
+  const fd = openSync4(tmp, "w", 420);
+  try {
+    writeSync4(fd, content);
+  } finally {
+    closeSync4(fd);
+  }
+  renameSync4(tmp, path);
+}
+function installCodex({ codexDir, command }) {
+  const hooksReport = editJsonFile(join3(codexDir, "hooks.json"), (root) => {
+    root.hooks ??= {};
+    for (const { event, arg, matcher } of EVENTS2) {
+      const kept = withoutOurGroups2(root.hooks[event]);
+      const group = {
+        hooks: [{ type: "command", command: `${command} hook codex ${arg}`, timeout: 30, statusMessage: "secretgate" }]
+      };
+      if (matcher) group.matcher = matcher;
+      root.hooks[event] = [...kept, group];
+    }
+  });
+  const configPath = join3(codexDir, "config.toml");
+  const current = existsSync2(configPath) ? readFileSync5(configPath, "utf8") : "";
+  const edit = enableHooksFeature(current);
+  if (edit.changed) writeTextWithBackup(configPath, edit.content);
+  return {
+    hooks: hooksReport,
+    configChanged: edit.changed,
+    guidance: [
+      "codex: hooks protect INTERACTIVE sessions only \u2014 a known Codex bug keeps them from firing under `codex exec` (observed on 0.137\u20130.138).",
+      "codex: tool OUTPUT redaction is not possible yet (Codex parses but ignores output rewrites); prompts and tool inputs are covered.",
+      'codex: for OS-enforced file protection, consider a permissions profile in config.toml, e.g.:\n  [permissions.secretgate.filesystem.":workspace_roots"]\n  "**/*.env" = "deny"\n  (not added automatically \u2014 it does not compose with legacy sandbox_mode settings).'
+    ]
+  };
+}
+function uninstallCodex({ codexDir }) {
+  const hooksPath = join3(codexDir, "hooks.json");
+  let hooksReport = { path: hooksPath, changed: false };
+  if (existsSync2(hooksPath)) {
+    hooksReport = editJsonFile(hooksPath, (root) => {
+      if (root.hooks && typeof root.hooks === "object") {
+        for (const { event } of EVENTS2) {
+          const kept = withoutOurGroups2(root.hooks[event]);
+          if (kept.length > 0) root.hooks[event] = kept;
+          else delete root.hooks[event];
+        }
+        if (Object.keys(root.hooks).length === 0) delete root.hooks;
+      }
+    });
+  }
+  const configPath = join3(codexDir, "config.toml");
+  let configChanged = false;
+  if (existsSync2(configPath)) {
+    const edit = disableHooksFeature(readFileSync5(configPath, "utf8"));
+    if (edit.changed) {
+      writeTextWithBackup(configPath, edit.content);
+      configChanged = true;
+    }
+  }
+  return { hooks: hooksReport, configChanged };
+}
+
+// src/install/opencode.ts
+import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync6, rmSync, writeFileSync } from "fs";
+import { homedir as homedir3 } from "os";
+import { join as join4 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
-  return join3(xdg && xdg !== "" ? xdg : join3(homedir2(), ".config"), "opencode");
+  return join4(xdg && xdg !== "" ? xdg : join4(homedir3(), ".config"), "opencode");
 }
 function installOpencode({ configDir, pluginSource, viaConfig, version }) {
   if (viaConfig) {
-    return editJsonFile(join3(configDir, "opencode.json"), (cfg) => {
+    return editJsonFile(join4(configDir, "opencode.json"), (cfg) => {
       const plugins = Array.isArray(cfg.plugin) ? cfg.plugin : [];
       cfg.plugin = [...plugins.filter((p) => !/^secretgate@/.test(p)), `secretgate@${version}`];
     });
   }
-  const target = join3(configDir, "plugin", "secretgate.js");
-  const content = readFileSync5(pluginSource, "utf8");
-  if (existsSync2(target)) {
-    const existing = readFileSync5(target, "utf8");
+  const target = join4(configDir, "plugin", "secretgate.js");
+  const content = readFileSync6(pluginSource, "utf8");
+  if (existsSync3(target)) {
+    const existing = readFileSync6(target, "utf8");
     if (!existing.includes(OWNERSHIP_MARKER)) {
       throw new Error(`refusing to overwrite ${target}: the existing file is not ours (foreign plugin?). Remove it manually first.`);
     }
     if (existing === content) return { path: target, changed: false };
   }
-  mkdirSync3(join3(configDir, "plugin"), { recursive: true });
+  mkdirSync3(join4(configDir, "plugin"), { recursive: true });
   writeFileSync(target, content);
   return { path: target, changed: true };
 }
 function uninstallOpencode({ configDir }) {
   let changed = false;
-  const target = join3(configDir, "plugin", "secretgate.js");
-  if (existsSync2(target) && readFileSync5(target, "utf8").includes(OWNERSHIP_MARKER)) {
+  const target = join4(configDir, "plugin", "secretgate.js");
+  if (existsSync3(target) && readFileSync6(target, "utf8").includes(OWNERSHIP_MARKER)) {
     rmSync(target);
     changed = true;
   }
-  const configPath = join3(configDir, "opencode.json");
-  if (existsSync2(configPath)) {
+  const configPath = join4(configDir, "opencode.json");
+  if (existsSync3(configPath)) {
     const r = editJsonFile(configPath, (cfg) => {
       if (Array.isArray(cfg.plugin)) {
         cfg.plugin = cfg.plugin.filter((p) => !/^secretgate@/.test(p));
@@ -4996,7 +5177,7 @@ var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
-    const full = join4(root, entry.name);
+    const full = join5(root, entry.name);
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkFiles(full);
     } else if (entry.isFile()) {
@@ -5007,7 +5188,7 @@ function* walkFiles(root) {
 function readTextFile(path) {
   const stats = statSync(path);
   if (stats.size === 0 || stats.size > MAX_FILE_BYTES) return void 0;
-  const buf = readFileSync6(path);
+  const buf = readFileSync7(path);
   const probe = buf.subarray(0, 8192);
   if (probe.includes(0)) return void 0;
   return buf.toString("utf8");
@@ -5163,7 +5344,7 @@ async function cmdHook(args, io) {
     raw = "__SECRETGATE_STDIN_ERROR__";
   }
   if (agent === "claude-code" || agent === "codex") {
-    const r = await handleClaudeCode(event, raw);
+    const r = agent === "codex" ? await handleCodex(event, raw) : await handleClaudeCode(event, raw);
     if (r.stdout) io.stdout(r.stdout);
     return r.exit;
   }
@@ -5174,9 +5355,9 @@ async function cmdHook(args, io) {
 function installedCliCommand() {
   const self = fileURLToPath(import.meta.url);
   if (!self.endsWith(".mjs")) return `node "${self}"`;
-  const target = join4(defaultVaultHome(), "bin", "secretgate.mjs");
+  const target = join5(defaultVaultHome(), "bin", "secretgate.mjs");
   mkdirSync4(dirname2(target), { recursive: true, mode: 448 });
-  copyFileSync2(self, target);
+  copyFileSync3(self, target);
   chmodSync(target, 493);
   return `node "${target}"`;
 }
@@ -5203,13 +5384,13 @@ function parseAgentFlags(args, io) {
 }
 function opencodePluginSource() {
   const selfDir = dirname2(fileURLToPath(import.meta.url));
-  const candidates = [join4(selfDir, "secretgate-opencode.mjs"), join4(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
-  const found = candidates.find((c) => existsSync3(c));
+  const candidates = [join5(selfDir, "secretgate-opencode.mjs"), join5(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const found = candidates.find((c) => existsSync4(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
   return found;
 }
 function claudeSettingsPath(project) {
-  return project ? join4(process.cwd(), ".claude", "settings.json") : join4(homedir3(), ".claude", "settings.json");
+  return project ? join5(process.cwd(), ".claude", "settings.json") : join5(homedir4(), ".claude", "settings.json");
 }
 async function cmdInstall(args, io) {
   const flags = parseAgentFlags(args, io);
@@ -5233,11 +5414,22 @@ async function cmdInstall(args, io) {
       io.stdout("opencode: restart OpenCode so the plugin loads.\n");
     }
     if (flags.codex) {
-      io.stderr("codex: not implemented yet\n");
-      return 2;
+      const dir = codexHome();
+      mkdirSync4(dir, { recursive: true });
+      const r = installCodex({ codexDir: dir, command: installedCliCommand() });
+      io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
+`);
+      for (const g of r.guidance) io.stdout(`${g}
+`);
+      io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
     }
   } catch (err) {
     if (err instanceof SettingsParseError) {
+      io.stderr(`${err.message}
+`);
+      return 2;
+    }
+    if (err instanceof Error && /hooks = false|refusing/.test(err.message)) {
       io.stderr(`${err.message}
 `);
       return 2;
@@ -5261,8 +5453,9 @@ async function cmdUninstall(args, io) {
 `);
     }
     if (flags.codex) {
-      io.stderr("codex: not implemented yet\n");
-      return 2;
+      const r = uninstallCodex({ codexDir: codexHome() });
+      io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "unwired" : "nothing to remove"} (${codexHome()})
+`);
     }
   } catch (err) {
     if (err instanceof SettingsParseError) {

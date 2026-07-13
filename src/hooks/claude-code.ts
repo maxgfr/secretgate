@@ -76,13 +76,48 @@ function deny(reason: string): HookResult {
   };
 }
 
+// Tool names vary across agents (Claude Code: Read/Write/Bash…; Codex:
+// shell/apply_patch/read_file…). Normalize before classifying.
+function normalizeToolName(name: string): string {
+  switch (name.toLowerCase()) {
+    case "bash":
+    case "shell":
+    case "exec":
+    case "local_shell":
+    case "localshell":
+    case "run_command":
+      return "Bash";
+    case "read":
+    case "read_file":
+    case "view":
+    case "open_file":
+      return "Read";
+    case "grep":
+    case "search":
+      return "Grep";
+    case "write":
+    case "write_file":
+    case "create_file":
+      return "Write";
+    case "edit":
+    case "multiedit":
+    case "notebookedit":
+    case "str_replace":
+    case "apply_patch":
+    case "patch":
+      return "Edit";
+    default:
+      return name;
+  }
+}
+
 // Tools whose input may legitimately carry placeholders back to disk.
-const RESTORE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+const RESTORE_TOOLS = new Set(["Write", "Edit"]);
 // Tools that read file content — denied on sensitive paths.
 const READ_TOOLS = new Set(["Read", "Grep"]);
 
 function preToolUse(input: Record<string, any>): HookResult {
-  const toolName = String(input.tool_name ?? "");
+  const toolName = normalizeToolName(String(input.tool_name ?? ""));
   const toolInput = (input.tool_input ?? {}) as Record<string, any>;
   const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : undefined);
 

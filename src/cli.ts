@@ -7,8 +7,10 @@ import { pathMatchesGlob, sha256 } from "./engine/allowlist.js";
 import type { Finding } from "./engine/scanner.js";
 import { scan } from "./engine/scanner.js";
 import { handleClaudeCode } from "./hooks/claude-code.js";
+import { handleCodex } from "./hooks/codex.js";
 import { writeAllow } from "./install/allow-store.js";
 import { installClaudeCode, uninstallClaudeCode } from "./install/claude-code.js";
+import { codexHome, installCodex, uninstallCodex } from "./install/codex.js";
 import { SettingsParseError } from "./install/json-merge.js";
 import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
@@ -231,7 +233,7 @@ async function cmdHook(args: string[], io: Io): Promise<number> {
     raw = "__SECRETGATE_STDIN_ERROR__";
   }
   if (agent === "claude-code" || agent === "codex") {
-    const r = await handleClaudeCode(event, raw);
+    const r = agent === "codex" ? await handleCodex(event, raw) : await handleClaudeCode(event, raw);
     if (r.stdout) io.stdout(r.stdout);
     return r.exit;
   }
@@ -312,11 +314,19 @@ async function cmdInstall(args: string[], io: Io): Promise<number> {
       io.stdout("opencode: restart OpenCode so the plugin loads.\n");
     }
     if (flags.codex) {
-      io.stderr("codex: not implemented yet\n");
-      return 2;
+      const dir = codexHome();
+      mkdirSync(dir, { recursive: true });
+      const r = installCodex({ codexDir: dir, command: installedCliCommand() });
+      io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})\n`);
+      for (const g of r.guidance) io.stdout(`${g}\n`);
+      io.stdout("codex: restart your Codex session so the hooks load (review them with /hooks).\n");
     }
   } catch (err) {
     if (err instanceof SettingsParseError) {
+      io.stderr(`${err.message}\n`);
+      return 2;
+    }
+    if (err instanceof Error && /hooks = false|refusing/.test(err.message)) {
       io.stderr(`${err.message}\n`);
       return 2;
     }
@@ -338,8 +348,8 @@ async function cmdUninstall(args: string[], io: Io): Promise<number> {
       io.stdout(`opencode: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})\n`);
     }
     if (flags.codex) {
-      io.stderr("codex: not implemented yet\n");
-      return 2;
+      const r = uninstallCodex({ codexDir: codexHome() });
+      io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "unwired" : "nothing to remove"} (${codexHome()})\n`);
     }
   } catch (err) {
     if (err instanceof SettingsParseError) {
