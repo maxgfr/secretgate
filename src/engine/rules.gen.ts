@@ -20,6 +20,13 @@ export interface GenRule {
   secretGroup?: number;
   keywords: string[];
   allowlists?: GenAllowlist[];
+  /** when set, the rule only applies to files whose path matches */
+  scopePath?: GenRegex;
+}
+
+export interface GenPathRule {
+  id: string;
+  path: GenRegex;
 }
 
 export const RULES: GenRule[] = [
@@ -867,7 +874,11 @@ export const RULES: GenRule[] = [
     },
     "keywords": [
       "secret_key"
-    ]
+    ],
+    "scopePath": {
+      "source": "\\.php$",
+      "flags": "i"
+    }
   },
   {
     "id": "freshbooks-access-token",
@@ -2823,7 +2834,11 @@ export const RULES: GenRule[] = [
       "administrator_login_password",
       "password"
     ],
-    "entropy": 2
+    "entropy": 2,
+    "scopePath": {
+      "source": "\\.(?:tf|hcl)$",
+      "flags": "i"
+    }
   },
   {
     "id": "heroku-api-key",
@@ -2979,6 +2994,10 @@ export const RULES: GenRule[] = [
     "keywords": [
       "secret"
     ],
+    "scopePath": {
+      "source": "\\.ya?ml$",
+      "flags": "i"
+    },
     "allowlists": [
       {
         "regexes": [
@@ -3311,6 +3330,10 @@ export const RULES: GenRule[] = [
       "<add key="
     ],
     "entropy": 1,
+    "scopePath": {
+      "source": "nuget\\.config$",
+      "flags": "i"
+    },
     "allowlists": [
       {
         "regexes": [
@@ -3396,14 +3419,6 @@ export const RULES: GenRule[] = [
       "pplx-"
     ],
     "entropy": 4
-  },
-  {
-    "id": "pkcs12-file",
-    "regex": {
-      "source": "undefined",
-      "flags": ""
-    },
-    "keywords": []
   },
   {
     "id": "plaid-api-token",
@@ -4133,6 +4148,17 @@ export const RULES: GenRule[] = [
     "keywords": [
       "zendesk"
     ]
+  }
+];
+
+/** rules that flag FILES by name (no content regex), e.g. pkcs12-file */
+export const PATH_RULES: GenPathRule[] = [
+  {
+    "id": "pkcs12-file",
+    "path": {
+      "source": "(?:^|\\/)[^\\/]+\\.p(?:12|fx)$",
+      "flags": "i"
+    }
   }
 ];
 

@@ -39,7 +39,7 @@ echo "$OUT2" | grep -q "SECRETGATE_" || { echo "WARN: no placeholder mentioned; 
 echo "  ok — raw token never crossed"
 
 echo "[3/3] asking to copy the value must restore the REAL token on disk"
-claude -p "read ci-values.txt, then create copy.env containing the same CI_TOKEN line" > /dev/null 2>&1
+claude -p "read ci-values.txt, then create copy.env containing the same CI_TOKEN line" --permission-mode acceptEdits > /dev/null 2>&1
 grep -q "CI_TOKEN=$TOKEN" copy.env || { echo "FAIL: copy.env does not contain the restored real token"; cat copy.env; exit 1; }
 echo "  ok — placeholder restored to the real value on disk"
 

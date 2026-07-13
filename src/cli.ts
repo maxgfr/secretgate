@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import { pathMatchesGlob, sha256 } from "./engine/allowlist.js";
 import type { Finding } from "./engine/scanner.js";
-import { scan } from "./engine/scanner.js";
+import { scan, sensitiveFileNameRule } from "./engine/scanner.js";
 import { handleClaudeCode } from "./hooks/claude-code.js";
 import { handleCodex } from "./hooks/codex.js";
 import { writeAllow } from "./install/allow-store.js";
@@ -125,6 +125,12 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
     for (const file of files) {
       const rel = stats.isDirectory() ? relative(root, file) : file;
       if (excludes.some((g) => pathMatchesGlob(rel, g))) continue;
+      if (cfg.allowlist.paths?.some((g) => pathMatchesGlob(rel, g))) continue;
+      const nameRule = sensitiveFileNameRule(rel);
+      if (nameRule) {
+        hits.push({ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel });
+        continue;
+      }
       const text = readTextFile(file);
       if (text === undefined) continue;
       for (const finding of scan(text, { sourcePath: rel, allowlist: cfg.allowlist })) hits.push({ finding, path: rel });
@@ -153,9 +159,11 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
     io.stdout("secretgate: no secrets found\n");
   } else {
     for (const { finding, path } of hits) {
-      io.stdout(
-        `${path}:${finding.line + 1}  ${finding.ruleId}  [len ${finding.secret.length}, entropy ${finding.entropy.toFixed(2)}, sha256 ${hashPrefix(finding.secret)}]\n`,
-      );
+      const detail =
+        finding.secret === ""
+          ? "[sensitive file name]"
+          : `[len ${finding.secret.length}, entropy ${finding.entropy.toFixed(2)}, sha256 ${hashPrefix(finding.secret)}]`;
+      io.stdout(`${path}:${finding.line + 1}  ${finding.ruleId}  ${detail}\n`);
     }
     io.stdout(`secretgate: ${hits.length} finding(s). Allow a value with \`secretgate allow <value>\`.\n`);
   }
@@ -362,11 +370,82 @@ async function cmdUninstall(args: string[], io: Io): Promise<number> {
   return 0;
 }
 
-function notImplemented(name: string) {
-  return (_args: string[], io: Io): number => {
-    io.stderr(`secretgate ${name}: not implemented yet\n`);
-    return 2;
-  };
+function readJsonSafe(path: string): Record<string, any> | undefined {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function hookWireCount(settings: Record<string, any> | undefined, marker: string): number {
+  if (!settings?.hooks) return 0;
+  let count = 0;
+  for (const groups of Object.values(settings.hooks as Record<string, Array<{ hooks?: Array<{ command?: string }> }>>)) {
+    if (!Array.isArray(groups)) continue;
+    for (const g of groups) for (const h of g.hooks ?? []) if (String(h.command ?? "").includes(marker)) count++;
+  }
+  return count;
+}
+
+async function cmdStatus(_args: string[], io: Io): Promise<number> {
+  io.stdout(`secretgate ${VERSION}\n\n`);
+
+  // pinned bundle
+  const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
+  if (existsSync(pinned)) {
+    const pinnedVersion = /VERSION = "([^"]+)"/.exec(readFileSync(pinned, "utf8"))?.[1] ?? "unknown";
+    io.stdout(`bundle    pinned at ${pinned} (v${pinnedVersion}${pinnedVersion !== VERSION ? ` — CLI is v${VERSION}, re-run install to refresh` : ""})\n`);
+  } else {
+    io.stdout("bundle    not pinned yet (run `secretgate install …`)\n");
+  }
+
+  // claude code
+  for (const [label, path] of [
+    ["global ", claudeSettingsPath(false)],
+    ["project", claudeSettingsPath(true)],
+  ] as const) {
+    const settings = readJsonSafe(path);
+    const wired = hookWireCount(settings, "hook claude-code");
+    const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d: string) => d.startsWith("Read(")).length : 0;
+    io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}\n`);
+  }
+  io.stdout("claude-code limitation: @file mentions bypass tool hooks (deny rules are the only cover there).\n");
+
+  // codex
+  const codexHooks = readJsonSafe(join(codexHome(), "hooks.json"));
+  const codexWired = hookWireCount(codexHooks, "hook codex");
+  let codexFeature = false;
+  try {
+    codexFeature = /^\s*hooks\s*=\s*true\b/m.test(readFileSync(join(codexHome(), "config.toml"), "utf8"));
+  } catch {}
+  io.stdout(
+    `codex     ${codexWired > 0 && codexFeature ? `wired (${codexWired} hooks, feature gate on)` : codexWired > 0 ? "hooks present but [features] hooks = true is MISSING" : "not wired"}  ${codexHome()}\n`,
+  );
+  if (codexWired > 0) io.stdout("codex     limitations: interactive sessions only (`codex exec` bug); no tool-output redaction upstream yet.\n");
+
+  // opencode
+  const ocPlugin = join(opencodeConfigDir(), "plugin", "secretgate.js");
+  const ocConfig = readJsonSafe(join(opencodeConfigDir(), "opencode.json"));
+  const ocPinned = Array.isArray(ocConfig?.plugin) && ocConfig.plugin.some((p: string) => /^secretgate@/.test(p));
+  io.stdout(`opencode  ${existsSync(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}\n`);
+
+  // engines
+  const { gitleaksPath } = await import("./engine/gitleaks-bin.js");
+  const gl = gitleaksPath();
+  io.stdout(`engines   built-in JS rules${gl ? ` + gitleaks binary (${gl})` : " (gitleaks binary not found — `scan` runs JS engine only)"}\n`);
+
+  // vault
+  const vault = new Vault();
+  const entries = vault.list();
+  io.stdout(`vault     ${defaultVaultHome()} — ${entries.length} placeholder(s)`);
+  try {
+    const mode = statSync(join(defaultVaultHome(), "vault.json")).mode & 0o777;
+    io.stdout(mode === 0o600 ? "\n" : ` — WARNING: vault.json is ${mode.toString(8)}, expected 600\n`);
+  } catch {
+    io.stdout(" (no vault file yet)\n");
+  }
+  return 0;
 }
 
 type Command = (args: string[], io: Io) => Promise<number> | number;
@@ -378,7 +457,7 @@ const commands: Record<string, Command> = {
   vault: cmdVault,
   install: cmdInstall,
   uninstall: cmdUninstall,
-  status: notImplemented("status"),
+  status: cmdStatus,
   hook: cmdHook,
 };
 

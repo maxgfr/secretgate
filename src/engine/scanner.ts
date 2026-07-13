@@ -2,7 +2,7 @@ import { isAllowedPath, isAllowedValue, isDisabledRule, type UserAllowlist } fro
 import { shannonEntropy } from "./entropy.js";
 import { luhnValid } from "./luhn.js";
 import { pragmaAllowedLines } from "./pragma.js";
-import { GLOBAL_ALLOWLIST, type GenAllowlist, RULES } from "./rules.gen.js";
+import { GLOBAL_ALLOWLIST, type GenAllowlist, PATH_RULES, RULES } from "./rules.gen.js";
 
 export interface Finding {
   ruleId: string;
@@ -37,6 +37,8 @@ interface CompiledRule {
   secretGroup?: number;
   keywords: string[];
   allowlists: CompiledAllowlist[];
+  /** when set, the rule only applies to files whose path matches */
+  scope?: RegExp;
   /** extra deterministic gate for built-in rules (e.g. Luhn for cards) */
   post?: (secret: string) => boolean;
 }
@@ -76,9 +78,16 @@ const COMPILED: CompiledRule[] = [
     secretGroup: r.secretGroup,
     keywords: r.keywords,
     allowlists: (r.allowlists ?? []).map(compileAllowlist),
+    scope: r.scopePath ? new RegExp(r.scopePath.source, r.scopePath.flags) : undefined,
   })),
   ...BUILTIN_RULES,
 ];
+
+// File names that ARE the finding (e.g. a .p12 bundle) — used by callers that
+// scan directories; content scanning ignores them.
+export function sensitiveFileNameRule(path: string): string | undefined {
+  return PATH_RULES.find((r) => new RegExp(r.path.source, r.path.flags).test(path))?.id;
+}
 
 const GLOBAL_PATHS = GLOBAL_ALLOWLIST.paths.map((p) => new RegExp(p));
 const GLOBAL_REGEXES = GLOBAL_ALLOWLIST.regexes.map((r) => new RegExp(r.source, r.flags));
@@ -155,6 +164,9 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
 
   for (const rule of COMPILED) {
     if (isDisabledRule(rule.id, cfg.allowlist)) continue;
+    // Scoped rules apply only to matching files; without a path (prompts,
+    // tool output) they still run — recall over precision.
+    if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
 
     rule.re.lastIndex = 0;

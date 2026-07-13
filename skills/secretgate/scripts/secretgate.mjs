@@ -1,9 +1,87 @@
 #!/usr/bin/env node
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+
+// src/engine/gitleaks-bin.ts
+var gitleaks_bin_exports = {};
+__export(gitleaks_bin_exports, {
+  gitleaksPath: () => gitleaksPath,
+  scanWithGitleaks: () => scanWithGitleaks
+});
+import { spawn } from "child_process";
+import { existsSync as existsSync4, mkdtempSync, readFileSync as readFileSync7, rmSync as rmSync2 } from "fs";
+import { tmpdir } from "os";
+import { delimiter, join as join5 } from "path";
+function gitleaksPath() {
+  if (cachedPath !== void 0) return cachedPath;
+  const exe = process.platform === "win32" ? "gitleaks.exe" : "gitleaks";
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir && existsSync4(join5(dir, exe))) {
+      cachedPath = join5(dir, exe);
+      return cachedPath;
+    }
+  }
+  cachedPath = null;
+  return null;
+}
+function scanWithGitleaks(text, opts = {}) {
+  const bin = opts.bin ?? gitleaksPath();
+  if (!bin) return Promise.resolve([]);
+  const dir = mkdtempSync(join5(tmpdir(), "secretgate-gl-"));
+  const report = join5(dir, "report.json");
+  return new Promise((resolve2, reject) => {
+    const child = spawn(bin, ["stdin", "--no-banner", "--exit-code", String(LEAK_EXIT), "--report-format", "json", "--report-path", report], {
+      stdio: ["pipe", "ignore", "pipe"],
+      timeout: opts.timeoutMs ?? 1e4
+    });
+    let stderr = "";
+    child.stderr.on("data", (d) => {
+      stderr += d;
+    });
+    child.on("error", (err) => {
+      rmSync2(dir, { recursive: true, force: true });
+      reject(err);
+    });
+    child.on("close", (code) => {
+      try {
+        if (code === 0) {
+          resolve2([]);
+          return;
+        }
+        if (code !== LEAK_EXIT) {
+          reject(new Error(`gitleaks exited ${code}: ${stderr.slice(0, 500)}`));
+          return;
+        }
+        const raw = JSON.parse(readFileSync7(report, "utf8"));
+        resolve2(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
+      } catch (err) {
+        reject(err);
+      } finally {
+        rmSync2(dir, { recursive: true, force: true });
+      }
+    });
+    child.stdin.end(text);
+  });
+}
+var cachedPath, LEAK_EXIT;
+var init_gitleaks_bin = __esm({
+  "src/engine/gitleaks-bin.ts"() {
+    "use strict";
+    LEAK_EXIT = 99;
+  }
+});
 
 // src/cli.ts
-import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync4, mkdirSync as mkdirSync4, readFileSync as readFileSync7, readdirSync, statSync } from "fs";
+import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync4, readFileSync as readFileSync8, readdirSync, statSync } from "fs";
 import { homedir as homedir4 } from "os";
-import { dirname as dirname2, join as join5, relative, resolve } from "path";
+import { dirname as dirname2, join as join6, relative, resolve } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 // src/config.ts
@@ -1078,7 +1156,11 @@ var RULES = [
     },
     "keywords": [
       "secret_key"
-    ]
+    ],
+    "scopePath": {
+      "source": "\\.php$",
+      "flags": "i"
+    }
   },
   {
     "id": "freshbooks-access-token",
@@ -3034,7 +3116,11 @@ var RULES = [
       "administrator_login_password",
       "password"
     ],
-    "entropy": 2
+    "entropy": 2,
+    "scopePath": {
+      "source": "\\.(?:tf|hcl)$",
+      "flags": "i"
+    }
   },
   {
     "id": "heroku-api-key",
@@ -3190,6 +3276,10 @@ var RULES = [
     "keywords": [
       "secret"
     ],
+    "scopePath": {
+      "source": "\\.ya?ml$",
+      "flags": "i"
+    },
     "allowlists": [
       {
         "regexes": [
@@ -3522,6 +3612,10 @@ var RULES = [
       "<add key="
     ],
     "entropy": 1,
+    "scopePath": {
+      "source": "nuget\\.config$",
+      "flags": "i"
+    },
     "allowlists": [
       {
         "regexes": [
@@ -3607,14 +3701,6 @@ var RULES = [
       "pplx-"
     ],
     "entropy": 4
-  },
-  {
-    "id": "pkcs12-file",
-    "regex": {
-      "source": "undefined",
-      "flags": ""
-    },
-    "keywords": []
   },
   {
     "id": "plaid-api-token",
@@ -4346,6 +4432,15 @@ var RULES = [
     ]
   }
 ];
+var PATH_RULES = [
+  {
+    "id": "pkcs12-file",
+    "path": {
+      "source": "(?:^|\\/)[^\\/]+\\.p(?:12|fx)$",
+      "flags": "i"
+    }
+  }
+];
 var GLOBAL_ALLOWLIST = {
   "paths": [
     "gitleaks\\.toml",
@@ -4464,10 +4559,14 @@ var COMPILED = [
     entropy: r.entropy,
     secretGroup: r.secretGroup,
     keywords: r.keywords,
-    allowlists: (r.allowlists ?? []).map(compileAllowlist)
+    allowlists: (r.allowlists ?? []).map(compileAllowlist),
+    scope: r.scopePath ? new RegExp(r.scopePath.source, r.scopePath.flags) : void 0
   })),
   ...BUILTIN_RULES
 ];
+function sensitiveFileNameRule(path) {
+  return PATH_RULES.find((r) => new RegExp(r.path.source, r.path.flags).test(path))?.id;
+}
 var GLOBAL_PATHS = GLOBAL_ALLOWLIST.paths.map((p) => new RegExp(p));
 var GLOBAL_REGEXES = GLOBAL_ALLOWLIST.regexes.map((r) => new RegExp(r.source, r.flags));
 var GLOBAL_STOPWORDS = GLOBAL_ALLOWLIST.stopwords;
@@ -4531,6 +4630,7 @@ function scan(text, cfg = {}) {
   const findings = [];
   for (const rule of COMPILED) {
     if (isDisabledRule(rule.id, cfg.allowlist)) continue;
+    if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
     rule.re.lastIndex = 0;
     for (const match of text.matchAll(rule.re)) {
@@ -5177,7 +5277,7 @@ var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
-    const full = join5(root, entry.name);
+    const full = join6(root, entry.name);
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkFiles(full);
     } else if (entry.isFile()) {
@@ -5188,7 +5288,7 @@ function* walkFiles(root) {
 function readTextFile(path) {
   const stats = statSync(path);
   if (stats.size === 0 || stats.size > MAX_FILE_BYTES) return void 0;
-  const buf = readFileSync7(path);
+  const buf = readFileSync8(path);
   const probe = buf.subarray(0, 8192);
   if (probe.includes(0)) return void 0;
   return buf.toString("utf8");
@@ -5238,6 +5338,12 @@ async function cmdScan(args, io) {
     for (const file of files) {
       const rel = stats.isDirectory() ? relative(root, file) : file;
       if (excludes.some((g) => pathMatchesGlob(rel, g))) continue;
+      if (cfg.allowlist.paths?.some((g) => pathMatchesGlob(rel, g))) continue;
+      const nameRule = sensitiveFileNameRule(rel);
+      if (nameRule) {
+        hits.push({ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel });
+        continue;
+      }
       const text = readTextFile(file);
       if (text === void 0) continue;
       for (const finding of scan(text, { sourcePath: rel, allowlist: cfg.allowlist })) hits.push({ finding, path: rel });
@@ -5266,10 +5372,9 @@ async function cmdScan(args, io) {
     io.stdout("secretgate: no secrets found\n");
   } else {
     for (const { finding, path } of hits) {
-      io.stdout(
-        `${path}:${finding.line + 1}  ${finding.ruleId}  [len ${finding.secret.length}, entropy ${finding.entropy.toFixed(2)}, sha256 ${hashPrefix(finding.secret)}]
-`
-      );
+      const detail = finding.secret === "" ? "[sensitive file name]" : `[len ${finding.secret.length}, entropy ${finding.entropy.toFixed(2)}, sha256 ${hashPrefix(finding.secret)}]`;
+      io.stdout(`${path}:${finding.line + 1}  ${finding.ruleId}  ${detail}
+`);
     }
     io.stdout(`secretgate: ${hits.length} finding(s). Allow a value with \`secretgate allow <value>\`.
 `);
@@ -5355,7 +5460,7 @@ async function cmdHook(args, io) {
 function installedCliCommand() {
   const self = fileURLToPath(import.meta.url);
   if (!self.endsWith(".mjs")) return `node "${self}"`;
-  const target = join5(defaultVaultHome(), "bin", "secretgate.mjs");
+  const target = join6(defaultVaultHome(), "bin", "secretgate.mjs");
   mkdirSync4(dirname2(target), { recursive: true, mode: 448 });
   copyFileSync3(self, target);
   chmodSync(target, 493);
@@ -5384,13 +5489,13 @@ function parseAgentFlags(args, io) {
 }
 function opencodePluginSource() {
   const selfDir = dirname2(fileURLToPath(import.meta.url));
-  const candidates = [join5(selfDir, "secretgate-opencode.mjs"), join5(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
-  const found = candidates.find((c) => existsSync4(c));
+  const candidates = [join6(selfDir, "secretgate-opencode.mjs"), join6(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const found = candidates.find((c) => existsSync5(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
   return found;
 }
 function claudeSettingsPath(project) {
-  return project ? join5(process.cwd(), ".claude", "settings.json") : join5(homedir4(), ".claude", "settings.json");
+  return project ? join6(process.cwd(), ".claude", "settings.json") : join6(homedir4(), ".claude", "settings.json");
 }
 async function cmdInstall(args, io) {
   const flags = parseAgentFlags(args, io);
@@ -5468,12 +5573,77 @@ async function cmdUninstall(args, io) {
   io.stdout("secretgate: the vault (~/.secretgate) is kept \u2014 remove it manually if you want the mappings gone.\n");
   return 0;
 }
-function notImplemented(name) {
-  return (_args, io) => {
-    io.stderr(`secretgate ${name}: not implemented yet
+function readJsonSafe(path) {
+  try {
+    return JSON.parse(readFileSync8(path, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function hookWireCount(settings, marker) {
+  if (!settings?.hooks) return 0;
+  let count = 0;
+  for (const groups of Object.values(settings.hooks)) {
+    if (!Array.isArray(groups)) continue;
+    for (const g of groups) for (const h of g.hooks ?? []) if (String(h.command ?? "").includes(marker)) count++;
+  }
+  return count;
+}
+async function cmdStatus(_args, io) {
+  io.stdout(`secretgate ${VERSION}
+
 `);
-    return 2;
-  };
+  const pinned = join6(defaultVaultHome(), "bin", "secretgate.mjs");
+  if (existsSync5(pinned)) {
+    const pinnedVersion = /VERSION = "([^"]+)"/.exec(readFileSync8(pinned, "utf8"))?.[1] ?? "unknown";
+    io.stdout(`bundle    pinned at ${pinned} (v${pinnedVersion}${pinnedVersion !== VERSION ? ` \u2014 CLI is v${VERSION}, re-run install to refresh` : ""})
+`);
+  } else {
+    io.stdout("bundle    not pinned yet (run `secretgate install \u2026`)\n");
+  }
+  for (const [label, path] of [
+    ["global ", claudeSettingsPath(false)],
+    ["project", claudeSettingsPath(true)]
+  ]) {
+    const settings = readJsonSafe(path);
+    const wired = hookWireCount(settings, "hook claude-code");
+    const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d) => d.startsWith("Read(")).length : 0;
+    io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}
+`);
+  }
+  io.stdout("claude-code limitation: @file mentions bypass tool hooks (deny rules are the only cover there).\n");
+  const codexHooks = readJsonSafe(join6(codexHome(), "hooks.json"));
+  const codexWired = hookWireCount(codexHooks, "hook codex");
+  let codexFeature = false;
+  try {
+    codexFeature = /^\s*hooks\s*=\s*true\b/m.test(readFileSync8(join6(codexHome(), "config.toml"), "utf8"));
+  } catch {
+  }
+  io.stdout(
+    `codex     ${codexWired > 0 && codexFeature ? `wired (${codexWired} hooks, feature gate on)` : codexWired > 0 ? "hooks present but [features] hooks = true is MISSING" : "not wired"}  ${codexHome()}
+`
+  );
+  if (codexWired > 0) io.stdout("codex     limitations: interactive sessions only (`codex exec` bug); no tool-output redaction upstream yet.\n");
+  const ocPlugin = join6(opencodeConfigDir(), "plugin", "secretgate.js");
+  const ocConfig = readJsonSafe(join6(opencodeConfigDir(), "opencode.json"));
+  const ocPinned = Array.isArray(ocConfig?.plugin) && ocConfig.plugin.some((p) => /^secretgate@/.test(p));
+  io.stdout(`opencode  ${existsSync5(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}
+`);
+  const { gitleaksPath: gitleaksPath2 } = await Promise.resolve().then(() => (init_gitleaks_bin(), gitleaks_bin_exports));
+  const gl = gitleaksPath2();
+  io.stdout(`engines   built-in JS rules${gl ? ` + gitleaks binary (${gl})` : " (gitleaks binary not found \u2014 `scan` runs JS engine only)"}
+`);
+  const vault = new Vault();
+  const entries = vault.list();
+  io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
+  try {
+    const mode = statSync(join6(defaultVaultHome(), "vault.json")).mode & 511;
+    io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
+`);
+  } catch {
+    io.stdout(" (no vault file yet)\n");
+  }
+  return 0;
 }
 var commands = {
   scan: cmdScan,
@@ -5482,7 +5652,7 @@ var commands = {
   vault: cmdVault,
   install: cmdInstall,
   uninstall: cmdUninstall,
-  status: notImplemented("status"),
+  status: cmdStatus,
   hook: cmdHook
 };
 async function run(argv, io) {

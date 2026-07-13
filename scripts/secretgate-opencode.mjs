@@ -1102,7 +1102,11 @@ var RULES = [
     },
     "keywords": [
       "secret_key"
-    ]
+    ],
+    "scopePath": {
+      "source": "\\.php$",
+      "flags": "i"
+    }
   },
   {
     "id": "freshbooks-access-token",
@@ -3058,7 +3062,11 @@ var RULES = [
       "administrator_login_password",
       "password"
     ],
-    "entropy": 2
+    "entropy": 2,
+    "scopePath": {
+      "source": "\\.(?:tf|hcl)$",
+      "flags": "i"
+    }
   },
   {
     "id": "heroku-api-key",
@@ -3214,6 +3222,10 @@ var RULES = [
     "keywords": [
       "secret"
     ],
+    "scopePath": {
+      "source": "\\.ya?ml$",
+      "flags": "i"
+    },
     "allowlists": [
       {
         "regexes": [
@@ -3546,6 +3558,10 @@ var RULES = [
       "<add key="
     ],
     "entropy": 1,
+    "scopePath": {
+      "source": "nuget\\.config$",
+      "flags": "i"
+    },
     "allowlists": [
       {
         "regexes": [
@@ -3631,14 +3647,6 @@ var RULES = [
       "pplx-"
     ],
     "entropy": 4
-  },
-  {
-    "id": "pkcs12-file",
-    "regex": {
-      "source": "undefined",
-      "flags": ""
-    },
-    "keywords": []
   },
   {
     "id": "plaid-api-token",
@@ -4488,7 +4496,8 @@ var COMPILED = [
     entropy: r.entropy,
     secretGroup: r.secretGroup,
     keywords: r.keywords,
-    allowlists: (r.allowlists ?? []).map(compileAllowlist)
+    allowlists: (r.allowlists ?? []).map(compileAllowlist),
+    scope: r.scopePath ? new RegExp(r.scopePath.source, r.scopePath.flags) : void 0
   })),
   ...BUILTIN_RULES
 ];
@@ -4555,6 +4564,7 @@ function scan(text, cfg = {}) {
   const findings = [];
   for (const rule of COMPILED) {
     if (isDisabledRule(rule.id, cfg.allowlist)) continue;
+    if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
     rule.re.lastIndex = 0;
     for (const match of text.matchAll(rule.re)) {

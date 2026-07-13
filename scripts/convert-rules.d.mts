@@ -22,7 +22,9 @@ export function convertConfig(): Promise<{
       stopwords?: string[];
       paths?: Array<{ source: string; flags: string }>;
     }>;
+    scopePath?: { source: string; flags: string };
   }>;
+  pathRules: Array<{ id: string; path: { source: string; flags: string } }>;
   dropped: string[];
   loosened: string[];
   globalAllowlist: { paths: string[]; regexes: Array<{ source: string; flags: string }>; stopwords: string[] };

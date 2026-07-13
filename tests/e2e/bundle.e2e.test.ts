@@ -88,4 +88,14 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     expect(s2.hooks?.UserPromptSubmit).toBeUndefined();
     expect(s2.permissions?.deny ?? []).not.toContain("Read(**/.env)");
   });
+
+  it("status reports wiring per agent and vault health", async () => {
+    await runBundle(["install", "--claude-code"]);
+    const r = await runBundle(["status"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("claude-code global   wired");
+    expect(r.stdout).toContain("codex     not wired");
+    expect(r.stdout).toContain("opencode  not wired");
+    expect(r.stdout).toContain("vault");
+  });
 });

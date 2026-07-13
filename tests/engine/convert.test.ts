@@ -97,6 +97,15 @@ describe("convertConfig — full vendored gitleaks.toml", () => {
     expect(new RegExp(pat!.regex.source, pat!.regex.flags).test(token)).toBe(true);
   });
 
+  it("routes path-only rules to pathRules and keeps scope on regex+path rules", async () => {
+    const { rules, pathRules } = await convertConfig();
+    expect(pathRules.map((r) => r.id)).toContain("pkcs12-file");
+    expect(rules.find((r) => r.id === "pkcs12-file")).toBeUndefined();
+    const scoped = rules.find((r) => r.id === "kubernetes-secret-yaml");
+    expect(scoped?.scopePath).toBeDefined();
+    expect(() => new RegExp(scoped!.scopePath!.source, scoped!.scopePath!.flags)).not.toThrow();
+  });
+
   it("carries the global allowlist (paths + stopwords/regexes if present)", async () => {
     const { globalAllowlist } = await convertConfig();
     expect(globalAllowlist.paths.length).toBeGreaterThan(10);

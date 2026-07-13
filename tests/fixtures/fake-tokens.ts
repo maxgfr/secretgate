@@ -14,7 +14,8 @@ export const FAKE = {
   // generic-api-key secret group: [\w.=-]{10,150}, entropy > 3.5
   genericSecret: "kQ9zX2mP7v" + "B4wL8nR3tY" + "6hG5jD1fC0",
   // private-key: -----BEGIN ... PRIVATE KEY----- ... KEY-----
-  privateKey: ["-----BEGIN RSA PRIVATE KEY-----", ("MIIEkQ9zX2mP7vB4wL8nR3tY6hG5jD1fC0aSeUiO".repeat(2) + "=="), "-----END RSA PRIVATE KEY-----"].join("\n"),
+  // biome-ignore format: keep the pragma on the secret-bearing line
+  privateKey: ["-----BEGIN RSA PRIVATE KEY-----", ("MIIEkQ9zX2mP7vB4wL8nR3tY6hG5jD1fC0aSeUiO".repeat(2) + "=="), "-----END RSA PRIVATE KEY-----"].join("\n"), // pragma: allowlist secret
   // Checksum-valid Visa-prefixed PAN (classic test number) and a near-miss
   visaPan: "4111" + "1111" + "1111" + "1111",
   visaPanInvalid: "4111" + "1111" + "1111" + "1112",

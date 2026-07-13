@@ -79,7 +79,8 @@ jobs:
           node-version: 24
 
       - name: secretgate scans its own repo -> 0 findings
-        run: node scripts/secretgate.mjs scan . --exclude rules/gitleaks.toml
+        # .secretgate.json (project allowlist, dogfood) covers the rule-database files
+        run: node scripts/secretgate.mjs scan .
 
   # The shipped bundles declare engines.node >=18.17 and must run with NO
   # install on that floor. This job runs ONLY the committed bundles there.

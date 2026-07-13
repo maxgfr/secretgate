@@ -3,7 +3,7 @@ import { luhnValid } from "../../src/engine/luhn.js";
 
 describe("luhnValid", () => {
   it("accepts classic valid numbers", () => {
-    expect(luhnValid("4111111111111111")).toBe(true);
+    expect(luhnValid("4111111111111111")).toBe(true); // pragma: allowlist secret
     expect(luhnValid("79927398713")).toBe(true);
   });
 
@@ -13,12 +13,12 @@ describe("luhnValid", () => {
   });
 
   it("rejects non-digit input", () => {
-    expect(luhnValid("4111-1111-1111-1111x")).toBe(false);
+    expect(luhnValid("4111-1111-1111-1111x")).toBe(false); // pragma: allowlist secret
     expect(luhnValid("")).toBe(false);
   });
 
   it("ignores separators when told to", () => {
-    expect(luhnValid("4111 1111 1111 1111", { stripSeparators: true })).toBe(true);
-    expect(luhnValid("4111-1111-1111-1111", { stripSeparators: true })).toBe(true);
+    expect(luhnValid("4111 1111 1111 1111", { stripSeparators: true })).toBe(true); // pragma: allowlist secret
+    expect(luhnValid("4111-1111-1111-1111", { stripSeparators: true })).toBe(true); // pragma: allowlist secret
   });
 });
