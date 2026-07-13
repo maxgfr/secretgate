@@ -20,17 +20,23 @@ secretgate ships as an **agent skill** — there is no npm package to publish or
 trust. Install the skill, then run `init` once:
 
 ```bash
-npx skills add maxgfr/secretgate                            # installs the skill + bundle
-node .claude/skills/secretgate/scripts/secretgate.mjs init  # wires the agents on this machine AND self-tests
+npx skills add maxgfr/secretgate -g          # installs the skill globally
+# then just tell your agent:  "install secretgate"
 ```
 
-`init` auto-detects Claude Code / Codex / OpenCode, wires each, then **proves
-the firewall fires** — it spawns the real hook with a fake secret and confirms
-the prompt is blocked and tool output is redacted before declaring success.
+The skill activates on that ask and runs `secretgate init` for you — which
+**auto-detects** Claude Code / Codex / OpenCode on this machine, wires each, and
+then **proves the firewall fires** by spawning the real hook with a fake secret
+(confirming the prompt is blocked and tool output is redacted) before declaring
+success. Restart the agent session afterwards so the hooks load.
 
-Even simpler: after `npx skills add`, just tell your agent **"install
-secretgate"** — the skill activates and runs `init` for you. Restart the agent
-session afterwards (hooks load at startup).
+Prefer to run it yourself? The bundle lands next to the installed `SKILL.md`
+(e.g. `~/.claude/skills/secretgate/scripts/secretgate.mjs`, or
+`./.claude/skills/secretgate/…` for a project install):
+
+```bash
+node <skill-dir>/scripts/secretgate.mjs init
+```
 
 Once wired, protection is **fully automatic and deterministic**: the hooks — not
 the model — scan and redact on every prompt and tool call. You never invoke

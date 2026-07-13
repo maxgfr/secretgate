@@ -2,19 +2,20 @@ import { loadConfig } from "../config.js";
 import { commandTouchesSensitivePath, sensitivePathMatch } from "../paths.js";
 import { redactText, restorePlaceholders } from "../redact.js";
 import { Vault } from "../vault/vault.js";
-import { VERSION } from "../version.js";
 
 // OpenCode plugin — bundled standalone as scripts/secretgate-opencode.mjs and
-// installed into ~/.config/opencode/plugin/secretgate.js (or as an npm plugin
-// entry). OpenCode's hook contract honors IN-PLACE mutations of the objects it
-// passes (verified in opencode's session/tools.ts): mutate `parts[i].text`,
-// `output.args.<prop>` and `output.output` — never reassign whole objects.
-// Unlike Claude Code, OpenCode lets us REWRITE the prompt, so secrets in
-// prompts are redacted (not blocked) here.
+// installed into ~/.config/opencode/plugin/secretgate.js. OpenCode's hook
+// contract honors IN-PLACE mutations of the objects it passes (verified in
+// opencode's session/tools.ts): mutate `parts[i].text`, `output.args.<prop>`
+// and `output.output` — never reassign whole objects. Unlike Claude Code,
+// OpenCode lets us REWRITE the prompt, so secrets in prompts are redacted
+// (not blocked) here.
+//
+// IMPORTANT: this module must export ONLY the plugin function. OpenCode treats
+// EVERY named export as a plugin and rejects non-function exports with "Plugin
+// export is not a function", so no version constants or helpers may be exported.
 
 const ALLOW_TAG = "[allow-secret]";
-
-export const SECRETGATE_PLUGIN_VERSION = VERSION;
 
 // Mutate every string property of a container (object/array) in place.
 function mutateStringsInPlace(container: any, fn: (s: string) => string): boolean {

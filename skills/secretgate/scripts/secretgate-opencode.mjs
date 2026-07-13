@@ -4738,12 +4738,8 @@ function restorePlaceholders(text, vault) {
   return { text: out, restored };
 }
 
-// src/version.ts
-var VERSION = "1.1.1";
-
 // src/adapters/opencode-plugin.ts
 var ALLOW_TAG = "[allow-secret]";
-var SECRETGATE_PLUGIN_VERSION = VERSION;
 function mutateStringsInPlace(container, fn) {
   if (container === null || typeof container !== "object") return false;
   let changed = false;
@@ -4822,6 +4818,5 @@ var SecretgatePlugin = async (_ctx) => {
   };
 };
 export {
-  SECRETGATE_PLUGIN_VERSION,
   SecretgatePlugin
 };
