@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.1](https://github.com/maxgfr/secretgate/compare/v1.1.0...v1.1.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* **install:** ship the OpenCode plugin bundle in the skill + make init/install fault-tolerant per agent ([390af62](https://github.com/maxgfr/secretgate/commit/390af622cc1b8526660db73b5a6951d9b915a1ed))
+
 # [1.1.0](https://github.com/maxgfr/secretgate/compare/v1.0.1...v1.1.0) (2026-07-13)
 
 
