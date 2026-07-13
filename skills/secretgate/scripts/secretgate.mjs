@@ -237,9 +237,13 @@ function pathMatchesGlob(path, glob) {
     const c = glob[i];
     if (c === "*") {
       if (glob[i + 1] === "*") {
-        re += ".*";
-        i += 2;
-        if (glob[i] === "/") i++;
+        if (glob[i + 2] === "/") {
+          re += "(?:.*/)?";
+          i += 3;
+        } else {
+          re += ".*";
+          i += 2;
+        }
       } else {
         re += "[^/]*";
         i++;
@@ -4530,6 +4534,7 @@ var GLOBAL_ALLOWLIST = {
 };
 
 // src/engine/scanner.ts
+var PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
 function compileAllowlist(a) {
   return {
     condition: a.condition === "AND" ? "AND" : "OR",
@@ -4636,6 +4641,7 @@ function scan(text, cfg = {}) {
     for (const match of text.matchAll(rule.re)) {
       const { secret, start, end } = pickSecret(match, rule.secretGroup);
       if (secret.length === 0) continue;
+      if (PLACEHOLDER_ONLY.test(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
@@ -4700,12 +4706,40 @@ function sensitivePathMatch(path) {
   if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g))) return void 0;
   return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g));
 }
+var READ_COMMANDS = /* @__PURE__ */ new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "xxd",
+  "od",
+  "strings",
+  "hexdump",
+  "nl",
+  "tac",
+  "base64",
+  "sed",
+  "awk",
+  "grep",
+  "rg",
+  "printf",
+  "print"
+]);
 function commandTouchesSensitivePath(command) {
-  for (const raw of command.split(/[\s;|&()<>]+/)) {
-    const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
-    if (token.length < 2 || token.startsWith("-")) continue;
-    const hit = sensitivePathMatch(token);
-    if (hit) return token;
+  for (const segment of command.split(/[;\n]|&&|\|\||\||&/)) {
+    const tokens = segment.trim().split(/\s+/);
+    if (tokens.length === 0) continue;
+    const cmd = (tokens[0] ?? "").replace(/^.*\//, "");
+    if (!READ_COMMANDS.has(cmd)) continue;
+    for (const raw of tokens.slice(1)) {
+      if (raw.startsWith(">")) break;
+      const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
+      if (token.length < 2 || token.startsWith("-")) continue;
+      const hit = sensitivePathMatch(token);
+      if (hit) return token;
+    }
   }
   return void 0;
 }
@@ -5203,13 +5237,7 @@ function opencodeConfigDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
   return join4(xdg && xdg !== "" ? xdg : join4(homedir3(), ".config"), "opencode");
 }
-function installOpencode({ configDir, pluginSource, viaConfig, version }) {
-  if (viaConfig) {
-    return editJsonFile(join4(configDir, "opencode.json"), (cfg) => {
-      const plugins = Array.isArray(cfg.plugin) ? cfg.plugin : [];
-      cfg.plugin = [...plugins.filter((p) => !/^secretgate@/.test(p)), `secretgate@${version}`];
-    });
-  }
+function installOpencode({ configDir, pluginSource }) {
   const target = join4(configDir, "plugin", "secretgate.js");
   const content = readFileSync6(pluginSource, "utf8");
   if (existsSync3(target)) {
@@ -5467,14 +5495,13 @@ function installedCliCommand() {
   return `node "${target}"`;
 }
 function parseAgentFlags(args, io) {
-  const flags = { claudeCode: false, codex: false, opencode: false, project: false, viaConfig: false };
+  const flags = { claudeCode: false, codex: false, opencode: false, project: false };
   for (const a of args) {
     if (a === "--claude-code") flags.claudeCode = true;
     else if (a === "--codex") flags.codex = true;
     else if (a === "--opencode") flags.opencode = true;
     else if (a === "--all") flags.claudeCode = flags.codex = flags.opencode = true;
     else if (a === "--project") flags.project = true;
-    else if (a === "--via-config") flags.viaConfig = true;
     else {
       io.stderr(`unknown option: ${a}
 `);
@@ -5513,7 +5540,7 @@ async function cmdInstall(args, io) {
       io.stdout("claude-code: note \u2014 @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
     }
     if (flags.opencode) {
-      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource(), viaConfig: flags.viaConfig, version: VERSION });
+      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
       io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
       io.stdout("opencode: restart OpenCode so the plugin loads.\n");

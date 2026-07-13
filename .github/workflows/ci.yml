@@ -66,6 +66,33 @@ jobs:
       - name: Differential test (JS engine vs real gitleaks on fixtures)
         run: SECRETGATE_DIFFERENTIAL=1 pnpm exec vitest run tests/engine/differential.test.ts
 
+  # The whole distribution story: `npx skills add` installs a WORKING skill
+  # (bundle included), and running that bundle's `install` wires the hooks and
+  # actually blocks a secret — no npm package anywhere in the path.
+  skills-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - name: skills add -> install -> hooks wired -> block works
+        run: |
+          WORK="$(mktemp -d)"; cd "$WORK"; git init -q
+          npx --yes skills add "$GITHUB_WORKSPACE" --skill secretgate --agent claude-code --copy -y
+          BUNDLE="$WORK/.claude/skills/secretgate/scripts/secretgate.mjs"
+          test -f "$BUNDLE" || { echo "::error::skills add dropped the engine bundle"; exit 1; }
+          export SECRETGATE_HOME="$WORK/.secretgate" HOME="$WORK"
+          node "$BUNDLE" install --claude-code --project
+          node -e 'const h=require(process.argv[1]).hooks; for(const e of ["UserPromptSubmit","PreToolUse","PostToolUse"]) if(!h[e]){console.error("::error::"+e+" not wired");process.exit(1)}' "$WORK/.claude/settings.json"
+          # the wired bundle must actually block a secret-bearing prompt (high-entropy fake token, built by concat)
+          printf '{"hook_event_name":"UserPromptSubmit","cwd":"%s","prompt":"tok ghp_%s"}' "$WORK" "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0dF6hJ9" | node "$BUNDLE" hook claude-code user-prompt-submit > out.json
+          node -e 'if(JSON.parse(require("fs").readFileSync("out.json","utf8")).decision!=="block"){console.error("::error::wired hook did not block");process.exit(1)}console.log("blocked ok")'
+
   # Self-scan dogfood: the repo must not contain anything the engine flags.
   # Forces test fixtures to build fake tokens by concatenation and keeps
   # GitHub push protection quiet.

@@ -66,4 +66,14 @@ describe("restorePlaceholders", () => {
     expect(restored.text).toBe("value=SECRETGATE_deadbeef1234");
     expect(restored.restored).toBe(0);
   });
+
+  it("is idempotent: redacting already-redacted text finds nothing (placeholders are not secrets)", () => {
+    const once = redactText(`CI_TOKEN=${FAKE.githubPat}`, vault, "test");
+    expect(once.replaced).toHaveLength(1);
+    // the redacted text (containing a placeholder in assignment context) must
+    // NOT be flagged again — otherwise a resent redacted prompt would re-block
+    const twice = redactText(once.text, vault, "test");
+    expect(twice.findings).toEqual([]);
+    expect(twice.text).toBe(once.text);
+  });
 });

@@ -267,18 +267,16 @@ interface AgentFlags {
   codex: boolean;
   opencode: boolean;
   project: boolean;
-  viaConfig: boolean;
 }
 
 function parseAgentFlags(args: string[], io: Io): AgentFlags | undefined {
-  const flags: AgentFlags = { claudeCode: false, codex: false, opencode: false, project: false, viaConfig: false };
+  const flags: AgentFlags = { claudeCode: false, codex: false, opencode: false, project: false };
   for (const a of args) {
     if (a === "--claude-code") flags.claudeCode = true;
     else if (a === "--codex") flags.codex = true;
     else if (a === "--opencode") flags.opencode = true;
     else if (a === "--all") flags.claudeCode = flags.codex = flags.opencode = true;
     else if (a === "--project") flags.project = true;
-    else if (a === "--via-config") flags.viaConfig = true;
     else {
       io.stderr(`unknown option: ${a}\n`);
       return undefined;
@@ -317,7 +315,7 @@ async function cmdInstall(args: string[], io: Io): Promise<number> {
       io.stdout("claude-code: note — @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
     }
     if (flags.opencode) {
-      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource(), viaConfig: flags.viaConfig, version: VERSION });
+      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
       io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
       io.stdout("opencode: restart OpenCode so the plugin loads.\n");
     }

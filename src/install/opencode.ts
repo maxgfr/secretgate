@@ -3,11 +3,9 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { type EditReport, editJsonFile } from "./json-merge.js";
 
-// Two install modes for OpenCode:
-//   default   — copy the self-contained plugin bundle to <config>/plugin/secretgate.js
-//               (works offline, no Bun-install dependency)
-//   viaConfig — pin `secretgate@<version>` in opencode.json's plugin array
-//               (OpenCode auto-installs from npm at startup)
+// OpenCode install = copy the self-contained plugin bundle to
+// <config>/plugin/secretgate.js. secretgate is distributed as a skill, not an
+// npm package, so there is no npm-pin mode — the file copy works fully offline.
 const OWNERSHIP_MARKER = "SecretgatePlugin";
 
 export function opencodeConfigDir(): string {
@@ -19,17 +17,9 @@ export interface OpencodeInstallOptions {
   configDir: string;
   /** path to the built scripts/secretgate-opencode.mjs to copy */
   pluginSource: string;
-  viaConfig: boolean;
-  version: string;
 }
 
-export function installOpencode({ configDir, pluginSource, viaConfig, version }: OpencodeInstallOptions): EditReport {
-  if (viaConfig) {
-    return editJsonFile(join(configDir, "opencode.json"), (cfg) => {
-      const plugins: string[] = Array.isArray(cfg.plugin) ? cfg.plugin : [];
-      cfg.plugin = [...plugins.filter((p) => !/^secretgate@/.test(p)), `secretgate@${version}`];
-    });
-  }
+export function installOpencode({ configDir, pluginSource }: OpencodeInstallOptions): EditReport {
   const target = join(configDir, "plugin", "secretgate.js");
   const content = readFileSync(pluginSource, "utf8");
   if (existsSync(target)) {

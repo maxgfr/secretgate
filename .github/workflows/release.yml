@@ -44,8 +44,7 @@ jobs:
           pnpm test
           pnpm run check:build
 
-      - name: Release (semantic-release)
+      - name: Release (semantic-release — GitHub release only, no npm publish)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: pnpm exec semantic-release

@@ -32,16 +32,51 @@ export function sensitivePathMatch(path: string): string | undefined {
   return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g));
 }
 
-// Best-effort scan of a shell command for sensitive path mentions: split into
-// tokens, strip quotes/common decorations, match each. Catches `cat .env`,
-// `head ~/.aws/credentials`… (the agent's own permission rules are the
-// stronger layer for shell reads; this is belt-and-braces).
+// Commands that print file contents to stdout — the ones that would leak a
+// sensitive file INTO the model. A command that merely WRITES to a sensitive
+// path (`echo x > .env`) does not leak and must not be denied (it's also the
+// restore-on-write target). PostToolUse redaction is the backstop for anything
+// this misses, so we can afford to be precise here.
+const READ_COMMANDS = new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "xxd",
+  "od",
+  "strings",
+  "hexdump",
+  "nl",
+  "tac",
+  "base64",
+  "sed",
+  "awk",
+  "grep",
+  "rg",
+  "printf",
+  "print",
+]);
+
+// Best-effort: only deny a Bash command when a recognized READ command
+// references a sensitive path. Splits on shell separators so `foo && cat .env`
+// is caught segment by segment. The agent's own permission rules and
+// PostToolUse redaction are the stronger/backstop layers.
 export function commandTouchesSensitivePath(command: string): string | undefined {
-  for (const raw of command.split(/[\s;|&()<>]+/)) {
-    const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
-    if (token.length < 2 || token.startsWith("-")) continue;
-    const hit = sensitivePathMatch(token);
-    if (hit) return token;
+  for (const segment of command.split(/[;\n]|&&|\|\||\||&/)) {
+    const tokens = segment.trim().split(/\s+/);
+    if (tokens.length === 0) continue;
+    const cmd = (tokens[0] ?? "").replace(/^.*\//, ""); // basename
+    if (!READ_COMMANDS.has(cmd)) continue;
+    for (const raw of tokens.slice(1)) {
+      // stop at a write redirection target — that's not a read
+      if (raw.startsWith(">")) break;
+      const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
+      if (token.length < 2 || token.startsWith("-")) continue;
+      const hit = sensitivePathMatch(token);
+      if (hit) return token;
+    }
   }
   return undefined;
 }

@@ -32,9 +32,16 @@ export function pathMatchesGlob(path: string, glob: string): boolean {
     const c = glob[i]!;
     if (c === "*") {
       if (glob[i + 1] === "*") {
-        re += ".*";
-        i += 2;
-        if (glob[i] === "/") i++; // `**/` also matches zero directories
+        // `**/` matches any number of leading path SEGMENTS (incl. zero), so it
+        // must end at a `/` boundary — `(?:.*/)?`, NOT `.*` (which would let
+        // `**/.env` match `restored.env`). A trailing `**` matches anything.
+        if (glob[i + 2] === "/") {
+          re += "(?:.*/)?";
+          i += 3;
+        } else {
+          re += ".*";
+          i += 2;
+        }
       } else {
         re += "[^/]*";
         i++;

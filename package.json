@@ -1,23 +1,10 @@
 {
   "name": "secretgate",
   "version": "0.0.0",
-  "description": "Local secrets firewall for coding agents: detects credentials in prompts, file reads and tool output BEFORE they are sent to the LLM API — redacts them to stable placeholders and restores the real values locally. Zero-dependency engine with gitleaks-derived rules; installers for Claude Code, OpenAI Codex CLI and OpenCode.",
+  "private": true,
+  "description": "Local secrets firewall for coding agents: detects credentials in prompts, file reads and tool output BEFORE they are sent to the LLM API — redacts them to stable placeholders and restores the real values locally. Zero-dependency engine with gitleaks-derived rules; installers for Claude Code, OpenAI Codex CLI and OpenCode. Distributed as an agent skill (npx skills add maxgfr/secretgate) — no npm package.",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
-  "bin": {
-    "secretgate": "scripts/secretgate.mjs"
-  },
-  "exports": {
-    ".": "./scripts/secretgate.mjs",
-    "./opencode": "./scripts/secretgate-opencode.mjs"
-  },
-  "files": [
-    "scripts/secretgate.mjs",
-    "scripts/secretgate-opencode.mjs",
-    "src",
-    "skills",
-    "rules"
-  ],
   "engines": {
     "node": ">=18.17.0"
   },
@@ -61,7 +48,6 @@
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/exec": "^7.1.0",
     "@semantic-release/git": "^10.0.1",
-    "@semantic-release/npm": "^12.0.1",
     "@types/node": "^26.0.1",
     "@vitest/coverage-v8": "^4.1.9",
     "semantic-release": "^25.0.5",

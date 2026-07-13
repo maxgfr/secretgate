@@ -22,6 +22,13 @@ export interface ScanConfig {
   allowlist?: UserAllowlist;
 }
 
+// secretgate's own placeholders are ALREADY-redacted text — they must never be
+// re-detected as secrets, or the loop breaks: a resent redacted prompt would
+// re-block, and writing a placeholder back would be flagged. Kept in sync with
+// vault/placeholder.ts PLACEHOLDER_RE (duplicated to keep the engine free of a
+// vault dependency).
+const PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
+
 interface CompiledAllowlist {
   condition: "AND" | "OR";
   regexTarget: "match" | "line" | "secret";
@@ -173,6 +180,7 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     for (const match of text.matchAll(rule.re)) {
       const { secret, start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
       if (secret.length === 0) continue;
+      if (PLACEHOLDER_ONLY.test(secret)) continue; // our own already-redacted marker
       if (rule.post && !rule.post(secret)) continue;
 
       const entropy = shannonEntropy(secret);

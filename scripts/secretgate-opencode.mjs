@@ -150,9 +150,13 @@ function pathMatchesGlob(path, glob) {
     const c = glob[i];
     if (c === "*") {
       if (glob[i + 1] === "*") {
-        re += ".*";
-        i += 2;
-        if (glob[i] === "/") i++;
+        if (glob[i + 2] === "/") {
+          re += "(?:.*/)?";
+          i += 3;
+        } else {
+          re += ".*";
+          i += 2;
+        }
       } else {
         re += "[^/]*";
         i++;
@@ -195,12 +199,40 @@ function sensitivePathMatch(path) {
   if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g))) return void 0;
   return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g));
 }
+var READ_COMMANDS = /* @__PURE__ */ new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "xxd",
+  "od",
+  "strings",
+  "hexdump",
+  "nl",
+  "tac",
+  "base64",
+  "sed",
+  "awk",
+  "grep",
+  "rg",
+  "printf",
+  "print"
+]);
 function commandTouchesSensitivePath(command) {
-  for (const raw of command.split(/[\s;|&()<>]+/)) {
-    const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
-    if (token.length < 2 || token.startsWith("-")) continue;
-    const hit = sensitivePathMatch(token);
-    if (hit) return token;
+  for (const segment of command.split(/[;\n]|&&|\|\||\||&/)) {
+    const tokens = segment.trim().split(/\s+/);
+    if (tokens.length === 0) continue;
+    const cmd = (tokens[0] ?? "").replace(/^.*\//, "");
+    if (!READ_COMMANDS.has(cmd)) continue;
+    for (const raw of tokens.slice(1)) {
+      if (raw.startsWith(">")) break;
+      const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
+      if (token.length < 2 || token.startsWith("-")) continue;
+      const hit = sensitivePathMatch(token);
+      if (hit) return token;
+    }
   }
   return void 0;
 }
@@ -4467,6 +4499,7 @@ var GLOBAL_ALLOWLIST = {
 };
 
 // src/engine/scanner.ts
+var PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
 function compileAllowlist(a) {
   return {
     condition: a.condition === "AND" ? "AND" : "OR",
@@ -4570,6 +4603,7 @@ function scan(text, cfg = {}) {
     for (const match of text.matchAll(rule.re)) {
       const { secret, start, end } = pickSecret(match, rule.secretGroup);
       if (secret.length === 0) continue;
+      if (PLACEHOLDER_ONLY.test(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;

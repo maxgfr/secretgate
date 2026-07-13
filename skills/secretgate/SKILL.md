@@ -16,19 +16,25 @@ placeholders** and **restored locally** when the agent writes them back
 (redact-and-restore); where it only allows blocking (prompts on Claude
 Code/Codex), the prompt is **blocked with a redacted copy** to resend.
 
-## Install (one command per agent)
+## Activation → install (do this first when the skill triggers)
+
+When this skill activates (the user asks to protect secrets / install
+secretgate / set up the firewall), run the doctor, then wire whatever is not
+yet wired. secretgate is a skill, not an npm package — you run its own bundle:
 
 ```bash
+node scripts/secretgate.mjs status                  # what is already wired
 node scripts/secretgate.mjs install --claude-code   # hooks + permissions.deny in ~/.claude/settings.json
 node scripts/secretgate.mjs install --codex         # ~/.codex/hooks.json + [features] hooks = true
 node scripts/secretgate.mjs install --opencode      # self-contained plugin in ~/.config/opencode/plugin/
-node scripts/secretgate.mjs install --all
+node scripts/secretgate.mjs install --all           # all three
 ```
 
 `--project` scopes the Claude Code install to `./.claude/settings.json`.
-`--via-config` pins the OpenCode plugin through opencode.json instead of a file
-copy. Always tell the user to RESTART the agent session afterwards — hooks are
-loaded at startup. Verify with `node scripts/secretgate.mjs status`.
+`install` pins a copy of the bundle under `~/.secretgate/bin/` and wires the
+agent to call THAT, so it keeps working after the skill cache is evicted. Always
+tell the user to RESTART the agent session afterwards — hooks load at startup.
+Once wired, redaction is automatic and deterministic (the hook does it, not you).
 
 ## Commands
 

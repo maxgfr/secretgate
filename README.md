@@ -16,13 +16,22 @@ into a file                          -> the REAL value lands on disk
 
 ## Install
 
+secretgate ships as an **agent skill** — there is no npm package to publish or
+trust. One install, then a one-time wiring:
+
 ```bash
-npx secretgate install --claude-code    # or --codex / --opencode / --all
-npx secretgate status                   # doctor: what is wired, what is not
+npx skills add maxgfr/secretgate                       # installs the skill + bundle
+node .claude/skills/secretgate/scripts/secretgate.mjs install --all   # wires the hooks
+node .claude/skills/secretgate/scripts/secretgate.mjs status          # doctor
 ```
 
-Restart your agent session afterwards (hooks load at startup). Also available
-as a skill: `npx skills add maxgfr/secretgate`.
+Even simpler: after `npx skills add`, just tell your agent **"install
+secretgate"** — the skill activates and runs the wiring for you. Restart the
+agent session afterwards (hooks load at startup).
+
+Once wired, protection is **fully automatic and deterministic**: the hooks — not
+the model — scan and redact on every prompt and tool call. You never invoke
+anything per-use.
 
 ## What it does
 
@@ -83,7 +92,7 @@ Projects can commit shared entries in `.secretgate.json`:
 ## Commands
 
 ```
-secretgate install    --claude-code|--codex|--opencode|--all [--project] [--via-config]
+secretgate install    --claude-code|--codex|--opencode|--all [--project]
 secretgate uninstall  (same flags — removes exactly what install added)
 secretgate status     doctor: wiring, engines, vault health, limitations
 secretgate scan       <file|dir|-> [--json] [--exclude <glob>]   exit 1 on findings
@@ -113,5 +122,9 @@ pnpm run rules:sync       # refresh rules/gitleaks.toml from upstream + regenera
 pnpm run check:build      # reproducible-bundle + fresh-rules gate
 SECRETGATE_DIFFERENTIAL=1 pnpm exec vitest run tests/engine/differential.test.ts  # needs gitleaks
 ```
+
+Distributed as a skill only — no npm package. Releases (GitHub, via
+semantic-release) publish the install-free bundle as a release asset. The
+`OpenCode` install writes a self-contained plugin file; there is no npm-pin mode.
 
 MIT — rule definitions derived from [gitleaks](https://github.com/gitleaks/gitleaks) (MIT).
