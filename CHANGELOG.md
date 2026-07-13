@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.1.0](https://github.com/maxgfr/secretgate/compare/v1.0.1...v1.1.0) (2026-07-13)
+
+
+### Features
+
+* **security:** init command + close secret-leak paths found by adversarial audit ([3c44f1b](https://github.com/maxgfr/secretgate/commit/3c44f1b257452fa27771dcfc81e42c37866546aa))
+
 ## [1.0.1](https://github.com/maxgfr/secretgate/compare/v1.0.0...v1.0.1) (2026-07-13)
 
 
