@@ -125,6 +125,7 @@ jobs:
         run: |
           printf 'aws key AKIA%s ok' Q7R2M3XBL4WPZ6TK | node scripts/secretgate.mjs scan - --json && { echo "expected exit 1 on a finding"; exit 1; } || test $? -eq 1
           printf 'no secrets here' | node scripts/secretgate.mjs scan -
-          printf 'token ghp_%s end' aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | SECRETGATE_HOME="$RUNNER_TEMP/sg" node scripts/secretgate.mjs pipe | grep -q SECRETGATE_
+          # high-entropy fake token (built by concat) so it clears the entropy gate and gets redacted
+          printf 'token ghp_%s end' 'aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0dF6hJ9' | SECRETGATE_HOME="$RUNNER_TEMP/sg" node scripts/secretgate.mjs pipe | grep -q SECRETGATE_
           node scripts/secretgate-opencode.mjs 2>/dev/null || true # plugin module must at least parse on the floor
           node -e "import('./scripts/secretgate-opencode.mjs').then(m => { if (typeof m.SecretgatePlugin !== 'function') { console.error('plugin export missing'); process.exit(1); } })"
