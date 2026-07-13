@@ -104,14 +104,19 @@ secretgate hook       <agent> <event>        (internal hook entrypoint)
 
 ## How it's validated
 
-- 140+ tests incl. per-event hook replays and a **zero-budget false-positive
+- 160+ tests incl. per-event hook replays and a **zero-budget false-positive
   corpus** (lockfiles, minified JS, uuids, git logs, base64 blobs).
 - A **differential CI job** runs the real gitleaks binary against the same
   payloads and requires the JS engine to find everything gitleaks finds
   (machine check on the Go→JS regex conversion).
+- A **`skills-install` CI job**: `npx skills add` → run the bundle's `install`
+  → hooks wired → a secret-bearing prompt is actually blocked (the whole
+  no-npm distribution path).
 - A **self-scan CI job**: secretgate scans its own repo → 0 findings.
-- Manual E2E script against a live Claude Code session:
-  `tests/e2e/claude-code.sh` (block / redact-in-transcript / restore-on-disk).
+- Verified against **real `claude -p` sessions** by inspecting the session
+  transcript: a secret in a tool result never appears in what reached the
+  model (only the placeholder does), and restore-on-write puts the real value
+  on disk. E2E script: `tests/e2e/claude-code.sh`.
 
 ## Development
 
