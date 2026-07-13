@@ -1,0 +1,8 @@
+commit 8f14e45fceea167a5a36dedd4bea2543068f0e12
+Author: Jane Doe <jane@example.com>
+Date:   Mon Jul 13 09:00:00 2026 +0200
+
+    fix(parser): handle empty input buffers
+
+commit da39a3ee5e6b4b0d3255bfef95601890afd80709
+    chore: bump dependencies to latest minor versions

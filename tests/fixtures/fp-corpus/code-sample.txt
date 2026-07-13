@@ -1,0 +1,7 @@
+const apiVersion = "2026-01-01";
+const keyboardHandler = (e) => e.keyCode === 13;
+const primaryKey = "user_id";
+export const tokenEndpoint = "https://auth.example.com/oauth/token";
+const publicKey = fs.readFileSync("./keys/public.pem", "utf8");
+function getAccessibilityLabel(node) { return node.ariaLabel; }
+password_reset_url = "https://app.example.com/reset?step=confirm"

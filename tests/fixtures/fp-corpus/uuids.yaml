@@ -1,0 +1,7 @@
+services:
+  - id: 550e8400-e29b-41d4-a716-446655440000
+    region: eu-west-3
+  - id: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+    checksum: d41d8cd98f00b204e9800998ecf8427e
+build:
+  cache_key: ubuntu-22.04-node-20-v3
