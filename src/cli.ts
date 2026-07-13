@@ -1,13 +1,17 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
 import { pathMatchesGlob, sha256 } from "./engine/allowlist.js";
 import type { Finding } from "./engine/scanner.js";
 import { scan } from "./engine/scanner.js";
-import { redactText } from "./redact.js";
+import { handleClaudeCode } from "./hooks/claude-code.js";
 import { writeAllow } from "./install/allow-store.js";
-import { Vault } from "./vault/vault.js";
+import { installClaudeCode, uninstallClaudeCode } from "./install/claude-code.js";
+import { SettingsParseError } from "./install/json-merge.js";
+import { redactText } from "./redact.js";
+import { Vault, defaultVaultHome } from "./vault/vault.js";
 import { VERSION } from "./version.js";
 
 export interface Io {
@@ -207,6 +211,131 @@ async function cmdVault(args: string[], io: Io): Promise<number> {
   return 2;
 }
 
+// Hooks fire on every prompt/tool call — cap what we are willing to buffer.
+// An oversized or unreadable stdin yields a non-JSON sentinel, which the
+// handlers treat as fail-closed for pre events and fail-open for post events.
+const STDIN_CAP = 5 * 1024 * 1024;
+
+async function cmdHook(args: string[], io: Io): Promise<number> {
+  const [agent, event] = args;
+  if (!agent || !event) {
+    io.stderr("hook: usage: secretgate hook <agent> <event>\n");
+    return 2;
+  }
+  let raw: string;
+  try {
+    raw = await readIoStdin(io);
+    if (raw.length > STDIN_CAP) raw = "__SECRETGATE_OVERSIZED__";
+  } catch {
+    raw = "__SECRETGATE_STDIN_ERROR__";
+  }
+  if (agent === "claude-code" || agent === "codex") {
+    const r = await handleClaudeCode(event, raw);
+    if (r.stdout) io.stdout(r.stdout);
+    return r.exit;
+  }
+  io.stderr(`hook: unknown agent '${agent}'\n`);
+  return 2;
+}
+
+// The settings entry must keep working after npx caches are evicted and
+// across package updates, so install pins a copy of the running bundle under
+// the secretgate home and references that absolute path.
+function installedCliCommand(): string {
+  const self = fileURLToPath(import.meta.url);
+  if (!self.endsWith(".mjs")) return `node "${self}"`; // dev checkout
+  const target = join(defaultVaultHome(), "bin", "secretgate.mjs");
+  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+  copyFileSync(self, target);
+  chmodSync(target, 0o755);
+  return `node "${target}"`;
+}
+
+interface AgentFlags {
+  claudeCode: boolean;
+  codex: boolean;
+  opencode: boolean;
+  project: boolean;
+}
+
+function parseAgentFlags(args: string[], io: Io): AgentFlags | undefined {
+  const flags: AgentFlags = { claudeCode: false, codex: false, opencode: false, project: false };
+  for (const a of args) {
+    if (a === "--claude-code") flags.claudeCode = true;
+    else if (a === "--codex") flags.codex = true;
+    else if (a === "--opencode") flags.opencode = true;
+    else if (a === "--all") flags.claudeCode = flags.codex = flags.opencode = true;
+    else if (a === "--project") flags.project = true;
+    else {
+      io.stderr(`unknown option: ${a}\n`);
+      return undefined;
+    }
+  }
+  if (!flags.claudeCode && !flags.codex && !flags.opencode) {
+    io.stderr("expected at least one agent: --claude-code | --codex | --opencode | --all\n");
+    return undefined;
+  }
+  return flags;
+}
+
+function claudeSettingsPath(project: boolean): string {
+  return project ? join(process.cwd(), ".claude", "settings.json") : join(homedir(), ".claude", "settings.json");
+}
+
+async function cmdInstall(args: string[], io: Io): Promise<number> {
+  const flags = parseAgentFlags(args, io);
+  if (!flags) return 2;
+  try {
+    if (flags.claudeCode) {
+      const settingsPath = claudeSettingsPath(flags.project);
+      mkdirSync(dirname(settingsPath), { recursive: true });
+      const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
+      io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
+      if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}\n`);
+      io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
+      io.stdout("claude-code: note — @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
+    }
+    if (flags.codex) {
+      io.stderr("codex: not implemented yet\n");
+      return 2;
+    }
+    if (flags.opencode) {
+      io.stderr("opencode: not implemented yet\n");
+      return 2;
+    }
+  } catch (err) {
+    if (err instanceof SettingsParseError) {
+      io.stderr(`${err.message}\n`);
+      return 2;
+    }
+    throw err;
+  }
+  return 0;
+}
+
+async function cmdUninstall(args: string[], io: Io): Promise<number> {
+  const flags = parseAgentFlags(args, io);
+  if (!flags) return 2;
+  try {
+    if (flags.claudeCode) {
+      const r = uninstallClaudeCode({ settingsPath: claudeSettingsPath(flags.project) });
+      io.stdout(`claude-code: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})\n`);
+    }
+    if (flags.codex || flags.opencode) {
+      io.stderr("codex/opencode: not implemented yet\n");
+      return 2;
+    }
+  } catch (err) {
+    if (err instanceof SettingsParseError) {
+      io.stderr(`${err.message}\n`);
+      return 2;
+    }
+    throw err;
+  }
+  io.stdout("secretgate: the vault (~/.secretgate) is kept — remove it manually if you want the mappings gone.\n");
+  return 0;
+}
+
 function notImplemented(name: string) {
   return (_args: string[], io: Io): number => {
     io.stderr(`secretgate ${name}: not implemented yet\n`);
@@ -221,10 +350,10 @@ const commands: Record<string, Command> = {
   pipe: cmdPipe,
   allow: cmdAllow,
   vault: cmdVault,
-  install: notImplemented("install"),
-  uninstall: notImplemented("uninstall"),
+  install: cmdInstall,
+  uninstall: cmdUninstall,
   status: notImplemented("status"),
-  hook: notImplemented("hook"),
+  hook: cmdHook,
 };
 
 export async function run(argv: string[], io: Io): Promise<number> {

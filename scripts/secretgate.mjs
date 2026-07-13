@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { readFileSync as readFileSync4, readdirSync, statSync } from "fs";
-import { join as join3, relative, resolve } from "path";
-import { pathToFileURL } from "url";
+import { chmodSync, copyFileSync as copyFileSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, readdirSync, statSync } from "fs";
+import { homedir as homedir2 } from "os";
+import { dirname as dirname2, join as join3, relative, resolve } from "path";
+import { fileURLToPath, pathToFileURL } from "url";
 
 // src/config.ts
 import { readFileSync as readFileSync2 } from "fs";
@@ -21,6 +22,7 @@ function placeholderFor(secret, salt, hexLen = 12) {
   const digest = createHmac("sha256", salt).update(secret).digest("hex");
   return `SECRETGATE_${digest.slice(0, hexLen)}`;
 }
+var PLACEHOLDER_RE = /SECRETGATE_[0-9a-f]{12,16}/g;
 
 // src/vault/vault.ts
 function defaultVaultHome() {
@@ -4575,6 +4577,39 @@ function dedupe(findings) {
   return kept.sort((a, b) => a.start - b.start);
 }
 
+// src/paths.ts
+var SENSITIVE_GLOBS = [
+  "**/.env",
+  "**/.env.*",
+  "**/*.pem",
+  "**/*.key",
+  "**/id_rsa*",
+  "**/id_ed25519*",
+  "**/id_ecdsa*",
+  "**/.aws/**",
+  "**/.ssh/**",
+  "**/.kube/config",
+  "**/.npmrc",
+  "**/.netrc",
+  "**/.docker/config.json",
+  "**/credentials.json"
+];
+var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
+function sensitivePathMatch(path) {
+  const normalized = path.replaceAll("\\", "/");
+  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g))) return void 0;
+  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g));
+}
+function commandTouchesSensitivePath(command) {
+  for (const raw of command.split(/[\s;|&()<>]+/)) {
+    const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
+    if (token.length < 2 || token.startsWith("-")) continue;
+    const hit = sensitivePathMatch(token);
+    if (hit) return token;
+  }
+  return void 0;
+}
+
 // src/redact.ts
 function redactText(text, vault, source, cfg = {}) {
   const findings = scan(text, cfg);
@@ -4588,6 +4623,152 @@ function redactText(text, vault, source, cfg = {}) {
   }
   replaced.reverse();
   return { text: out, findings, replaced };
+}
+function restorePlaceholders(text, vault) {
+  let restored = 0;
+  const out = text.replace(PLACEHOLDER_RE, (placeholder) => {
+    const secret = vault.secretFor(placeholder);
+    if (secret === void 0) return placeholder;
+    restored++;
+    return secret;
+  });
+  return { text: out, restored };
+}
+
+// src/hooks/walk.ts
+function mapStrings(value, fn) {
+  let changed = false;
+  const visit = (v) => {
+    if (typeof v === "string") {
+      const mapped = fn(v);
+      if (mapped !== v) changed = true;
+      return mapped;
+    }
+    if (Array.isArray(v)) return v.map(visit);
+    if (v !== null && typeof v === "object") {
+      const out = {};
+      for (const [k, inner] of Object.entries(v)) out[k] = visit(inner);
+      return out;
+    }
+    return v;
+  };
+  return { value: visit(value), changed };
+}
+
+// src/hooks/claude-code.ts
+var ALLOW_TAG = "[allow-secret]";
+var PASS = { stdout: "", exit: 0 };
+async function handleClaudeCode(event, rawStdin) {
+  try {
+    const input = JSON.parse(rawStdin);
+    switch (event) {
+      case "user-prompt-submit":
+        return userPromptSubmit(input);
+      case "pre-tool-use":
+        return preToolUse(input);
+      case "post-tool-use":
+        return postToolUse(input);
+      default:
+        return { stdout: "", exit: 2 };
+    }
+  } catch (err) {
+    const reason = `secretgate internal error \u2014 failing closed (${err instanceof Error ? err.message.slice(0, 200) : "unknown"})`;
+    if (event === "user-prompt-submit") {
+      return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
+    }
+    if (event === "pre-tool-use") {
+      return {
+        stdout: JSON.stringify({
+          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason }
+        }),
+        exit: 0
+      };
+    }
+    return PASS;
+  }
+}
+function userPromptSubmit(input) {
+  const prompt = String(input.prompt ?? "");
+  if (prompt.includes(ALLOW_TAG)) return PASS;
+  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : void 0);
+  const vault = new Vault();
+  const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist });
+  if (r.findings.length === 0) return PASS;
+  const rules = [...new Set(r.findings.map((f) => f.ruleId))].join(", ");
+  const reason = [
+    `secretgate blocked this prompt: detected ${rules}.`,
+    "",
+    "A redacted copy you can resend (placeholders map to your real values locally and will be restored when written to files):",
+    "",
+    r.text,
+    "",
+    `To send the original anyway, add ${ALLOW_TAG} to your prompt. To permanently allow a value: \`secretgate allow <value>\`.`
+  ].join("\n");
+  return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
+}
+function deny(reason) {
+  return {
+    stdout: JSON.stringify({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason }
+    }),
+    exit: 0
+  };
+}
+var RESTORE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
+var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep"]);
+function preToolUse(input) {
+  const toolName = String(input.tool_name ?? "");
+  const toolInput = input.tool_input ?? {};
+  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : void 0);
+  if (READ_TOOLS.has(toolName)) {
+    const target = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.path === "string" ? toolInput.path : void 0;
+    const hit = target ? sensitivePathMatch(target) : void 0;
+    if (hit) {
+      return deny(
+        `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. If the agent needs a value from it, reference it as an env var instead \u2014 or allow the file with \`secretgate allow --path '${target}'\`.`
+      );
+    }
+  }
+  if (toolName === "Bash" && typeof toolInput.command === "string") {
+    const touched = commandTouchesSensitivePath(toolInput.command);
+    if (touched) {
+      return deny(`secretgate: this command touches '${touched}', which looks sensitive. Its content must not enter the model.`);
+    }
+  }
+  const restoreThis = RESTORE_TOOLS.has(toolName) || toolName === "Bash" && cfg.restoreBash;
+  if (restoreThis) {
+    const vault = new Vault();
+    const { value, changed } = mapStrings(toolInput, (s) => restorePlaceholders(s, vault).text);
+    if (changed) {
+      return {
+        stdout: JSON.stringify({
+          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: value }
+        }),
+        exit: 0
+      };
+    }
+  }
+  return PASS;
+}
+function postToolUse(input) {
+  if (!("tool_response" in input)) return PASS;
+  const toolName = String(input.tool_name ?? "");
+  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : void 0);
+  const vault = new Vault();
+  let redactions = 0;
+  const { value, changed } = mapStrings(input.tool_response, (s) => {
+    const r = redactText(s, vault, `claude-code:${toolName}`, { allowlist: cfg.allowlist });
+    redactions += r.replaced.length;
+    return r.text;
+  });
+  if (!changed) return PASS;
+  return {
+    stdout: JSON.stringify({
+      systemMessage: `secretgate: redacted ${redactions} secret(s) from ${toolName} output`,
+      hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: value }
+    }),
+    exit: 0
+  };
 }
 
 // src/install/allow-store.ts
@@ -4616,6 +4797,120 @@ function writeAllow(add) {
   }
   renameSync2(tmp, path);
   return merged;
+}
+
+// src/install/json-merge.ts
+import { randomBytes as randomBytes3 } from "crypto";
+import { closeSync as closeSync3, copyFileSync, existsSync, openSync as openSync3, readFileSync as readFileSync4, renameSync as renameSync3, writeSync as writeSync3 } from "fs";
+var SettingsParseError = class extends Error {
+  constructor(path, cause) {
+    super(`refusing to edit ${path}: it is not valid JSON (${cause}). Fix it manually, then re-run.`);
+    this.path = path;
+    this.name = "SettingsParseError";
+  }
+  path;
+};
+function stableStringify(v) {
+  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
+  if (v !== null && typeof v === "object") {
+    const entries = Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, inner]) => `${JSON.stringify(k)}:${stableStringify(inner)}`);
+    return `{${entries.join(",")}}`;
+  }
+  return JSON.stringify(v);
+}
+function editJsonFile(path, mutate) {
+  let original;
+  let obj = {};
+  if (existsSync(path)) {
+    original = readFileSync4(path, "utf8");
+    if (original.trim() !== "") {
+      try {
+        obj = JSON.parse(original);
+      } catch (err) {
+        throw new SettingsParseError(path, err instanceof Error ? err.message : "parse error");
+      }
+      if (obj === null || typeof obj !== "object" || Array.isArray(obj)) {
+        throw new SettingsParseError(path, "top level is not an object");
+      }
+    }
+  }
+  const mutated = structuredClone(obj);
+  mutate(mutated);
+  const next = `${JSON.stringify(mutated, null, 2)}
+`;
+  if (stableStringify(obj) === stableStringify(mutated)) {
+    return { path, changed: false };
+  }
+  let backupPath;
+  if (original !== void 0) {
+    const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
+    backupPath = `${path}.secretgate-backup-${stamp}`;
+    copyFileSync(path, backupPath);
+  }
+  const tmp = `${path}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
+  const fd = openSync3(tmp, "w", 420);
+  try {
+    writeSync3(fd, next);
+  } finally {
+    closeSync3(fd);
+  }
+  renameSync3(tmp, path);
+  return { path, changed: true, backupPath };
+}
+
+// src/install/claude-code.ts
+var CC_DENY_RULES = [
+  "Read(**/.env)",
+  "Read(**/.env.local)",
+  "Read(**/.env.*.local)",
+  "Read(**/*.pem)",
+  "Read(**/id_rsa*)",
+  "Read(**/id_ed25519*)",
+  "Read(~/.aws/**)",
+  "Read(~/.ssh/**)",
+  "Read(~/.kube/config)",
+  "Read(**/.netrc)",
+  "Read(**/.npmrc)"
+];
+var MARKER = "hook claude-code";
+var EVENTS = [
+  { event: "UserPromptSubmit", arg: "user-prompt-submit" },
+  { event: "PreToolUse", arg: "pre-tool-use", matcher: "Read|Grep|Edit|Write|MultiEdit|NotebookEdit|Bash" },
+  { event: "PostToolUse", arg: "post-tool-use", matcher: "Read|Bash|Grep|Glob|WebFetch" }
+];
+function withoutOurGroups(groups) {
+  if (!Array.isArray(groups)) return [];
+  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !String(h.command ?? "").includes(MARKER)) })).filter((g) => g.hooks.length > 0);
+}
+function installClaudeCode({ settingsPath, command }) {
+  return editJsonFile(settingsPath, (s) => {
+    s.hooks ??= {};
+    for (const { event, arg, matcher } of EVENTS) {
+      const kept = withoutOurGroups(s.hooks[event]);
+      const group = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}` }] };
+      if (matcher) group.matcher = matcher;
+      s.hooks[event] = [...kept, group];
+    }
+    s.permissions ??= {};
+    const deny2 = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
+    s.permissions.deny = [...deny2, ...CC_DENY_RULES.filter((r) => !deny2.includes(r))];
+  });
+}
+function uninstallClaudeCode({ settingsPath }) {
+  return editJsonFile(settingsPath, (s) => {
+    if (s.hooks && typeof s.hooks === "object") {
+      for (const { event } of EVENTS) {
+        const kept = withoutOurGroups(s.hooks[event]);
+        if (kept.length > 0) s.hooks[event] = kept;
+        else delete s.hooks[event];
+      }
+    }
+    if (Array.isArray(s.permissions?.deny)) {
+      s.permissions.deny = s.permissions.deny.filter((r) => !CC_DENY_RULES.includes(r));
+      if (s.permissions.deny.length === 0) delete s.permissions.deny;
+      if (Object.keys(s.permissions).length === 0) delete s.permissions;
+    }
+  });
 }
 
 // src/version.ts
@@ -4663,7 +4958,7 @@ function* walkFiles(root) {
 function readTextFile(path) {
   const stats = statSync(path);
   if (stats.size === 0 || stats.size > MAX_FILE_BYTES) return void 0;
-  const buf = readFileSync4(path);
+  const buf = readFileSync5(path);
   const probe = buf.subarray(0, 8192);
   if (probe.includes(0)) return void 0;
   return buf.toString("utf8");
@@ -4804,6 +5099,118 @@ async function cmdVault(args, io) {
   io.stderr("vault: expected 'list' or 'clear'\n");
   return 2;
 }
+var STDIN_CAP = 5 * 1024 * 1024;
+async function cmdHook(args, io) {
+  const [agent, event] = args;
+  if (!agent || !event) {
+    io.stderr("hook: usage: secretgate hook <agent> <event>\n");
+    return 2;
+  }
+  let raw;
+  try {
+    raw = await readIoStdin(io);
+    if (raw.length > STDIN_CAP) raw = "__SECRETGATE_OVERSIZED__";
+  } catch {
+    raw = "__SECRETGATE_STDIN_ERROR__";
+  }
+  if (agent === "claude-code" || agent === "codex") {
+    const r = await handleClaudeCode(event, raw);
+    if (r.stdout) io.stdout(r.stdout);
+    return r.exit;
+  }
+  io.stderr(`hook: unknown agent '${agent}'
+`);
+  return 2;
+}
+function installedCliCommand() {
+  const self = fileURLToPath(import.meta.url);
+  if (!self.endsWith(".mjs")) return `node "${self}"`;
+  const target = join3(defaultVaultHome(), "bin", "secretgate.mjs");
+  mkdirSync3(dirname2(target), { recursive: true, mode: 448 });
+  copyFileSync2(self, target);
+  chmodSync(target, 493);
+  return `node "${target}"`;
+}
+function parseAgentFlags(args, io) {
+  const flags = { claudeCode: false, codex: false, opencode: false, project: false };
+  for (const a of args) {
+    if (a === "--claude-code") flags.claudeCode = true;
+    else if (a === "--codex") flags.codex = true;
+    else if (a === "--opencode") flags.opencode = true;
+    else if (a === "--all") flags.claudeCode = flags.codex = flags.opencode = true;
+    else if (a === "--project") flags.project = true;
+    else {
+      io.stderr(`unknown option: ${a}
+`);
+      return void 0;
+    }
+  }
+  if (!flags.claudeCode && !flags.codex && !flags.opencode) {
+    io.stderr("expected at least one agent: --claude-code | --codex | --opencode | --all\n");
+    return void 0;
+  }
+  return flags;
+}
+function claudeSettingsPath(project) {
+  return project ? join3(process.cwd(), ".claude", "settings.json") : join3(homedir2(), ".claude", "settings.json");
+}
+async function cmdInstall(args, io) {
+  const flags = parseAgentFlags(args, io);
+  if (!flags) return 2;
+  try {
+    if (flags.claudeCode) {
+      const settingsPath = claudeSettingsPath(flags.project);
+      mkdirSync3(dirname2(settingsPath), { recursive: true });
+      const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
+      io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
+`);
+      if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}
+`);
+      io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
+      io.stdout("claude-code: note \u2014 @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
+    }
+    if (flags.codex) {
+      io.stderr("codex: not implemented yet\n");
+      return 2;
+    }
+    if (flags.opencode) {
+      io.stderr("opencode: not implemented yet\n");
+      return 2;
+    }
+  } catch (err) {
+    if (err instanceof SettingsParseError) {
+      io.stderr(`${err.message}
+`);
+      return 2;
+    }
+    throw err;
+  }
+  return 0;
+}
+async function cmdUninstall(args, io) {
+  const flags = parseAgentFlags(args, io);
+  if (!flags) return 2;
+  try {
+    if (flags.claudeCode) {
+      const r = uninstallClaudeCode({ settingsPath: claudeSettingsPath(flags.project) });
+      io.stdout(`claude-code: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})
+`);
+    }
+    if (flags.codex || flags.opencode) {
+      io.stderr("codex/opencode: not implemented yet\n");
+      return 2;
+    }
+  } catch (err) {
+    if (err instanceof SettingsParseError) {
+      io.stderr(`${err.message}
+`);
+      return 2;
+    }
+    throw err;
+  }
+  io.stdout("secretgate: the vault (~/.secretgate) is kept \u2014 remove it manually if you want the mappings gone.\n");
+  return 0;
+}
 function notImplemented(name) {
   return (_args, io) => {
     io.stderr(`secretgate ${name}: not implemented yet
@@ -4816,10 +5223,10 @@ var commands = {
   pipe: cmdPipe,
   allow: cmdAllow,
   vault: cmdVault,
-  install: notImplemented("install"),
-  uninstall: notImplemented("uninstall"),
+  install: cmdInstall,
+  uninstall: cmdUninstall,
   status: notImplemented("status"),
-  hook: notImplemented("hook")
+  hook: cmdHook
 };
 async function run(argv, io) {
   const [first, ...rest] = argv;
