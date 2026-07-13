@@ -3,7 +3,7 @@ name: secretgate
 description: "Use when the user wants to protect secrets/credentials from being sent to an LLM by a coding agent, install or manage a local secrets firewall, or scan text/files/repos for leaked credentials. secretgate detects secrets (221 gitleaks-derived rules + entropy + Luhn, zero-dependency engine, `node scripts/secretgate.mjs`) in prompts, file reads and tool output BEFORE they reach the LLM API, redacts them to stable placeholders (SECRETGATE_xxx) and restores the real values locally when the agent writes them back to files. Ships installers for Claude Code (hooks), OpenAI Codex CLI (hooks) and OpenCode (plugin). Triggers: 'protect my secrets', 'secrets firewall', 'stop sending credentials to the LLM', 'install secretgate', 'scan for secrets', 'redact secrets before sending', 'block credentials in prompts'."
 license: MIT
 metadata:
-  version: 1.1.1
+  version: 1.1.2
 ---
 
 # secretgate — local secrets firewall for coding agents

@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.2](https://github.com/maxgfr/secretgate/compare/v1.1.1...v1.1.2) (2026-07-13)
+
+
+### Bug Fixes
+
+* **opencode:** plugin bundle must export ONLY the plugin function ([6f51eaa](https://github.com/maxgfr/secretgate/commit/6f51eaa1f31f5702be192945f90ab7b2bfa09044))
+
 ## [1.1.1](https://github.com/maxgfr/secretgate/compare/v1.1.0...v1.1.1) (2026-07-13)
 
 
