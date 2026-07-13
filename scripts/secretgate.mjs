@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { chmodSync, copyFileSync as copyFileSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, readdirSync, statSync } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname2, join as join3, relative, resolve } from "path";
+import { chmodSync, copyFileSync as copyFileSync2, existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync6, readdirSync, statSync } from "fs";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname2, join as join4, relative, resolve } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 // src/config.ts
@@ -4913,6 +4913,55 @@ function uninstallClaudeCode({ settingsPath }) {
   });
 }
 
+// src/install/opencode.ts
+import { existsSync as existsSync2, mkdirSync as mkdirSync3, readFileSync as readFileSync5, rmSync, writeFileSync } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join3 } from "path";
+var OWNERSHIP_MARKER = "SecretgatePlugin";
+function opencodeConfigDir() {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  return join3(xdg && xdg !== "" ? xdg : join3(homedir2(), ".config"), "opencode");
+}
+function installOpencode({ configDir, pluginSource, viaConfig, version }) {
+  if (viaConfig) {
+    return editJsonFile(join3(configDir, "opencode.json"), (cfg) => {
+      const plugins = Array.isArray(cfg.plugin) ? cfg.plugin : [];
+      cfg.plugin = [...plugins.filter((p) => !/^secretgate@/.test(p)), `secretgate@${version}`];
+    });
+  }
+  const target = join3(configDir, "plugin", "secretgate.js");
+  const content = readFileSync5(pluginSource, "utf8");
+  if (existsSync2(target)) {
+    const existing = readFileSync5(target, "utf8");
+    if (!existing.includes(OWNERSHIP_MARKER)) {
+      throw new Error(`refusing to overwrite ${target}: the existing file is not ours (foreign plugin?). Remove it manually first.`);
+    }
+    if (existing === content) return { path: target, changed: false };
+  }
+  mkdirSync3(join3(configDir, "plugin"), { recursive: true });
+  writeFileSync(target, content);
+  return { path: target, changed: true };
+}
+function uninstallOpencode({ configDir }) {
+  let changed = false;
+  const target = join3(configDir, "plugin", "secretgate.js");
+  if (existsSync2(target) && readFileSync5(target, "utf8").includes(OWNERSHIP_MARKER)) {
+    rmSync(target);
+    changed = true;
+  }
+  const configPath = join3(configDir, "opencode.json");
+  if (existsSync2(configPath)) {
+    const r = editJsonFile(configPath, (cfg) => {
+      if (Array.isArray(cfg.plugin)) {
+        cfg.plugin = cfg.plugin.filter((p) => !/^secretgate@/.test(p));
+        if (cfg.plugin.length === 0) delete cfg.plugin;
+      }
+    });
+    changed = changed || r.changed;
+  }
+  return { path: target, changed };
+}
+
 // src/version.ts
 var VERSION = "0.0.0";
 
@@ -4947,7 +4996,7 @@ var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
-    const full = join3(root, entry.name);
+    const full = join4(root, entry.name);
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkFiles(full);
     } else if (entry.isFile()) {
@@ -4958,7 +5007,7 @@ function* walkFiles(root) {
 function readTextFile(path) {
   const stats = statSync(path);
   if (stats.size === 0 || stats.size > MAX_FILE_BYTES) return void 0;
-  const buf = readFileSync5(path);
+  const buf = readFileSync6(path);
   const probe = buf.subarray(0, 8192);
   if (probe.includes(0)) return void 0;
   return buf.toString("utf8");
@@ -5125,20 +5174,21 @@ async function cmdHook(args, io) {
 function installedCliCommand() {
   const self = fileURLToPath(import.meta.url);
   if (!self.endsWith(".mjs")) return `node "${self}"`;
-  const target = join3(defaultVaultHome(), "bin", "secretgate.mjs");
-  mkdirSync3(dirname2(target), { recursive: true, mode: 448 });
+  const target = join4(defaultVaultHome(), "bin", "secretgate.mjs");
+  mkdirSync4(dirname2(target), { recursive: true, mode: 448 });
   copyFileSync2(self, target);
   chmodSync(target, 493);
   return `node "${target}"`;
 }
 function parseAgentFlags(args, io) {
-  const flags = { claudeCode: false, codex: false, opencode: false, project: false };
+  const flags = { claudeCode: false, codex: false, opencode: false, project: false, viaConfig: false };
   for (const a of args) {
     if (a === "--claude-code") flags.claudeCode = true;
     else if (a === "--codex") flags.codex = true;
     else if (a === "--opencode") flags.opencode = true;
     else if (a === "--all") flags.claudeCode = flags.codex = flags.opencode = true;
     else if (a === "--project") flags.project = true;
+    else if (a === "--via-config") flags.viaConfig = true;
     else {
       io.stderr(`unknown option: ${a}
 `);
@@ -5151,8 +5201,15 @@ function parseAgentFlags(args, io) {
   }
   return flags;
 }
+function opencodePluginSource() {
+  const selfDir = dirname2(fileURLToPath(import.meta.url));
+  const candidates = [join4(selfDir, "secretgate-opencode.mjs"), join4(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const found = candidates.find((c) => existsSync3(c));
+  if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
+  return found;
+}
 function claudeSettingsPath(project) {
-  return project ? join3(process.cwd(), ".claude", "settings.json") : join3(homedir2(), ".claude", "settings.json");
+  return project ? join4(process.cwd(), ".claude", "settings.json") : join4(homedir3(), ".claude", "settings.json");
 }
 async function cmdInstall(args, io) {
   const flags = parseAgentFlags(args, io);
@@ -5160,7 +5217,7 @@ async function cmdInstall(args, io) {
   try {
     if (flags.claudeCode) {
       const settingsPath = claudeSettingsPath(flags.project);
-      mkdirSync3(dirname2(settingsPath), { recursive: true });
+      mkdirSync4(dirname2(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
@@ -5169,12 +5226,14 @@ async function cmdInstall(args, io) {
       io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
       io.stdout("claude-code: note \u2014 @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
     }
+    if (flags.opencode) {
+      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource(), viaConfig: flags.viaConfig, version: VERSION });
+      io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})
+`);
+      io.stdout("opencode: restart OpenCode so the plugin loads.\n");
+    }
     if (flags.codex) {
       io.stderr("codex: not implemented yet\n");
-      return 2;
-    }
-    if (flags.opencode) {
-      io.stderr("opencode: not implemented yet\n");
       return 2;
     }
   } catch (err) {
@@ -5196,8 +5255,13 @@ async function cmdUninstall(args, io) {
       io.stdout(`claude-code: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})
 `);
     }
-    if (flags.codex || flags.opencode) {
-      io.stderr("codex/opencode: not implemented yet\n");
+    if (flags.opencode) {
+      const r = uninstallOpencode({ configDir: opencodeConfigDir() });
+      io.stdout(`opencode: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})
+`);
+    }
+    if (flags.codex) {
+      io.stderr("codex: not implemented yet\n");
       return 2;
     }
   } catch (err) {

@@ -1,4 +1,4 @@
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -10,6 +10,7 @@ import { handleClaudeCode } from "./hooks/claude-code.js";
 import { writeAllow } from "./install/allow-store.js";
 import { installClaudeCode, uninstallClaudeCode } from "./install/claude-code.js";
 import { SettingsParseError } from "./install/json-merge.js";
+import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
 import { Vault, defaultVaultHome } from "./vault/vault.js";
 import { VERSION } from "./version.js";
@@ -256,16 +257,18 @@ interface AgentFlags {
   codex: boolean;
   opencode: boolean;
   project: boolean;
+  viaConfig: boolean;
 }
 
 function parseAgentFlags(args: string[], io: Io): AgentFlags | undefined {
-  const flags: AgentFlags = { claudeCode: false, codex: false, opencode: false, project: false };
+  const flags: AgentFlags = { claudeCode: false, codex: false, opencode: false, project: false, viaConfig: false };
   for (const a of args) {
     if (a === "--claude-code") flags.claudeCode = true;
     else if (a === "--codex") flags.codex = true;
     else if (a === "--opencode") flags.opencode = true;
     else if (a === "--all") flags.claudeCode = flags.codex = flags.opencode = true;
     else if (a === "--project") flags.project = true;
+    else if (a === "--via-config") flags.viaConfig = true;
     else {
       io.stderr(`unknown option: ${a}\n`);
       return undefined;
@@ -276,6 +279,14 @@ function parseAgentFlags(args: string[], io: Io): AgentFlags | undefined {
     return undefined;
   }
   return flags;
+}
+
+function opencodePluginSource(): string {
+  const selfDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [join(selfDir, "secretgate-opencode.mjs"), join(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const found = candidates.find((c) => existsSync(c));
+  if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle — reinstall the package");
+  return found;
 }
 
 function claudeSettingsPath(project: boolean): string {
@@ -295,12 +306,13 @@ async function cmdInstall(args: string[], io: Io): Promise<number> {
       io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
       io.stdout("claude-code: note — @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
     }
+    if (flags.opencode) {
+      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource(), viaConfig: flags.viaConfig, version: VERSION });
+      io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
+      io.stdout("opencode: restart OpenCode so the plugin loads.\n");
+    }
     if (flags.codex) {
       io.stderr("codex: not implemented yet\n");
-      return 2;
-    }
-    if (flags.opencode) {
-      io.stderr("opencode: not implemented yet\n");
       return 2;
     }
   } catch (err) {
@@ -321,8 +333,12 @@ async function cmdUninstall(args: string[], io: Io): Promise<number> {
       const r = uninstallClaudeCode({ settingsPath: claudeSettingsPath(flags.project) });
       io.stdout(`claude-code: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})\n`);
     }
-    if (flags.codex || flags.opencode) {
-      io.stderr("codex/opencode: not implemented yet\n");
+    if (flags.opencode) {
+      const r = uninstallOpencode({ configDir: opencodeConfigDir() });
+      io.stdout(`opencode: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})\n`);
+    }
+    if (flags.codex) {
+      io.stderr("codex: not implemented yet\n");
       return 2;
     }
   } catch (err) {
