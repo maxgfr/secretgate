@@ -45,7 +45,7 @@ const EVENTS: Array<{ event: string; arg: string; matcher?: string }> = [
 
 interface HookGroup {
   matcher?: string;
-  hooks: Array<{ type: string; command: string }>;
+  hooks: Array<{ type: string; command: string; timeout?: number }>;
 }
 
 function withoutOurGroups(groups: HookGroup[] | undefined): HookGroup[] {
@@ -64,7 +64,8 @@ export function installClaudeCode({ settingsPath, command }: InstallOptions): Ed
     s.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS) {
       const kept = withoutOurGroups(s.hooks[event]);
-      const group: HookGroup = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}` }] };
+      // 30s cap (seconds): a hung hook must not stall every tool call for the 600s default.
+      const group: HookGroup = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}`, timeout: 30 }] };
       if (matcher) group.matcher = matcher;
       s.hooks[event] = [...kept, group];
     }

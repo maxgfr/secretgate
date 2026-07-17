@@ -1,13 +1,8 @@
 #!/usr/bin/env node
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res, err) => function __init() {
-  if (err) throw err[0];
-  try {
-    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-  } catch (e) {
-    throw err = [e], e;
-  }
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -4890,6 +4885,7 @@ function mapStrings(value, fn) {
 // src/hooks/claude-code.ts
 var ALLOW_TAG = "[allow-secret]";
 var PASS = { stdout: "", exit: 0 };
+var DEFER = { stdout: "{}", exit: 0 };
 var SCAN_DEADLINE_MS = 5e3;
 function withholdOutput(reason) {
   return {
@@ -5023,7 +5019,7 @@ function preToolUse(input) {
       };
     }
   }
-  return PASS;
+  return DEFER;
 }
 function postToolUse(input) {
   if (!("tool_response" in input)) return PASS;
@@ -5049,7 +5045,8 @@ function postToolUse(input) {
 // src/hooks/codex.ts
 async function handleCodex(event, rawStdin) {
   if (event === "post-tool-use") return { stdout: "", exit: 0 };
-  return handleClaudeCode(event, rawStdin);
+  const r = await handleClaudeCode(event, rawStdin);
+  return r === DEFER ? { stdout: "", exit: 0 } : r;
 }
 
 // src/install/allow-store.ts
@@ -5175,7 +5172,7 @@ function installClaudeCode({ settingsPath, command }) {
     s.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS) {
       const kept = withoutOurGroups(s.hooks[event]);
-      const group = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}` }] };
+      const group = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}`, timeout: 30 }] };
       if (matcher) group.matcher = matcher;
       s.hooks[event] = [...kept, group];
     }
@@ -5755,6 +5752,30 @@ TOKEN=${fake}
       io.stdout("  \u2713 a secret in tool output is redacted before the model sees it\n");
     } else {
       io.stdout("  \u2717 tool-output redaction FAILED \u2014 a secret would reach the model\n");
+      ok = false;
+    }
+    const cleanRaw = execFileSync("node", [bundle, "hook", "claude-code", "pre-tool-use"], {
+      input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: tmpHome, tool_name: "Bash", tool_input: { command: "ls" } }),
+      env,
+      encoding: "utf8"
+    }).trim();
+    let cleanOk = false;
+    try {
+      cleanOk = cleanRaw.startsWith("{") && !("permissionDecision" in (JSON.parse(cleanRaw).hookSpecificOutput ?? {}));
+    } catch {
+      cleanOk = false;
+    }
+    if (cleanOk) {
+      io.stdout("  \u2713 an ordinary tool call emits JSON that defers to the normal permission flow (never empty stdout)\n");
+    } else {
+      io.stdout("  \u2717 clean pre-tool-use FAILED \u2014 empty hook output would force a permission prompt on every tool call (claude-code#77782)\n");
+      ok = false;
+    }
+    const denied = runHook("pre-tool-use", { hook_event_name: "PreToolUse", cwd: tmpHome, tool_name: "Read", tool_input: { file_path: "~/.ssh/id_rsa" } });
+    if (denied?.hookSpecificOutput?.permissionDecision === "deny") {
+      io.stdout("  \u2713 reading a sensitive path (~/.ssh/id_rsa) is denied\n");
+    } else {
+      io.stdout("  \u2717 sensitive-path deny FAILED \u2014 a key file could reach the model\n");
       ok = false;
     }
   } catch (err) {

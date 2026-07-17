@@ -439,6 +439,30 @@ function verifyClaudeCodeWiring(io: Io): boolean {
       io.stdout("  ✗ tool-output redaction FAILED — a secret would reach the model\n");
       ok = false;
     }
+    const cleanRaw = execFileSync("node", [bundle, "hook", "claude-code", "pre-tool-use"], {
+      input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: tmpHome, tool_name: "Bash", tool_input: { command: "ls" } }),
+      env,
+      encoding: "utf8",
+    }).trim();
+    let cleanOk = false;
+    try {
+      cleanOk = cleanRaw.startsWith("{") && !("permissionDecision" in (JSON.parse(cleanRaw).hookSpecificOutput ?? {}));
+    } catch {
+      cleanOk = false;
+    }
+    if (cleanOk) {
+      io.stdout("  ✓ an ordinary tool call emits JSON that defers to the normal permission flow (never empty stdout)\n");
+    } else {
+      io.stdout("  ✗ clean pre-tool-use FAILED — empty hook output would force a permission prompt on every tool call (claude-code#77782)\n");
+      ok = false;
+    }
+    const denied = runHook("pre-tool-use", { hook_event_name: "PreToolUse", cwd: tmpHome, tool_name: "Read", tool_input: { file_path: "~/.ssh/id_rsa" } });
+    if (denied?.hookSpecificOutput?.permissionDecision === "deny") {
+      io.stdout("  ✓ reading a sensitive path (~/.ssh/id_rsa) is denied\n");
+    } else {
+      io.stdout("  ✗ sensitive-path deny FAILED — a key file could reach the model\n");
+      ok = false;
+    }
   } catch (err) {
     io.stdout(`  ✗ could not run the wired hook: ${err instanceof Error ? err.message.split("\n")[0] : "unknown"}\n`);
     ok = false;

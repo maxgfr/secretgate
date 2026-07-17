@@ -12,6 +12,12 @@ export interface HookResult {
 
 const ALLOW_TAG = "[allow-secret]";
 const PASS: HookResult = { stdout: "", exit: 0 };
+// claude-code#77782: a PreToolUse hook that abstains with EMPTY stdout is misread
+// as plain text and forces an interactive permission prompt on every matched tool
+// call — breaking auto mode and ignoring allow rules. "{}" (valid JSON, no
+// decision) is the abstain that works everywhere; the documented "defer" decision
+// value is rejected by Claude Code <= 2.1.212.
+export const DEFER: HookResult = { stdout: "{}", exit: 0 };
 // Wall-clock budget per hook scan. Well under a typical agent hook timeout so a
 // crafted payload can't stall the hook into a fail-open timeout; on exceed the
 // scan throws and we fail closed.
@@ -169,7 +175,7 @@ function preToolUse(input: Record<string, any>): HookResult {
       };
     }
   }
-  return PASS;
+  return DEFER;
 }
 
 function postToolUse(input: Record<string, any>): HookResult {

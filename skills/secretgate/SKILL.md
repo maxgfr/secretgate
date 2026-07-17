@@ -60,6 +60,12 @@ Once wired, redaction is automatic and deterministic (the hook does it, not you)
   the REAL value lands on disk. Bash restore is OFF by default
   (prompt-injection exfiltration guard) — enable with `restoreBash: true` in
   `~/.secretgate/config.json`.
+- **Clean tool calls**: the Claude Code pre-tool-use hook answers minimal JSON
+  (`{}`, decision-free = normal permission flow) instead of empty stdout.
+  Empty hook output triggers a Claude Code bug (anthropics/claude-code#77782)
+  that forces an interactive permission prompt on every matched tool call,
+  even in auto mode — and the documented `"defer"` decision value is rejected
+  by Claude Code <= 2.1.212, so `{}` is the abstain that works everywhere.
 
 ## NOT covered (be honest with the user)
 
