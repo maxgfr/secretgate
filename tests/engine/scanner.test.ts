@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { RULES } from "../../src/engine/rules.gen.js";
 import { ScanBudgetError, scan } from "../../src/engine/scanner.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
@@ -167,5 +168,28 @@ describe("scan — dedupe", () => {
     const findings = scan(`key = ${FAKE.awsKeyId}`);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.ruleId).toBe("aws-access-token");
+  });
+});
+
+describe("scan — never flags its own rule database", () => {
+  // Several rule regexes embed literal secret-shaped constants (e.g. the
+  // Bedrock key's base64 prefix), so rendering the rule table as code —
+  // gitleaks.toml (raw), rules.gen.ts / the shipped bundles (JSON-escaped) —
+  // must not produce findings: pattern text is public by construction.
+  it("does not flag any rule regex source rendered raw (gitleaks.toml form)", () => {
+    for (const r of RULES) {
+      expect(scan(`"source": "${r.regex.source}",`), r.id).toEqual([]);
+    }
+  });
+
+  it("does not flag any rule regex source rendered JSON-escaped (bundle form)", () => {
+    for (const r of RULES) {
+      expect(scan(`"source": ${JSON.stringify(r.regex.source)},`), r.id).toEqual([]);
+    }
+  });
+
+  it("still flags a real secret-shaped token on the same line as rule-source text", () => {
+    const findings = scan(`"source": "harmless", "leak": "${FAKE.githubPat}"`);
+    expect(findings.map((f) => f.ruleId)).toContain("github-pat");
   });
 });

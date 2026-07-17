@@ -173,6 +173,20 @@ const COMPILED: CompiledRule[] = [
   ...BUILTIN_RULES,
 ];
 
+// The rule database describes secrets, so some regex sources embed literal
+// secret-shaped constants (e.g. the Bedrock key's base64 prefix) — scanning
+// secretgate's own rule files or shipped bundles would flag its detection
+// patterns. Pattern text ships in every copy of secretgate/gitleaks and is
+// public by construction, so a candidate found verbatim inside a rule source
+// (raw, or JSON-escaped as in the generated table) is never a finding. A real
+// credential cannot hide behind this: it would have to BE a substring of a
+// fixed public regex, i.e. not be a secret at all.
+let RULE_SOURCE_TEXTS: string[] | undefined;
+function isRuleSourceText(secret: string): boolean {
+  RULE_SOURCE_TEXTS ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]);
+  return RULE_SOURCE_TEXTS.some((s) => s.includes(secret));
+}
+
 // File names that ARE the finding (e.g. a .p12 bundle) — used by callers that
 // scan directories; content scanning ignores them.
 export function sensitiveFileNameRule(path: string): string | undefined {
@@ -268,6 +282,7 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
       const { secret, start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
       if (secret.length === 0) continue;
       if (PLACEHOLDER_ONLY.test(secret)) continue; // our own already-redacted marker
+      if (isRuleSourceText(secret)) continue; // our own detection patterns
       if (rule.post && !rule.post(secret)) continue;
 
       const entropy = shannonEntropy(secret);
