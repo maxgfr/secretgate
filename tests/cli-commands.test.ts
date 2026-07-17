@@ -139,3 +139,32 @@ describe("secretgate allow + vault", () => {
     expect(list2.text()).not.toMatch(/SECRETGATE_[0-9a-f]{12,16}/);
   });
 });
+
+describe("secretgate status", () => {
+  const origHome = process.env.HOME;
+  const origCwd = process.cwd();
+
+  afterEach(() => {
+    if (origHome === undefined) delete process.env.HOME;
+    else process.env.HOME = origHome;
+    process.chdir(origCwd);
+  });
+
+  it("reports global and project claude-code scopes from a project directory", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    const { io, text } = capture();
+    expect(await run(["status"], io)).toBe(0);
+    expect(text()).toContain("claude-code global");
+    expect(text()).toContain("claude-code project");
+  });
+
+  it("does not report a duplicate project scope when cwd IS the home directory", async () => {
+    process.env.HOME = home;
+    process.chdir(home);
+    const { io, text } = capture();
+    expect(await run(["status"], io)).toBe(0);
+    expect(text()).toContain("claude-code global");
+    expect(text()).not.toContain("claude-code project");
+  });
+});

@@ -5657,6 +5657,16 @@ function opencodePluginSource() {
 function claudeSettingsPath(project) {
   return project ? join6(process.cwd(), ".claude", "settings.json") : join6(homedir4(), ".claude", "settings.json");
 }
+function projectSettingsAliasesGlobal() {
+  const canon = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  return canon(process.cwd()) === canon(homedir4());
+}
 function installForAgents(flags, io) {
   const outcome = { installed: { claudeCode: false, codex: false, opencode: false }, errors: [] };
   const attempt = (name, fn) => {
@@ -5674,6 +5684,9 @@ function installForAgents(flags, io) {
   if (flags.claudeCode) {
     outcome.installed.claudeCode = attempt("claude-code", () => {
       const settingsPath = claudeSettingsPath(flags.project);
+      if (flags.project && projectSettingsAliasesGlobal()) {
+        io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
+      }
       mkdirSync4(dirname2(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
@@ -5837,6 +5850,9 @@ async function cmdUninstall(args, io) {
   if (!flags) return 2;
   try {
     if (flags.claudeCode) {
+      if (flags.project && projectSettingsAliasesGlobal()) {
+        io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
+      }
       const r = uninstallClaudeCode({ settingsPath: claudeSettingsPath(flags.project) });
       io.stdout(`claude-code: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})
 `);
@@ -5890,10 +5906,9 @@ async function cmdStatus(_args, io) {
   } else {
     io.stdout("bundle    not pinned yet (run `secretgate install \u2026`)\n");
   }
-  for (const [label, path] of [
-    ["global ", claudeSettingsPath(false)],
-    ["project", claudeSettingsPath(true)]
-  ]) {
+  const ccScopes = [["global ", claudeSettingsPath(false)]];
+  if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
+  for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
     const wired = hookWireCount(settings, "hook claude-code");
     const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d) => d.startsWith("Read(")).length : 0;

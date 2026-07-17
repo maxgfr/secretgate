@@ -328,6 +328,20 @@ function claudeSettingsPath(project: boolean): string {
   return project ? join(process.cwd(), ".claude", "settings.json") : join(homedir(), ".claude", "settings.json");
 }
 
+// From the home directory, <cwd>/.claude/settings.json IS the global file — the
+// "project" scope has no separate existence there. Compare realpaths so symlinked
+// homes (macOS /var -> /private/var, tests) are recognized.
+function projectSettingsAliasesGlobal(): boolean {
+  const canon = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  return canon(process.cwd()) === canon(homedir());
+}
+
 interface InstallOutcome {
   installed: { claudeCode: boolean; codex: boolean; opencode: boolean };
   errors: string[];
@@ -353,6 +367,9 @@ function installForAgents(flags: AgentFlags, io: Io): InstallOutcome {
   if (flags.claudeCode) {
     outcome.installed.claudeCode = attempt("claude-code", () => {
       const settingsPath = claudeSettingsPath(flags.project);
+      if (flags.project && projectSettingsAliasesGlobal()) {
+        io.stdout("claude-code: note — the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
+      }
       mkdirSync(dirname(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
@@ -522,6 +539,9 @@ async function cmdUninstall(args: string[], io: Io): Promise<number> {
   if (!flags) return 2;
   try {
     if (flags.claudeCode) {
+      if (flags.project && projectSettingsAliasesGlobal()) {
+        io.stdout("claude-code: note — the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
+      }
       const r = uninstallClaudeCode({ settingsPath: claudeSettingsPath(flags.project) });
       io.stdout(`claude-code: ${r.changed ? "unwired" : "nothing to remove"} (${r.path})\n`);
     }
@@ -574,11 +594,10 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
     io.stdout("bundle    not pinned yet (run `secretgate install …`)\n");
   }
 
-  // claude code
-  for (const [label, path] of [
-    ["global ", claudeSettingsPath(false)],
-    ["project", claudeSettingsPath(true)],
-  ] as const) {
+  // claude code — from the home directory the "project" path aliases the global file: report it once
+  const ccScopes: Array<[string, string]> = [["global ", claudeSettingsPath(false)]];
+  if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
+  for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
     const wired = hookWireCount(settings, "hook claude-code");
     const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d: string) => d.startsWith("Read(")).length : 0;
