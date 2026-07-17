@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.3](https://github.com/maxgfr/secretgate/compare/v1.1.2...v1.1.3) (2026-07-17)
+
+
+### Bug Fixes
+
+* **engine:** never flag the scanner's own rule database ([#2](https://github.com/maxgfr/secretgate/issues/2)) ([0d0d5d6](https://github.com/maxgfr/secretgate/commit/0d0d5d6126f7993772e69711b0f0780979be67d8))
+
 ## [1.1.2](https://github.com/maxgfr/secretgate/compare/v1.1.1...v1.1.2) (2026-07-13)
 
 
