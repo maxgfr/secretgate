@@ -4600,6 +4600,11 @@ var COMPILED = [
   })),
   ...BUILTIN_RULES
 ];
+var RULE_SOURCE_TEXTS;
+function isRuleSourceText(secret) {
+  RULE_SOURCE_TEXTS ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]);
+  return RULE_SOURCE_TEXTS.some((s) => s.includes(secret));
+}
 var GLOBAL_PATHS = GLOBAL_ALLOWLIST.paths.map((p) => new RegExp(p));
 var GLOBAL_REGEXES = GLOBAL_ALLOWLIST.regexes.map((r) => new RegExp(r.source, r.flags));
 var GLOBAL_STOPWORDS = GLOBAL_ALLOWLIST.stopwords;
@@ -4672,6 +4677,7 @@ function scan(text, cfg = {}) {
       const { secret, start, end } = pickSecret(match, rule.secretGroup);
       if (secret.length === 0) continue;
       if (PLACEHOLDER_ONLY.test(secret)) continue;
+      if (isRuleSourceText(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
