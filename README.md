@@ -94,6 +94,9 @@ past the agent's timeout (which would otherwise fail open).
 > A blocked prompt is never sent to the LLM, but Claude Code still echoes your
 > `Original prompt:` back to your **local** terminal — that's your own input on
 > your own screen, not exfiltration. The credential does not reach the API.
+> The same echo lands in headless output (`claude -p --output-format json`,
+> `result` field), so treat that output as sensitive before piping it to other
+> systems.
 
 ## False positives
 
