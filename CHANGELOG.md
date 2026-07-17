@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.5](https://github.com/maxgfr/secretgate/compare/v1.1.4...v1.1.5) (2026-07-17)
+
+
+### Bug Fixes
+
+* **claude-code:** emit "{}" instead of empty stdout on clean pre-tool-use (claude-code[#77782](https://github.com/maxgfr/secretgate/issues/77782)) ([1df2053](https://github.com/maxgfr/secretgate/commit/1df2053a0a56bb51f4b0b81f0a4470d14b025bd0))
+
 ## [1.1.4](https://github.com/maxgfr/secretgate/compare/v1.1.3...v1.1.4) (2026-07-17)
 
 
