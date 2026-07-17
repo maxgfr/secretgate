@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.6](https://github.com/maxgfr/secretgate/compare/v1.1.5...v1.1.6) (2026-07-17)
+
+
+### Bug Fixes
+
+* **cli:** report a single claude-code scope when cwd is the home directory ([4c16ac8](https://github.com/maxgfr/secretgate/commit/4c16ac8785b3b7575aee7682a3941fc50ab55e55))
+
 ## [1.1.5](https://github.com/maxgfr/secretgate/compare/v1.1.4...v1.1.5) (2026-07-17)
 
 
