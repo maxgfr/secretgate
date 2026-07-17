@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.4](https://github.com/maxgfr/secretgate/compare/v1.1.3...v1.1.4) (2026-07-17)
+
+
+### Bug Fixes
+
+* **deps:** force esbuild >=0.28.1 (GHSA dev-server arbitrary file read) ([#3](https://github.com/maxgfr/secretgate/issues/3)) ([e79518c](https://github.com/maxgfr/secretgate/commit/e79518c05c08018964db3efcde1a36ff9d49cc32))
+
 ## [1.1.3](https://github.com/maxgfr/secretgate/compare/v1.1.2...v1.1.3) (2026-07-17)
 
 
