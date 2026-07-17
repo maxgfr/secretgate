@@ -70,6 +70,9 @@ Once wired, redaction is automatic and deterministic (the hook does it, not you)
   conversation before install.
 - If a hook process is killed/times out, the agent proceeds (agent-side
   fail-open); secretgate itself fails CLOSED on its own errors for pre-events.
+- A blocked prompt is echoed back locally by Claude Code (`Original prompt:`
+  in the terminal and in `claude -p` JSON `result`) — the API never sees it,
+  but treat piped headless output as sensitive.
 
 ## False positives
 
