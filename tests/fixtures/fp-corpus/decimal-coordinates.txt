@@ -1,0 +1,11 @@
+Vector graphics and geo data are dense in long decimal fractions. The digits
+AFTER the decimal point are not a card number, even when they happen to satisfy
+Luhn and carry a major-network IIN prefix — the fraction below is the classic
+Visa test number pushed behind a dot, which is exactly what an SVG emits.
+
+<ellipse cx="24.4" cy="201.21" rx="0.4111111111111111" ry="0.30414076416912" />
+<path d="M177.3 -37.8C196.6 -43.5 206.6 -14.2 185.2 -5.5555555555555554z" />
+
+{"type":"Point","coordinates":[-73.4111111111111111, 40.712776]}
+scale = 1.5555555555555554
+ratio: 0.5454545454545454

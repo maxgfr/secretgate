@@ -70,7 +70,27 @@ async function readIoStdin(io: Io): Promise<string> {
   return data;
 }
 
-const SKIP_DIRS = new Set([".git", "node_modules", ".pnpm", "dist", "coverage", ".venv", "__pycache__"]);
+// Generated trees: never hand-written, regenerated on every build, and gitignored
+// — but full of key material (a Next.js `.next/` ships `previewModeSigningKey`,
+// `encryptionKey`, and a copy of every bundled dependency). Scanning them is pure
+// noise for the pre-commit use case `scan` serves.
+const SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".pnpm",
+  "dist",
+  "coverage",
+  ".venv",
+  "__pycache__",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".turbo",
+  ".output",
+  ".parcel-cache",
+  ".astro",
+  ".vercel",
+]);
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 
 function* walkFiles(root: string): Generator<string> {

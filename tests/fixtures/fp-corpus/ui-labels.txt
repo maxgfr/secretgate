@@ -1,0 +1,10 @@
+Connection forms relabel their fields, so a "password" key very often holds the
+LABEL shown to the user rather than a credential. Airflow's provider metadata is
+full of these, and every one of them used to trip the password-assignment rule.
+
+"relabeling": {"login": "Client ID", "password": "Client Secret"},
+"relabeling": {"host": "Chime Webhook Endpoint", "password": "Webhook Token"},
+"password": "Blob Storage Connection String",
+RESOURCE_MY_PASSWORD = "My Password"
+api_key = "Enter your key in the settings page"
+secret: "This value is provided by the operator"

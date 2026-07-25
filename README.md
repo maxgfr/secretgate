@@ -87,6 +87,7 @@ past the agent's timeout (which would otherwise fail open).
 | Codex tool **output** | upstream can't rewrite tool output yet | prompts + tool inputs are protected; tool output is not — prefer Claude Code / OpenCode for output-heavy work |
 | `codex exec` (non-interactive) | upstream bug: hooks don't fire (0.137–0.138) | interactive sessions only for now |
 | Low-entropy secrets (`password: hunter2`) | indistinguishable from prose without huge false positives | catches strong/quoted passwords; use a real password manager |
+| Passphrases with spaces (`password = "correct horse battery"`) | a spaced value after a `password` key is a UI label or a sentence far more often than a credential — 155 of 649 such matches on a 42k-file corpus were labels like `"password": "Client Secret"` | gitleaks' own generic rule stops at `[\w.=-]` for the same reason; use a real password manager |
 | Restore → off-machine exfil | a prompt-injected agent could write a placeholder to a file (restored to the real value) then `git push` / upload it | Bash restore is **off** by default; the secret never reaches the model, only a file the agent already had write access to |
 | Images / clipboard / screenshots | no hook surface | — |
 | Secrets already in context before install | history is not rewritten | start a fresh session |

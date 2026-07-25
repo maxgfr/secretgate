@@ -4589,12 +4589,22 @@ function unquote(v) {
   }
   return v;
 }
+function looksLikeInterpolation(v) {
+  return /^\$\{[^{}]*\}$/.test(v) || // ${VAR}, ${this.key}, ${env:DB_PASSWORD}
+  /^\$\([^()]*\)$/.test(v) || // $(cat /run/secrets/db)
+  /^#\{.*\}$/.test(v) || // Ruby / CoffeeScript #{...}
+  /^\{\{.*\}\}$/.test(v) || // Jinja / Go / Handlebars {{ ... }}
+  /^\{[A-Za-z_][\w.]*\}$/.test(v) || // Python str.format {settings.api_key}
+  /^%\([A-Za-z_]\w*\)[a-z]$/.test(v) || // printf mapping %(db_password)s
+  /^<%=?[\s\S]*%>$/.test(v);
+}
 function looksLikePlaceholder(raw) {
   const v = unquote(raw);
   const low = v.toLowerCase();
   if (PLACEHOLDER_WORDS.has(low)) return true;
   if (/^[*x•.\-_]+$/.test(v)) return true;
   if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true;
+  if (looksLikeInterpolation(v.trim())) return true;
   if (/^%[a-z_]+%$/i.test(v)) return true;
   if (/^<[^>]+>$/.test(v)) return true;
   if (/^[a-z]+$/.test(low) && new Set(low).size <= 3) return true;
@@ -4610,7 +4620,13 @@ function looksLikeFilesystemPath(raw) {
 var BUILTIN_RULES = [
   {
     id: "credit-card-number",
-    re: /(?<![\d-])(\d(?:[ -]?\d){12,18})(?![\d-])/dg,
+    // The lookarounds exclude a DECIMAL context, not just an adjacent digit. On
+    // a 42k-file corpus, 231 of 250 card findings were SVG path/ellipse
+    // coordinates and the rest geo fixtures: a long fraction satisfies Luhn
+    // roughly one time in ten, and vector art emits thousands of them. A PAN is
+    // never written immediately after a decimal point, nor immediately before
+    // one followed by digits.
+    re: /(?<![\d.-])(\d(?:[ -]?\d){12,18})(?![\d-])(?!\.\d)/dg,
     keywords: [],
     allowlists: [],
     post: (secret) => {
@@ -4627,7 +4643,21 @@ var BUILTIN_RULES = [
     re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:([^\s:/@]{3,256})@[^\s]+/dgi,
     keywords: ["://"],
     allowlists: [],
-    post: (secret) => !looksLikePlaceholder(secret)
+    post: (secret) => !looksLikePlaceholder(secret),
+    // The username and the scheme are only knowable from the whole match, so
+    // this gate can't live in `post`. 44 of 196 URL-credential findings on the
+    // corpus repeated one or the other — the canonical docker-compose and
+    // tutorial string, where the password IS `postgres`, `root` or `mongodb`.
+    // EQUALITY, never containment: a password that merely BEGINS with the
+    // username still fires. (Spelling that counter-example out as a real URL
+    // here would trip the repo's own self-scan, which reads this comment.)
+    postMatch: (secret, match) => {
+      const m = /^([a-z][a-z0-9+.-]*):\/\/([^\s:/@]*):/i.exec(match);
+      if (!m) return true;
+      const low = secret.toLowerCase();
+      const scheme = m[1].toLowerCase().split("+")[0];
+      return low !== m[2].toLowerCase() && low !== scheme;
+    }
   },
   // QUOTED password / secret assignment with a BROADER value charset than
   // gitleaks' generic-api-key (which stops at `[\w.=-]`, missing `$!@#…`).
@@ -4641,7 +4671,15 @@ var BUILTIN_RULES = [
     keywords: ["password", "passwd", "pwd", "secret", "key", "token"],
     entropy: 3,
     allowlists: [],
-    post: (secret) => !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret)
+    // Whitespace disqualifies the value. gitleaks' generic-api-key stops at
+    // `[\w.=-]`, so upstream never matches a spaced value at all; this rule
+    // widened the charset to catch punctuation-heavy passwords, and that
+    // widening is exactly what let prose in. 155 of 649 findings on the corpus
+    // held a space, and every sampled one was a UI label or a sentence
+    // (`"password": "Client Secret"` in Airflow's connection-form metadata).
+    // The cost is a spaced passphrase, which this rule now leaves to a real
+    // password manager — the same trade-off the README already states.
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret)
   }
 ];
 var COMPILED = [
@@ -4739,6 +4777,7 @@ function scan(text, cfg = {}) {
       if (isRuleSourceText(secret)) continue;
       if (looksLikePlaceholder(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
+      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
       const line = lineAt(starts, start);
@@ -5448,7 +5487,23 @@ async function readIoStdin(io) {
   for await (const chunk of process.stdin) data += chunk;
   return data;
 }
-var SKIP_DIRS = /* @__PURE__ */ new Set([".git", "node_modules", ".pnpm", "dist", "coverage", ".venv", "__pycache__"]);
+var SKIP_DIRS = /* @__PURE__ */ new Set([
+  ".git",
+  "node_modules",
+  ".pnpm",
+  "dist",
+  "coverage",
+  ".venv",
+  "__pycache__",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".turbo",
+  ".output",
+  ".parcel-cache",
+  ".astro",
+  ".vercel"
+]);
 var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {

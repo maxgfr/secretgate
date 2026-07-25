@@ -1,0 +1,13 @@
+A value that is entirely an interpolation is a reference TO a secret, never the
+secret. The bare `${VAR}` form was already handled; every form below carries a
+dot, a colon, a call or a space and used to slip through — the property-access
+one is not exotic, it is what a minified JS bundle looks like.
+
+let p = { apikey: `${this.supabaseKey}`, authorization: `${config.apiKey}` };
+headers = {"api_key": "{settings.api_key}"}
+password = "${env:DB_PASSWORD}"
+password = "%(db_password)s"
+secret: "{{vault_db_password}}"
+secret: "{{ vault_db_password }}"
+client_secret = "$(cat /run/secrets/client_secret)"
+access_key = "#{ENV['AWS_ACCESS_KEY']}"

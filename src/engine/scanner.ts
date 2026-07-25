@@ -66,6 +66,8 @@ interface CompiledRule {
   scope?: RegExp;
   /** extra deterministic gate for built-in rules (e.g. Luhn for cards) */
   post?: (secret: string) => boolean;
+  /** same, but for gates that need the surrounding match (e.g. the URL username) */
+  postMatch?: (secret: string, match: string) => boolean;
 }
 
 function compileAllowlist(a: GenAllowlist): CompiledAllowlist {
@@ -124,12 +126,32 @@ function unquote(v: string): string {
   return v;
 }
 
+// A value that is ENTIRELY an interpolation is a reference TO a secret, never
+// the secret: the real value lives in the environment, the vault or the config
+// object. `${VAR}` was already handled, but the anchor demanded a bare word,
+// so anything with a dot, a colon or a call slipped through — and
+// `apikey: `${this.supabaseKey}`` is what every bundled JS file looks like.
+// Each pattern is anchored end to end on purpose: a secret that merely
+// CONTAINS `$` or `{` stays a secret.
+function looksLikeInterpolation(v: string): boolean {
+  return (
+    /^\$\{[^{}]*\}$/.test(v) || // ${VAR}, ${this.key}, ${env:DB_PASSWORD}
+    /^\$\([^()]*\)$/.test(v) || // $(cat /run/secrets/db)
+    /^#\{.*\}$/.test(v) || // Ruby / CoffeeScript #{...}
+    /^\{\{.*\}\}$/.test(v) || // Jinja / Go / Handlebars {{ ... }}
+    /^\{[A-Za-z_][\w.]*\}$/.test(v) || // Python str.format {settings.api_key}
+    /^%\([A-Za-z_]\w*\)[a-z]$/.test(v) || // printf mapping %(db_password)s
+    /^<%=?[\s\S]*%>$/.test(v) // ERB / EJS <%= ... %>
+  );
+}
+
 function looksLikePlaceholder(raw: string): boolean {
   const v = unquote(raw);
   const low = v.toLowerCase();
   if (PLACEHOLDER_WORDS.has(low)) return true;
   if (/^[*x•.\-_]+$/.test(v)) return true; // masked ***, xxxx, ----
   if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true; // ${VAR} / $VAR interpolation
+  if (looksLikeInterpolation(v.trim())) return true;
   if (/^%[a-z_]+%$/i.test(v)) return true; // %VAR%
   if (/^<[^>]+>$/.test(v)) return true; // <your-password>
   if (/^[a-z]+$/.test(low) && new Set(low).size <= 3) return true; // aaaa, abcabc
@@ -167,7 +189,13 @@ function looksLikeFilesystemPath(raw: string): boolean {
 const BUILTIN_RULES: CompiledRule[] = [
   {
     id: "credit-card-number",
-    re: /(?<![\d-])(\d(?:[ -]?\d){12,18})(?![\d-])/dg,
+    // The lookarounds exclude a DECIMAL context, not just an adjacent digit. On
+    // a 42k-file corpus, 231 of 250 card findings were SVG path/ellipse
+    // coordinates and the rest geo fixtures: a long fraction satisfies Luhn
+    // roughly one time in ten, and vector art emits thousands of them. A PAN is
+    // never written immediately after a decimal point, nor immediately before
+    // one followed by digits.
+    re: /(?<![\d.-])(\d(?:[ -]?\d){12,18})(?![\d-])(?!\.\d)/dg,
     keywords: [],
     allowlists: [],
     post: (secret) => {
@@ -185,6 +213,20 @@ const BUILTIN_RULES: CompiledRule[] = [
     keywords: ["://"],
     allowlists: [],
     post: (secret) => !looksLikePlaceholder(secret),
+    // The username and the scheme are only knowable from the whole match, so
+    // this gate can't live in `post`. 44 of 196 URL-credential findings on the
+    // corpus repeated one or the other — the canonical docker-compose and
+    // tutorial string, where the password IS `postgres`, `root` or `mongodb`.
+    // EQUALITY, never containment: a password that merely BEGINS with the
+    // username still fires. (Spelling that counter-example out as a real URL
+    // here would trip the repo's own self-scan, which reads this comment.)
+    postMatch: (secret, match) => {
+      const m = /^([a-z][a-z0-9+.-]*):\/\/([^\s:/@]*):/i.exec(match);
+      if (!m) return true;
+      const low = secret.toLowerCase();
+      const scheme = m[1]!.toLowerCase().split("+")[0]!;
+      return low !== m[2]!.toLowerCase() && low !== scheme;
+    },
   },
   // QUOTED password / secret assignment with a BROADER value charset than
   // gitleaks' generic-api-key (which stops at `[\w.=-]`, missing `$!@#…`).
@@ -198,7 +240,15 @@ const BUILTIN_RULES: CompiledRule[] = [
     keywords: ["password", "passwd", "pwd", "secret", "key", "token"],
     entropy: 3,
     allowlists: [],
-    post: (secret) => !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret),
+    // Whitespace disqualifies the value. gitleaks' generic-api-key stops at
+    // `[\w.=-]`, so upstream never matches a spaced value at all; this rule
+    // widened the charset to catch punctuation-heavy passwords, and that
+    // widening is exactly what let prose in. 155 of 649 findings on the corpus
+    // held a space, and every sampled one was a UI label or a sentence
+    // (`"password": "Client Secret"` in Airflow's connection-form metadata).
+    // The cost is a spaced passphrase, which this rule now leaves to a real
+    // password manager — the same trade-off the README already states.
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret),
   },
 ];
 
@@ -333,6 +383,7 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
       // in existence, redacted out of the user's own file.
       if (looksLikePlaceholder(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
+      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
 
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== undefined && entropy <= rule.entropy) continue;

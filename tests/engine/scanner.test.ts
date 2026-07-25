@@ -98,6 +98,33 @@ describe("scan — credit cards (Luhn + IIN gated)", () => {
     expect(scan(`card: ${FAKE.visaPanInvalid}`)).toEqual([]);
     expect(scan("build id: 1234567890123456")).toEqual([]);
   });
+
+  // Measured on a 42k-file corpus: 231 of 250 card "findings" were SVG path and
+  // ellipse coordinates, the rest geo fixtures. A long fraction has ~1/10 odds
+  // of satisfying Luhn, and vector art emits thousands of them. A PAN is never
+  // written immediately after a decimal point, so the dot settles it.
+  it("ignores digit runs that are the fractional part of a decimal", () => {
+    for (const text of [
+      `<ellipse rx="0.${FAKE.visaPan}" />`,
+      `coordinates: [-73.${FAKE.visaPan}, 40.7]`,
+      `scale = 1.${FAKE.visaPan}`,
+      `amount = ${FAKE.visaPan}.25`,
+    ]) {
+      expect(
+        scan(text).filter((f) => f.ruleId === "credit-card-number"),
+        text,
+      ).toEqual([]);
+    }
+  });
+
+  it("still flags a PAN next to punctuation that is not a decimal point", () => {
+    for (const text of [`card=${FAKE.visaPan};`, `{"pan":"${FAKE.visaPan}"}`, `(${FAKE.visaPan})`, `card: ${FAKE.visaPan}.`]) {
+      expect(
+        scan(text).map((f) => f.ruleId),
+        text,
+      ).toContain("credit-card-number");
+    }
+  });
 });
 
 describe("scan — url credentials (secretgate builtin)", () => {
@@ -121,12 +148,84 @@ describe("scan — url credentials (secretgate builtin)", () => {
       ).toEqual([]);
     }
   });
+
+  // 44 of 196 URL-credential findings on the corpus repeated the username or
+  // the scheme as the password — the canonical docker-compose / tutorial string.
+  // A deployment where the password IS the username is not a secret worth
+  // blocking a prompt over.
+  it("does not flag a password that repeats the username or the scheme", () => {
+    for (const text of [
+      "postgresql://postgres:postgres@localhost:5432/db",
+      "mysql://root:root@mysql/airflow",
+      "amqp://rabbitmq:rabbitmq@broker:5672",
+      "mongodb://mongo:mongodb@cluster/db",
+    ]) {
+      expect(
+        scan(text).filter((f) => f.ruleId === "url-credentials"),
+        text,
+      ).toEqual([]);
+    }
+  });
+
+  it("still flags a real password that merely starts like the username", () => {
+    for (const text of ["postgres://postgres:postgres_9xKqW3zR@db/prod", "mysql://root:rootKQ92mZ7v@db/prod"]) {
+      expect(
+        scan(text).map((f) => f.ruleId),
+        text,
+      ).toContain("url-credentials");
+    }
+  });
 });
 
 describe("scan — quoted password assignment (secretgate builtin)", () => {
   it("catches a quoted password with punctuation that generic-api-key misses", () => {
     expect(scan('password = "Xq9$mK2vLp7wRt4z"').map((f) => f.ruleId)).toContain("password-assignment");
     expect(scan('{"api_key": "sk_Xq9mK2vLp7wRt4zN8"}').map((f) => f.ruleId)).toContain("password-assignment");
+  });
+
+  // 155 of 649 password-assignment findings on the corpus held whitespace, and
+  // every sampled one was a UI label or a sentence — Airflow's connection forms
+  // relabel their fields, so `"password"` routinely carries "Client Secret".
+  it("does NOT fire on values containing whitespace (labels and prose)", () => {
+    for (const text of [
+      '"relabeling": {"login": "Client ID", "password": "Client Secret"}',
+      'RESOURCE_MY_PASSWORD = "My Password"',
+      'api_key = "Enter your key in the settings page"',
+    ]) {
+      expect(
+        scan(text).filter((f) => f.ruleId === "password-assignment"),
+        text,
+      ).toEqual([]);
+    }
+  });
+
+  // A value that is entirely an interpolation is a REFERENCE to a secret. The
+  // bare `${VAR}` form was already covered; the property-access form is what
+  // every bundled JS file looks like (`apikey: ${this.supabaseKey}`).
+  it("skips values that are entirely an interpolation or template reference", () => {
+    for (const text of [
+      "let p = { apikey: `${this.supabaseKey}` };",
+      'api_key = "${config.apiKey}"',
+      'password = "${env:DB_PASSWORD}"',
+      'password = "%(db_password)s"',
+      'secret = "{settings.api_key}"',
+      'client_secret = "$(cat /run/secrets/client_secret)"',
+      "access_key = \"#{ENV['AWS_ACCESS_KEY']}\"",
+      'password = "<%= node[:db][:password] %>"',
+    ]) {
+      expect(
+        scan(text).filter((f) => f.ruleId === "password-assignment"),
+        text,
+      ).toEqual([]);
+    }
+  });
+
+  // The interpolation guard must stay anchored: a secret that merely CONTAINS
+  // `$`, `{` or `%` is still a secret.
+  it("still flags secrets that merely contain interpolation characters", () => {
+    for (const text of ['password = "P@ss{w0rd}$9xKq"', 'api_key = "aB3$dE6gH9jK2mN5pQ8"', 'secret = "x%2Fy%2Bz9QwErTy"']) {
+      expect(scan(text).filter((f) => f.ruleId === "password-assignment").length, text).toBeGreaterThan(0);
+    }
   });
 
   it("does NOT fire on ordinary code (unquoted expressions)", () => {
