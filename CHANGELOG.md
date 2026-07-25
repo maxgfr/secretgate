@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.7](https://github.com/maxgfr/secretgate/compare/v1.1.6...v1.1.7) (2026-07-25)
+
+
+### Bug Fixes
+
+* **engine:** stop redacting filesystem paths and placeholder values ([b677343](https://github.com/maxgfr/secretgate/commit/b6773437a0b3f59e464172c10f2aad1d9f7c85c7)), closes [hi#entropy](https://github.com/hi/issues/entropy)
+
 ## [1.1.6](https://github.com/maxgfr/secretgate/compare/v1.1.5...v1.1.6) (2026-07-17)
 
 
