@@ -111,7 +111,21 @@ const PLACEHOLDER_WORDS = new Set([
   "placeholder",
 ]);
 
-function looksLikePlaceholder(v: string): boolean {
+// Strip one layer of matching surrounding quotes. Rule capture groups are not
+// consistent about them — secretgate's own password-assignment captures the
+// bare value, while several gitleaks-derived rules (hashicorp-tf-password
+// among them) capture the quotes too. Without this, a placeholder check would
+// pass for one rule and fail for the other on identical text.
+function unquote(v: string): string {
+  const first = v[0];
+  if ((first === '"' || first === "'" || first === "`") && v.length >= 2 && v[v.length - 1] === first) {
+    return v.slice(1, -1);
+  }
+  return v;
+}
+
+function looksLikePlaceholder(raw: string): boolean {
+  const v = unquote(raw);
   const low = v.toLowerCase();
   if (PLACEHOLDER_WORDS.has(low)) return true;
   if (/^[*x•.\-_]+$/.test(v)) return true; // masked ***, xxxx, ----
@@ -120,6 +134,32 @@ function looksLikePlaceholder(v: string): boolean {
   if (/^<[^>]+>$/.test(v)) return true; // <your-password>
   if (/^[a-z]+$/.test(low) && new Set(low).size <= 3) return true; // aaaa, abcabc
   return false;
+}
+
+// A quoted FILESYSTEM PATH is not a credential. `pwd` sits in the
+// password-assignment keyword set because it abbreviates "password", but on a
+// developer machine it is far more often POSIX print-working-directory, whose
+// output is a path — `pwd = "/private/var/folders/…/T/TestX/001"` in Go test
+// output was the motivating false positive, and it is long and mixed-case
+// enough to clear the entropy gate.
+//
+// The test is deliberately narrow, because a secret must not hide behind it:
+// the value has to START with a path root, contain at least two separators,
+// and consist ONLY of conservative path characters. That last clause is what
+// carries the safety — base64/base64url secrets use `+`, `=` and often `%`,
+// and real passwords lean on the punctuation this charset excludes. A
+// credential that satisfies all three conditions would have to be a
+// slash-heavy, punctuation-free string that is already indistinguishable from
+// a pathname.
+function looksLikeFilesystemPath(raw: string): boolean {
+  const v = unquote(raw);
+  if (!/^(?:\/|\.\.?\/|~\/|[A-Za-z]:[\\/])/.test(v)) return false;
+  const separators = (v.match(/[\\/]/g) ?? []).length;
+  if (separators < 2) return false;
+  // `:` is admitted for the Windows drive prefix; it costs nothing elsewhere
+  // because the root anchor above already had to match, and neither base64 nor
+  // base64url uses it.
+  return /^[A-Za-z0-9._\-\\/: ]+$/.test(v);
 }
 
 const BUILTIN_RULES: CompiledRule[] = [
@@ -156,7 +196,7 @@ const BUILTIN_RULES: CompiledRule[] = [
     keywords: ["password", "passwd", "pwd", "secret", "key", "token"],
     entropy: 3,
     allowlists: [],
-    post: (secret) => !looksLikePlaceholder(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret),
+    post: (secret) => !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret),
   },
 ];
 
@@ -283,6 +323,13 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
       if (secret.length === 0) continue;
       if (PLACEHOLDER_ONLY.test(secret)) continue; // our own already-redacted marker
       if (isRuleSourceText(secret)) continue; // our own detection patterns
+      // PLACEHOLDER_WORDS encodes "this string is not a real secret", so it
+      // holds no matter which rule matched. It used to be consulted only by
+      // password-assignment's `post`, which left every vendor rule to rediscover
+      // it: `password = "changeme"` was skipped by password-assignment and then
+      // flagged by hashicorp-tf-password — the single most canonical placeholder
+      // in existence, redacted out of the user's own file.
+      if (looksLikePlaceholder(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
 
       const entropy = shannonEntropy(secret);

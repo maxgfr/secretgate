@@ -146,6 +146,48 @@ describe("scan — quoted password assignment (secretgate builtin)", () => {
       ).toEqual([]);
     }
   });
+
+  // `pwd` is in the keyword set as an abbreviation for "password", but on a
+  // developer machine it is far more often POSIX print-working-directory. Go
+  // test output of the form `pwd = "/private/var/folders/..."` is long and
+  // mixed-case enough to clear the entropy gate, so it was being redacted
+  // mid-run -- corrupting the very diagnostics the user was reading.
+  it("skips filesystem paths assigned to secret-ish keywords", () => {
+    for (const text of [
+      'pwd = "/private/var/folders/pz/tpqs6qkx41sdm04rm630llhm0000gn/T/TestRunGuard_WorkingDirectory4169563585/001"',
+      'pwd = "/Users/maxime/Library/Caches/some-tool/artifacts"',
+      'secret_key = "./config/secrets/production.key"',
+      'key: "~/.ssh/id_ed25519"',
+      'api_key = "../../vendor/github.com/foo/bar"',
+      'password = "C:\\\\Users\\\\maxime\\\\AppData\\\\Local\\\\Temp"',
+    ]) {
+      expect(
+        scan(text).filter((f) => f.ruleId === "password-assignment"),
+        text,
+      ).toEqual([]);
+    }
+  });
+
+  // The path guard must stay narrow: a path root, >=2 separators AND a
+  // punctuation-free charset are all required. Slashes alone buy no exemption.
+  it("still flags real secrets that resemble paths", () => {
+    for (const text of [
+      'password = "aGVsbG8vd29ybGQrZm9vL2Jhcg=="',
+      'password = "abc/def/ghi/jkl/mno/pqr"',
+      'password = "/Xk92mfPqLzT4vBn"',
+      'password = "/tmp/xQz42Kp9!@#$"',
+    ]) {
+      expect(scan(text).filter((f) => f.ruleId === "password-assignment").length, text).toBeGreaterThan(0);
+    }
+  });
+
+  // PLACEHOLDER_WORDS is rule-independent: a vendor rule must not re-flag what
+  // the placeholder list already declared inert.
+  it("skips placeholder values for EVERY rule, not just password-assignment", () => {
+    for (const text of ['password = "changeme"', 'resource "x" { password = "changeme" }', 'password = "example"', 'password = "test"']) {
+      expect(scan(text), text).toEqual([]);
+    }
+  });
 });
 
 describe("scan — wall-clock budget (anti-hang)", () => {

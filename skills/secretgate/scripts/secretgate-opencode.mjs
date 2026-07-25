@@ -4541,7 +4541,15 @@ var PLACEHOLDER_WORDS = /* @__PURE__ */ new Set([
   "hunter2",
   "placeholder"
 ]);
-function looksLikePlaceholder(v) {
+function unquote(v) {
+  const first = v[0];
+  if ((first === '"' || first === "'" || first === "`") && v.length >= 2 && v[v.length - 1] === first) {
+    return v.slice(1, -1);
+  }
+  return v;
+}
+function looksLikePlaceholder(raw) {
+  const v = unquote(raw);
   const low = v.toLowerCase();
   if (PLACEHOLDER_WORDS.has(low)) return true;
   if (/^[*x•.\-_]+$/.test(v)) return true;
@@ -4550,6 +4558,13 @@ function looksLikePlaceholder(v) {
   if (/^<[^>]+>$/.test(v)) return true;
   if (/^[a-z]+$/.test(low) && new Set(low).size <= 3) return true;
   return false;
+}
+function looksLikeFilesystemPath(raw) {
+  const v = unquote(raw);
+  if (!/^(?:\/|\.\.?\/|~\/|[A-Za-z]:[\\/])/.test(v)) return false;
+  const separators = (v.match(/[\\/]/g) ?? []).length;
+  if (separators < 2) return false;
+  return /^[A-Za-z0-9._\-\\/: ]+$/.test(v);
 }
 var BUILTIN_RULES = [
   {
@@ -4585,7 +4600,7 @@ var BUILTIN_RULES = [
     keywords: ["password", "passwd", "pwd", "secret", "key", "token"],
     entropy: 3,
     allowlists: [],
-    post: (secret) => !looksLikePlaceholder(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret)
+    post: (secret) => !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret)
   }
 ];
 var COMPILED = [
@@ -4678,6 +4693,7 @@ function scan(text, cfg = {}) {
       if (secret.length === 0) continue;
       if (PLACEHOLDER_ONLY.test(secret)) continue;
       if (isRuleSourceText(secret)) continue;
+      if (looksLikePlaceholder(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
