@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.9](https://github.com/maxgfr/secretgate/compare/v1.1.8...v1.1.9) (2026-07-25)
+
+
+### Bug Fixes
+
+* **engine:** cut the false positives measured on a 42k-file corpus ([6718aaa](https://github.com/maxgfr/secretgate/commit/6718aaab4da6b52d7cdcc3ea4303b3a8afc6d26a))
+
 ## [1.1.8](https://github.com/maxgfr/secretgate/compare/v1.1.7...v1.1.8) (2026-07-25)
 
 
