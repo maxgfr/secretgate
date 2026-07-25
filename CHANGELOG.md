@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.1.8](https://github.com/maxgfr/secretgate/compare/v1.1.7...v1.1.8) (2026-07-25)
+
+
+### Bug Fixes
+
+* **engine:** write the path example as a real path so the self-scan passes ([ac571fe](https://github.com/maxgfr/secretgate/commit/ac571fec5acc746870034cd91683e8f52f7cf8dc))
+
 ## [1.1.7](https://github.com/maxgfr/secretgate/compare/v1.1.6...v1.1.7) (2026-07-25)
 
 
