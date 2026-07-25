@@ -139,9 +139,11 @@ function looksLikePlaceholder(raw: string): boolean {
 // A quoted FILESYSTEM PATH is not a credential. `pwd` sits in the
 // password-assignment keyword set because it abbreviates "password", but on a
 // developer machine it is far more often POSIX print-working-directory, whose
-// output is a path — `pwd = "/private/var/folders/…/T/TestX/001"` in Go test
-// output was the motivating false positive, and it is long and mixed-case
-// enough to clear the entropy gate.
+// output is a path: `pwd = "/private/var/folders/pz/T/TestTmpDir/001"` in Go
+// test output was the motivating false positive, being long and mixed-case
+// enough to clear the entropy gate. (That example is written as a REAL path
+// rather than an elided one on purpose — the repo self-scan reads this
+// comment, so an ellipsis here would trip the very rule it documents.)
 //
 // The test is deliberately narrow, because a secret must not hide behind it:
 // the value has to START with a path root, contain at least two separators,
