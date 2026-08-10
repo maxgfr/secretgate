@@ -91,6 +91,7 @@ past the agent's timeout (which would otherwise fail open).
 | Restore → off-machine exfil | a prompt-injected agent could write a placeholder to a file (restored to the real value) then `git push` / upload it | Bash restore is **off** by default; the secret never reaches the model, only a file the agent already had write access to |
 | Images / clipboard / screenshots | no hook surface | — |
 | Secrets already in context before install | history is not rewritten | start a fresh session |
+| A disabled run (see below) | you asked for it — nothing is scanned while it lasts | pauses expire on their own (60 min default), `status` leads with a banner, and no in-repo file can trigger one |
 
 > A blocked prompt is never sent to the LLM, but Claude Code still echoes your
 > `Original prompt:` back to your **local** terminal — that's your own input on
@@ -108,9 +109,35 @@ Narrowest fix first:
 3. `secretgate allow --path 'tests/fixtures/**'`
 4. `secretgate allow --rule <rule-id>` (last resort)
 5. one-off prompt bypass: include `[allow-secret]` in the prompt
+6. whole firewall off for one run: `secretgate disable` (see below)
 
 Projects can commit shared entries in `.secretgate.json`:
 `{"allowlist": {"paths": ["testdata/**"]}}`.
+
+## Turning it off for one run
+
+Sometimes you *are* working on the credentials — debugging an auth flow, an
+incident, a fixtures repo. Three scopes, narrowest first:
+
+```bash
+SECRETGATE_DISABLE=1 claude       # one process. No state, dies with the shell.
+secretgate disable                # this agent run, 60 min (--minutes N | --forever)
+secretgate disable --project      # this directory tree, until `enable --project`
+secretgate enable                 # back on   (--all clears every pause)
+```
+
+`secretgate disable` with no flag pauses the **agent session** running in this
+directory — another session in the same repo stays protected. Run it from the
+agent's own shell to pause exactly that run. A pause **expires on its own**, and
+`secretgate status` leads with a loud banner while any of them is active.
+
+Two things a disable never switches off: **placeholder restore** (otherwise the
+agent would write dead `SECRETGATE_…` tokens into your files) and the standalone
+`scan` / `pipe` commands (running one is the intent).
+
+> The off switch lives in `~/.secretgate/` and **only** there. A
+> `.secretgate.json` in a repository can widen the allowlist but cannot disable
+> the firewall — otherwise any repo you cloned could ship its own kill switch.
 
 ## Commands
 
@@ -123,8 +150,13 @@ secretgate scan       <file|dir|-> [--json] [--exclude <glob>]   exit 1 on findi
 secretgate pipe       stdin -> stdout, secrets redacted
 secretgate allow      <value> | --rule <id> | --path <glob>
 secretgate vault      list | clear
+secretgate disable    [--minutes N | --forever] [--project] [--session <id>]
+secretgate enable     [--project] [--session <id>] [--all]
 secretgate hook       <agent> <event>        (internal hook entrypoint)
 ```
+
+Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
+`SECRETGATE_DISABLE=1` (firewall off for this process).
 
 ## How it's validated
 

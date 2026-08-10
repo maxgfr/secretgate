@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SecretgatePlugin } from "../../src/adapters/opencode-plugin.js";
+import { addPause, sessionForCwd } from "../../src/disable.js";
 import { Vault } from "../../src/vault/vault.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
@@ -17,6 +18,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete process.env.SECRETGATE_HOME;
+  delete process.env.SECRETGATE_DISABLE;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -96,5 +98,58 @@ describe("tool.execute.after — output redaction", () => {
     const output = { title: "ls", output: "src\ntests\n", metadata: {} };
     await hooks["tool.execute.after"]!({ tool: "bash" }, output);
     expect(output.output).toBe("src\ntests\n");
+  });
+});
+
+// The plugin runs in-process, so it resolves the disable state from the env and
+// from process.cwd() rather than from a hook payload.
+describe.each([
+  ["SECRETGATE_DISABLE=1", () => (process.env.SECRETGATE_DISABLE = "1")],
+  ["a session pause", () => addPause({ scope: "session", target: "oc1", minutes: 60 })],
+  ["a directory pause", () => addPause({ scope: "path", target: process.cwd(), minutes: 60 })],
+])("disabled by %s", (_label, disable) => {
+  beforeEach(() => {
+    disable();
+  });
+
+  it("stops redacting prompts", async () => {
+    const parts = [{ type: "text", text: `deploy with ${FAKE.githubPat}` }];
+    await hooks["chat.message"]!({ sessionID: "oc1" }, { message: {}, parts });
+    expect(parts[0]!.text).toContain(FAKE.githubPat);
+  });
+
+  it("stops throwing on a sensitive read", async () => {
+    await expect(hooks["tool.execute.before"]!({ tool: "read", sessionID: "oc1" }, { args: { filePath: "/proj/.env" } })).resolves.toBeUndefined();
+  });
+
+  it("stops throwing on a sensitive bash command", async () => {
+    await expect(hooks["tool.execute.before"]!({ tool: "bash", sessionID: "oc1" }, { args: { command: "cat ~/.ssh/id_rsa" } })).resolves.toBeUndefined();
+  });
+
+  it("stops redacting tool output", async () => {
+    const output = { title: "env", output: `TOKEN=${FAKE.slackBotToken}\n`, metadata: {} };
+    await hooks["tool.execute.after"]!({ tool: "bash", sessionID: "oc1" }, output);
+    expect(output.output).toBe(`TOKEN=${FAKE.slackBotToken}\n`);
+  });
+
+  it("STILL restores placeholders on the way back to disk", async () => {
+    const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
+    const args = { filePath: "/proj/.env", content: `TOKEN=${placeholder}\n` };
+    await hooks["tool.execute.before"]!({ tool: "write", sessionID: "oc1" }, { args });
+    expect(args.content).toBe(`TOKEN=${FAKE.githubPat}\n`);
+  });
+});
+
+describe("the off switch is narrow (opencode)", () => {
+  it("a pause on another session leaves this one protected", async () => {
+    addPause({ scope: "session", target: "someone-else", minutes: 60 });
+    const parts = [{ type: "text", text: `deploy with ${FAKE.githubPat}` }];
+    await hooks["chat.message"]!({ sessionID: "oc1" }, { message: {}, parts });
+    expect(parts[0]!.text).not.toContain(FAKE.githubPat);
+  });
+
+  it("records the session id from chat.message so `disable` can target that run", async () => {
+    await hooks["chat.message"]!({ sessionID: "oc1" }, { message: {}, parts: [{ type: "text", text: "hello" }] });
+    expect(sessionForCwd(process.cwd())).toBe("oc1");
   });
 });

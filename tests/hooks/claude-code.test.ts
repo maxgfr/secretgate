@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { addPause, sessionForCwd } from "../../src/disable.js";
 import { handleClaudeCode } from "../../src/hooks/claude-code.js";
 import { handleCodex } from "../../src/hooks/codex.js";
 import { Vault } from "../../src/vault/vault.js";
@@ -16,6 +17,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.SECRETGATE_HOME;
+  delete process.env.SECRETGATE_DISABLE;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -188,5 +190,118 @@ describe("PostToolUse — output redaction", () => {
     const r = await handleClaudeCode("post-tool-use", '{"hook_event_name":"PostToolUse","tool_name":"Bash"}');
     // no tool_response key -> PASS is fine (nothing to redact); assert that path
     expect(r.stdout).toBe("");
+  });
+});
+
+// The off switch. Everything below asserts the SAME shape for each scope, so a
+// scope that stops taking effect fails loudly rather than silently protecting
+// (or silently not protecting).
+describe.each([
+  ["SECRETGATE_DISABLE=1", () => (process.env.SECRETGATE_DISABLE = "1")],
+  ["a session pause", () => addPause({ scope: "session", target: "s1", minutes: 60 })],
+  ["a directory pause", () => addPause({ scope: "path", target: "/tmp", minutes: 60 })],
+])("disabled by %s", (_label, disable) => {
+  beforeEach(() => {
+    disable();
+  });
+
+  it("lets a secret-bearing prompt through instead of blocking it", async () => {
+    const r = await handleClaudeCode("user-prompt-submit", promptEvent(`use this key: ${FAKE.githubPat}`));
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.decision).toBeUndefined();
+    // ...but says so, loudly, once per turn
+    expect(out.systemMessage).toMatch(/secretgate is DISABLED/);
+    expect(out.systemMessage).toContain("secretgate enable");
+  });
+
+  it("stops denying reads of sensitive files", async () => {
+    const r = await handleClaudeCode("pre-tool-use", preToolEvent("Read", { file_path: "/proj/.env" }));
+    expect(r.stdout).toBe("{}");
+  });
+
+  it("stops denying Bash commands that touch sensitive paths", async () => {
+    const r = await handleClaudeCode("pre-tool-use", preToolEvent("Bash", { command: "cat ~/.aws/credentials" }));
+    expect(r.stdout).toBe("{}");
+  });
+
+  it("stops redacting tool output", async () => {
+    const r = await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "env" }, `TOKEN=${FAKE.slackBotToken}\n`));
+    expect(r.stdout).toBe("");
+    expect(r.exit).toBe(0);
+  });
+
+  // The one thing a disable must NOT switch off: without it the agent would
+  // write a dead SECRETGATE_ token into the user's file.
+  it("STILL restores placeholders on the way back to disk", async () => {
+    const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
+    const r = await handleClaudeCode("pre-tool-use", preToolEvent("Write", { file_path: "/proj/.env", content: `TOKEN=${placeholder}\n` }));
+    const out = JSON.parse(r.stdout);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(out.hookSpecificOutput.updatedInput.content).toBe(`TOKEN=${FAKE.githubPat}\n`);
+  });
+
+  it("keeps codex silent — the DISABLED banner is a Claude Code field", async () => {
+    const r = await handleCodex("user-prompt-submit", promptEvent(`use ${FAKE.githubPat}`));
+    expect(r.stdout).toBe("");
+    expect(r.exit).toBe(0);
+  });
+});
+
+describe("the off switch is narrow", () => {
+  it("a pause on ANOTHER session leaves this one protected", async () => {
+    addPause({ scope: "session", target: "someone-else", minutes: 60 });
+    const r = await handleClaudeCode("user-prompt-submit", promptEvent(`use ${FAKE.githubPat}`));
+    expect(JSON.parse(r.stdout).decision).toBe("block");
+  });
+
+  it("a pause on ANOTHER directory leaves this one protected", async () => {
+    addPause({ scope: "path", target: "/some/other/tree", minutes: 60 });
+    const r = await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "env" }, `TOKEN=${FAKE.slackBotToken}\n`));
+    expect(JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput).not.toContain(FAKE.slackBotToken);
+  });
+
+  it("an EXPIRED pause protects again — no manual re-enable needed", async () => {
+    addPause({ scope: "session", target: "s1", minutes: 60 });
+    // rewind the clock on the stored entry rather than waiting an hour
+    const { readFileSync, writeFileSync } = await import("node:fs");
+    const path = join(home, "disabled.json");
+    const store = JSON.parse(readFileSync(path, "utf8"));
+    store.sessions.s1.until = new Date(Date.now() - 1000).toISOString();
+    writeFileSync(path, JSON.stringify(store));
+    const r = await handleClaudeCode("user-prompt-submit", promptEvent(`use ${FAKE.githubPat}`));
+    expect(JSON.parse(r.stdout).decision).toBe("block");
+  });
+
+  it("SECRETGATE_DISABLE=0 does not disable anything", async () => {
+    process.env.SECRETGATE_DISABLE = "0";
+    const r = await handleClaudeCode("user-prompt-submit", promptEvent(`use ${FAKE.githubPat}`));
+    expect(JSON.parse(r.stdout).decision).toBe("block");
+  });
+
+  // Fail-closed still governs the enabled path: only an explicit disable turns
+  // an unparseable payload into a pass.
+  it("still fails CLOSED on malformed stdin while ENABLED", async () => {
+    const r = await handleClaudeCode("user-prompt-submit", "{not json");
+    expect(JSON.parse(r.stdout).decision).toBe("block");
+  });
+
+  it("fails OPEN on malformed stdin only once explicitly disabled", async () => {
+    process.env.SECRETGATE_DISABLE = "1";
+    expect((await handleClaudeCode("pre-tool-use", "{not json")).stdout).toBe("{}");
+    expect((await handleClaudeCode("post-tool-use", "{not json")).stdout).toBe("");
+  });
+});
+
+describe("session index", () => {
+  it("records the session id from a prompt event so `disable` can target that run", async () => {
+    await handleClaudeCode("user-prompt-submit", promptEvent("refactor the parser"));
+    expect(sessionForCwd("/tmp")).toBe("s1");
+  });
+
+  it("does NOT record on tool events — one write per turn, not per tool call", async () => {
+    await handleClaudeCode("pre-tool-use", preToolEvent("Bash", { command: "ls" }));
+    await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "ls" }, "src\n"));
+    expect(sessionForCwd("/tmp")).toBeUndefined();
   });
 });

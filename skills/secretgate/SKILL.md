@@ -45,6 +45,7 @@ Once wired, redaction is automatic and deterministic (the hook does it, not you)
 | `pipe` | stdin -> stdout with secrets redacted to placeholders |
 | `allow <value>` / `allow --rule <id>` / `allow --path <glob>` | Allowlist (values stored as SHA-256, never in clear) |
 | `vault list` / `vault clear` | Inspect placeholder mappings (never shows secrets) |
+| `disable` / `enable` | Turn the firewall off for one run, and back on (see below) |
 | `uninstall --<agent>` | Remove exactly what install added |
 
 ## How the protection works (tell the user when asked)
@@ -60,6 +61,15 @@ Once wired, redaction is automatic and deterministic (the hook does it, not you)
   the REAL value lands on disk. Bash restore is OFF by default
   (prompt-injection exfiltration guard) — enable with `restoreBash: true` in
   `~/.secretgate/config.json`.
+- **Turning it off for one run**: `SECRETGATE_DISABLE=1 <agent>` disables one
+  process; `secretgate disable` pauses the agent session running in this
+  directory for 60 min (`--minutes N`, `--forever`); `secretgate disable
+  --project` pauses the whole directory tree; `secretgate enable` (or `--all`)
+  turns it back on. A pause expires by itself and `status` leads with a banner
+  while one is active. Restore and `scan`/`pipe` keep working while disabled.
+  The switch lives only in `~/.secretgate/` — a repo's `.secretgate.json` can
+  widen the allowlist but can NEVER disable the firewall. When the user asks to
+  turn secretgate off, prefer the narrowest scope and say when it comes back.
 - **Clean tool calls**: the Claude Code pre-tool-use hook answers minimal JSON
   (`{}`, decision-free = normal permission flow) instead of empty stdout.
   Empty hook output triggers a Claude Code bug (anthropics/claude-code#77782)
@@ -84,5 +94,6 @@ Once wired, redaction is automatic and deterministic (the hook does it, not you)
 
 Prefer the narrowest fix: inline `# pragma: allowlist secret` (or
 `gitleaks:allow`) on the line → `allow <value>` (hashed) → `allow --path
-<glob>` → `allow --rule <id>` (last resort). A project can commit extra
-allowlist entries in `.secretgate.json` (`{"allowlist": {"paths": […]}}`).
+<glob>` → `allow --rule <id>` (last resort) → `disable` for one run. A project
+can commit extra allowlist entries in `.secretgate.json`
+(`{"allowlist": {"paths": […]}}`).

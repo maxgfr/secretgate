@@ -1,4 +1,5 @@
 import { loadConfig } from "../config.js";
+import { type DisableState, describeDisable, disableState, recordSession } from "../disable.js";
 import { commandTouchesSensitivePath, sensitivePathMatch } from "../paths.js";
 import { redactText } from "../redact.js";
 import { restorePlaceholders } from "../redact.js";
@@ -39,9 +40,58 @@ function withholdOutput(reason: string): HookResult {
   };
 }
 
-export async function handleClaudeCode(event: string, rawStdin: string): Promise<HookResult> {
+// Best-effort parse used to resolve the disable state before the guarded block.
+function parseOrUndefined(raw: string): Record<string, any> | undefined {
   try {
-    const input = JSON.parse(rawStdin) as Record<string, any>;
+    return JSON.parse(raw) as Record<string, any>;
+  } catch {
+    return undefined;
+  }
+}
+
+const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
+
+// What each event does while secretgate is off. Restore is the one thing that
+// keeps running: a disabled run must never leave dead SECRETGATE_ placeholders
+// behind in files the agent writes.
+function disabledResult(event: string, input: Record<string, any> | undefined, state: DisableState, notices: boolean): HookResult {
+  if (event === "pre-tool-use") {
+    if (input === null || typeof input !== "object") return DEFER;
+    try {
+      return restoreOnly(input);
+    } catch {
+      // A disabled hook must never crash the tool call it is not policing.
+      return DEFER;
+    }
+  }
+  if (event === "user-prompt-submit") {
+    if (!notices) return PASS;
+    // Announced on every prompt, not on every tool call: once per turn is loud
+    // enough to be impossible to forget, quiet enough to stay usable.
+    return {
+      stdout: JSON.stringify({
+        systemMessage: `secretgate is DISABLED — ${describeDisable(state)}. Prompts, tool input and tool output are NOT being scanned. Re-enable with \`secretgate enable\`.`,
+      }),
+      exit: 0,
+    };
+  }
+  if (event === "post-tool-use") return PASS;
+  return { stdout: "", exit: 2 };
+}
+
+export async function handleClaudeCode(event: string, rawStdin: string, opts: { notices?: boolean } = {}): Promise<HookResult> {
+  // Resolved BEFORE the guarded block on purpose. When the user has explicitly
+  // switched secretgate off for this run, an unparseable payload must not fail
+  // CLOSED — that would block the very session they told us to stay out of.
+  const parsed = parseOrUndefined(rawStdin);
+  if (event === "user-prompt-submit") recordSession(str(parsed?.session_id), str(parsed?.cwd));
+  const state = disableState({ cwd: str(parsed?.cwd), sessionId: str(parsed?.session_id) });
+  if (state.disabled) return disabledResult(event, parsed, state, opts.notices !== false);
+
+  try {
+    // Re-parse only on the failure path, so the thrown message (and the
+    // fail-closed reason the user sees) stays the real parser error.
+    const input = parsed ?? (JSON.parse(rawStdin) as Record<string, any>);
     switch (event) {
       case "user-prompt-submit":
         return userPromptSubmit(input);
@@ -142,7 +192,6 @@ const READ_TOOLS = new Set(["Read", "Grep"]);
 function preToolUse(input: Record<string, any>): HookResult {
   const toolName = normalizeToolName(String(input.tool_name ?? ""));
   const toolInput = (input.tool_input ?? {}) as Record<string, any>;
-  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : undefined);
 
   // 1) Sensitive-path deny (reads only — writing INTO .env is the restore flow).
   if (READ_TOOLS.has(toolName)) {
@@ -162,20 +211,27 @@ function preToolUse(input: Record<string, any>): HookResult {
   }
 
   // 2) Placeholder restore on the way back to disk.
-  const restoreThis = RESTORE_TOOLS.has(toolName) || (toolName === "Bash" && cfg.restoreBash);
-  if (restoreThis) {
-    const vault = new Vault();
-    const { value, changed } = mapStrings(toolInput, (s) => restorePlaceholders(s, vault).text);
-    if (changed) {
-      return {
-        stdout: JSON.stringify({
-          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: value },
-        }),
-        exit: 0,
-      };
-    }
-  }
-  return DEFER;
+  return restoreOnly(input);
+}
+
+// Placeholder restore, in isolation. Split out because it runs on BOTH paths:
+// with the firewall on it is step 2 of preToolUse, and with the firewall off it
+// is the only thing that still runs — otherwise a disabled run would write dead
+// SECRETGATE_ placeholders into the user's files.
+function restoreOnly(input: Record<string, any>): HookResult {
+  const toolName = normalizeToolName(String(input.tool_name ?? ""));
+  const toolInput = (input.tool_input ?? {}) as Record<string, any>;
+  const cfg = loadConfig(str(input.cwd));
+  if (!RESTORE_TOOLS.has(toolName) && !(toolName === "Bash" && cfg.restoreBash)) return DEFER;
+  const vault = new Vault();
+  const { value, changed } = mapStrings(toolInput, (s) => restorePlaceholders(s, vault).text);
+  if (!changed) return DEFER;
+  return {
+    stdout: JSON.stringify({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: value },
+    }),
+    exit: 0,
+  };
 }
 
 function postToolUse(input: Record<string, any>): HookResult {

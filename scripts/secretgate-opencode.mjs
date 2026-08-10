@@ -130,6 +130,114 @@ function loadConfig(cwd) {
   };
 }
 
+// src/disable.ts
+import { randomBytes as randomBytes2 } from "crypto";
+import { closeSync as closeSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, realpathSync, renameSync as renameSync2, writeSync as writeSync2 } from "fs";
+import { basename, dirname, join as join3, resolve, sep } from "path";
+var NOT_DISABLED = { disabled: false };
+var SESSION_INDEX_MAX = 20;
+function disablePath() {
+  return join3(defaultVaultHome(), "disabled.json");
+}
+function sessionIndexPath() {
+  return join3(defaultVaultHome(), "sessions.json");
+}
+function writeFileAtomic2(path, content, mode) {
+  mkdirSync2(defaultVaultHome(), { recursive: true, mode: 448 });
+  const tmp = `${path}.${process.pid}.${randomBytes2(4).toString("hex")}.tmp`;
+  const fd = openSync2(tmp, "w", mode);
+  try {
+    writeSync2(fd, content);
+  } finally {
+    closeSync2(fd);
+  }
+  renameSync2(tmp, path);
+}
+function readJson2(path) {
+  try {
+    return JSON.parse(readFileSync3(path, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function emptyDisableFile() {
+  return { version: 1, sessions: {}, paths: {} };
+}
+function readDisableFile() {
+  const parsed = readJson2(disablePath());
+  if (parsed?.version !== 1) return emptyDisableFile();
+  return {
+    version: 1,
+    sessions: isRecord(parsed.sessions) ? parsed.sessions : {},
+    paths: isRecord(parsed.paths) ? parsed.paths : {}
+  };
+}
+function isRecord(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+function isLive(entry, now) {
+  if (!entry) return false;
+  if (entry.until === null) return true;
+  const until = Date.parse(String(entry.until));
+  return Number.isFinite(until) && until > now;
+}
+function envDisabled() {
+  const raw = (process.env.SECRETGATE_DISABLE ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+function canonical(p) {
+  let head = resolve(p);
+  const tail = [];
+  for (; ; ) {
+    try {
+      return join3(realpathSync(head), ...[...tail].reverse());
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return resolve(p);
+      tail.push(basename(head));
+      head = parent;
+    }
+  }
+}
+function covers(dir, cwd) {
+  const a = canonical(dir);
+  const b = canonical(cwd);
+  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
+}
+function disableState(ctx = {}) {
+  if (envDisabled()) return { disabled: true, scope: "env" };
+  const now = Date.now();
+  const file = readDisableFile();
+  if (ctx.sessionId) {
+    const entry = file.sessions[ctx.sessionId];
+    if (isLive(entry, now)) return { disabled: true, scope: "session", until: entry?.until ?? void 0, target: ctx.sessionId };
+  }
+  if (ctx.cwd) {
+    for (const [dir, entry] of Object.entries(file.paths)) {
+      if (isLive(entry, now) && covers(dir, ctx.cwd)) return { disabled: true, scope: "path", until: entry.until ?? void 0, target: dir };
+    }
+  }
+  return NOT_DISABLED;
+}
+function readSessionIndex() {
+  const parsed = readJson2(sessionIndexPath());
+  if (parsed?.version !== 1 || !isRecord(parsed.sessions)) return {};
+  return parsed.sessions;
+}
+var bySeqDesc = (a, b) => (b[1]?.seq ?? 0) - (a[1]?.seq ?? 0);
+function recordSession(sessionId, cwd) {
+  if (!sessionId || !cwd) return;
+  try {
+    const sessions = readSessionIndex();
+    if (sessions[sessionId]?.cwd === cwd) return;
+    const nextSeq = Math.max(0, ...Object.values(sessions).map((e) => e?.seq ?? 0)) + 1;
+    sessions[sessionId] = { cwd, lastSeen: (/* @__PURE__ */ new Date()).toISOString(), seq: nextSeq };
+    const trimmed = Object.entries(sessions).sort(bySeqDesc).slice(0, SESSION_INDEX_MAX);
+    writeFileAtomic2(sessionIndexPath(), JSON.stringify({ version: 1, sessions: Object.fromEntries(trimmed) }, null, 2), 384);
+  } catch {
+  }
+}
+
 // src/engine/allowlist.ts
 import { createHash } from "crypto";
 function sha256(value) {
@@ -4820,9 +4928,13 @@ function mutateStringsInPlace(container, fn) {
 }
 var RESTORE_TOOLS = /* @__PURE__ */ new Set(["write", "edit", "patch", "multiedit"]);
 var READ_TOOLS = /* @__PURE__ */ new Set(["read", "grep"]);
+var isOff = (sessionId) => disableState({ cwd: process.cwd(), sessionId: typeof sessionId === "string" ? sessionId : void 0 }).disabled;
 var SecretgatePlugin = async (_ctx) => {
   return {
-    "chat.message": async (_input, output) => {
+    "chat.message": async (input, output) => {
+      const sessionID = input?.sessionID;
+      recordSession(typeof sessionID === "string" ? sessionID : void 0, process.cwd());
+      if (isOff(sessionID)) return;
       const parts = output?.parts;
       if (!Array.isArray(parts)) return;
       if (parts.some((p) => typeof p?.text === "string" && p.text.includes(ALLOW_TAG))) return;
@@ -4837,7 +4949,8 @@ var SecretgatePlugin = async (_ctx) => {
     "tool.execute.before": async (input, output) => {
       const tool = String(input?.tool ?? "").toLowerCase();
       const args = output?.args ?? {};
-      if (READ_TOOLS.has(tool)) {
+      const off = isOff(input?.sessionID);
+      if (!off && READ_TOOLS.has(tool)) {
         const target = typeof args.filePath === "string" ? args.filePath : typeof args.path === "string" ? args.path : void 0;
         const hit = target ? sensitivePathMatch(target) : void 0;
         if (hit) {
@@ -4846,7 +4959,7 @@ var SecretgatePlugin = async (_ctx) => {
           );
         }
       }
-      if (tool === "bash" && typeof args.command === "string") {
+      if (!off && tool === "bash" && typeof args.command === "string") {
         const touched = commandTouchesSensitivePath(args.command);
         if (touched) {
           throw new Error(`secretgate: this command touches '${touched}', which looks sensitive; its content must not enter the model.`);
@@ -4860,6 +4973,7 @@ var SecretgatePlugin = async (_ctx) => {
       }
     },
     "tool.execute.after": async (input, output) => {
+      if (isOff(input?.sessionID)) return;
       const tool = String(input?.tool ?? "").toLowerCase();
       const cfg = loadConfig();
       const vault = new Vault();

@@ -9,7 +9,10 @@ import { DEFER, type HookResult, handleClaudeCode } from "./claude-code.js";
 // README): no output redaction, and hooks don't fire under `codex exec`.
 export async function handleCodex(event: string, rawStdin: string): Promise<HookResult> {
   if (event === "post-tool-use") return { stdout: "", exit: 0 };
-  const r = await handleClaudeCode(event, rawStdin);
+  // `notices: false`: the "secretgate is DISABLED" banner is a bare
+  // `systemMessage`, a Claude Code output field. Codex has no equivalent, so it
+  // stays silent there rather than handing Codex JSON it has no field for.
+  const r = await handleClaudeCode(event, rawStdin, { notices: false });
   // The "{}" abstain is a Claude-Code-only workaround (claude-code#77782);
   // Codex keeps its silent empty-stdout abstain.
   return r === DEFER ? { stdout: "", exit: 0 } : r;

@@ -1,4 +1,5 @@
 import { loadConfig } from "../config.js";
+import { disableState, recordSession } from "../disable.js";
 import { commandTouchesSensitivePath, sensitivePathMatch } from "../paths.js";
 import { redactText, restorePlaceholders } from "../redact.js";
 import { Vault } from "../vault/vault.js";
@@ -39,9 +40,18 @@ function mutateStringsInPlace(container: any, fn: (s: string) => string): boolea
 const RESTORE_TOOLS = new Set(["write", "edit", "patch", "multiedit"]);
 const READ_TOOLS = new Set(["read", "grep"]);
 
+// The plugin runs INSIDE the OpenCode process, so `SECRETGATE_DISABLE=1 opencode`
+// reaches it the same way it reaches a spawned hook, and process.cwd() is the
+// directory OpenCode was started in — the one `secretgate disable --project`
+// records.
+const isOff = (sessionId?: unknown): boolean => disableState({ cwd: process.cwd(), sessionId: typeof sessionId === "string" ? sessionId : undefined }).disabled;
+
 export const SecretgatePlugin = async (_ctx: unknown) => {
   return {
-    "chat.message": async (_input: unknown, output: { message?: unknown; parts?: Array<{ text?: unknown }> }) => {
+    "chat.message": async (input: { sessionID?: unknown } | undefined, output: { message?: unknown; parts?: Array<{ text?: unknown }> }) => {
+      const sessionID = input?.sessionID;
+      recordSession(typeof sessionID === "string" ? sessionID : undefined, process.cwd());
+      if (isOff(sessionID)) return;
       const parts = output?.parts;
       if (!Array.isArray(parts)) return;
       if (parts.some((p) => typeof p?.text === "string" && p.text.includes(ALLOW_TAG))) return;
@@ -54,10 +64,13 @@ export const SecretgatePlugin = async (_ctx: unknown) => {
       }
     },
 
-    "tool.execute.before": async (input: { tool?: string }, output: { args?: Record<string, any> }) => {
+    "tool.execute.before": async (input: { tool?: string; sessionID?: unknown }, output: { args?: Record<string, any> }) => {
       const tool = String(input?.tool ?? "").toLowerCase();
       const args = output?.args ?? {};
-      if (READ_TOOLS.has(tool)) {
+      // Disabled: skip the sensitive-path deny, but keep restoring placeholders
+      // so a disabled run never writes a dead SECRETGATE_ token to disk.
+      const off = isOff(input?.sessionID);
+      if (!off && READ_TOOLS.has(tool)) {
         const target = typeof args.filePath === "string" ? args.filePath : typeof args.path === "string" ? args.path : undefined;
         const hit = target ? sensitivePathMatch(target) : undefined;
         if (hit) {
@@ -66,7 +79,7 @@ export const SecretgatePlugin = async (_ctx: unknown) => {
           );
         }
       }
-      if (tool === "bash" && typeof args.command === "string") {
+      if (!off && tool === "bash" && typeof args.command === "string") {
         const touched = commandTouchesSensitivePath(args.command);
         if (touched) {
           throw new Error(`secretgate: this command touches '${touched}', which looks sensitive; its content must not enter the model.`);
@@ -80,7 +93,8 @@ export const SecretgatePlugin = async (_ctx: unknown) => {
       }
     },
 
-    "tool.execute.after": async (input: { tool?: string }, output: { title?: string; output?: string; metadata?: unknown }) => {
+    "tool.execute.after": async (input: { tool?: string; sessionID?: unknown }, output: { title?: string; output?: string; metadata?: unknown }) => {
+      if (isOff(input?.sessionID)) return;
       const tool = String(input?.tool ?? "").toLowerCase();
       const cfg = loadConfig();
       const vault = new Vault();

@@ -39,7 +39,7 @@ describe("cli router", () => {
     const code = await run(["--help"], io);
     expect(code).toBe(0);
     const help = out.join("");
-    for (const cmd of ["install", "uninstall", "status", "scan", "pipe", "allow", "vault", "hook"]) {
+    for (const cmd of ["install", "uninstall", "status", "scan", "pipe", "allow", "vault", "disable", "enable", "hook"]) {
       expect(help).toContain(cmd);
     }
   });

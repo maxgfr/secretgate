@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { run } from "../src/cli.js";
+import { disableState, recordSession } from "../src/disable.js";
 import { FAKE } from "./fixtures/fake-tokens.js";
 
 let home: string;
@@ -30,6 +31,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.SECRETGATE_HOME;
+  delete process.env.SECRETGATE_DISABLE;
   rmSync(home, { recursive: true, force: true });
   rmSync(work, { recursive: true, force: true });
 });
@@ -155,6 +157,137 @@ describe("secretgate allow + vault", () => {
   });
 });
 
+describe("secretgate disable + enable", () => {
+  const origCwd = process.cwd();
+
+  afterEach(() => {
+    process.chdir(origCwd);
+  });
+
+  it("with no session seen here, pauses the DIRECTORY for the default hour", async () => {
+    process.chdir(work);
+    const { io, text } = capture();
+    expect(await run(["disable"], io)).toBe(0);
+    expect(text()).toContain("DISABLED for directory");
+    expect(text()).toContain("secretgate enable --project");
+    // says what stopped protecting, and what did not
+    expect(text()).toContain("no longer scanned");
+    expect(text()).toContain("restore still runs");
+    const state = disableState({ cwd: work });
+    expect(state.disabled).toBe(true);
+    expect(Date.parse(state.until!) - Date.now()).toBeGreaterThan(50 * 60_000);
+  });
+
+  it("pauses the agent run that is live in this directory, not the directory", async () => {
+    process.chdir(work);
+    recordSession("run-42", work);
+    const { io, text } = capture();
+    expect(await run(["disable"], io)).toBe(0);
+    expect(text()).toContain("DISABLED for session run-42");
+    expect(disableState({ cwd: work, sessionId: "run-42" }).disabled).toBe(true);
+    // a different run in the same directory keeps its firewall
+    expect(disableState({ cwd: work, sessionId: "other" }).disabled).toBe(false);
+  });
+
+  it("--project pauses the directory tree, --forever drops the expiry", async () => {
+    process.chdir(work);
+    recordSession("run-42", work);
+    const { io } = capture();
+    expect(await run(["disable", "--project", "--forever"], io)).toBe(0);
+    const state = disableState({ cwd: join(work, "nested") });
+    expect(state).toMatchObject({ scope: "path", disabled: true });
+    expect(state.until).toBeUndefined();
+  });
+
+  it("--minutes is honored and capped at 24 h", async () => {
+    process.chdir(work);
+    const short = capture();
+    await run(["disable", "--minutes", "5"], short.io);
+    expect(Date.parse(disableState({ cwd: work }).until!) - Date.now()).toBeLessThan(6 * 60_000);
+    const long = capture();
+    await run(["disable", "--minutes", "100000"], long.io);
+    expect(Date.parse(disableState({ cwd: work }).until!) - Date.now()).toBeLessThanOrEqual(1440 * 60_000 + 5_000);
+  });
+
+  it("rejects bad flags instead of half-disabling", async () => {
+    const cases = [
+      ["disable", "--minutes", "abc"],
+      ["disable", "--minutes"],
+      ["disable", "--session"],
+      ["disable", "--project", "--session", "x"],
+      ["disable", "--nope"],
+    ];
+    for (const argv of cases) {
+      const { io } = capture();
+      expect(await run(argv, io), argv.join(" ")).toBe(2);
+    }
+    expect(disableState({ cwd: work, sessionId: "x" }).disabled).toBe(false);
+  });
+
+  it("enable undoes disable, whichever scope it used", async () => {
+    process.chdir(work);
+    await run(["disable"], capture().io);
+    const on = capture();
+    expect(await run(["enable"], on.io)).toBe(0);
+    expect(on.text()).toContain("re-enabled for directory");
+    expect(disableState({ cwd: work }).disabled).toBe(false);
+
+    recordSession("run-42", work);
+    await run(["disable"], capture().io);
+    const on2 = capture();
+    await run(["enable"], on2.io);
+    expect(on2.text()).toContain("re-enabled for session run-42");
+    expect(disableState({ cwd: work, sessionId: "run-42" }).disabled).toBe(false);
+  });
+
+  it("enable --all clears every pause and says how many", async () => {
+    process.chdir(work);
+    await run(["disable", "--session", "a"], capture().io);
+    await run(["disable", "--project"], capture().io);
+    const { io, text } = capture();
+    expect(await run(["enable", "--all"], io)).toBe(0);
+    expect(text()).toContain("2 pause(s) cleared");
+    expect(disableState({ cwd: work, sessionId: "a" }).disabled).toBe(false);
+  });
+
+  it("enable on an already-protected directory says so and points at what is still off", async () => {
+    process.chdir(work);
+    await run(["disable", "--session", "elsewhere"], capture().io);
+    const { io, text } = capture();
+    expect(await run(["enable"], io)).toBe(0);
+    expect(text()).toContain("already protected");
+    expect(text()).toContain("session elsewhere is still paused");
+  });
+
+  // No file can undo an env var — saying "re-enabled" without warning would be a lie.
+  it("enable warns that SECRETGATE_DISABLE overrides it", async () => {
+    process.chdir(work);
+    process.env.SECRETGATE_DISABLE = "1";
+    const { io, errText } = capture();
+    await run(["enable"], io);
+    expect(errText()).toContain("SECRETGATE_DISABLE is set");
+  });
+
+  it("keeps the store 0600 and never writes into the project directory", async () => {
+    process.chdir(work);
+    await run(["disable"], capture().io);
+    const store = JSON.parse(readFileSync(join(home, "disabled.json"), "utf8"));
+    expect(store.version).toBe(1);
+    expect(() => readFileSync(join(work, ".secretgate.json"), "utf8")).toThrow();
+  });
+
+  // scan/pipe are explicit invocations: the user asking for a scan IS the intent.
+  it("does not disable `scan` or `pipe`", async () => {
+    process.chdir(work);
+    process.env.SECRETGATE_DISABLE = "1";
+    const scanRun = capture(`key: ${FAKE.awsKeyId}`);
+    expect(await run(["scan", "-"], scanRun.io)).toBe(1);
+    const pipeRun = capture(`token=${FAKE.githubPat}`);
+    await run(["pipe"], pipeRun.io);
+    expect(pipeRun.text()).not.toContain(FAKE.githubPat);
+  });
+});
+
 describe("secretgate status", () => {
   const origHome = process.env.HOME;
   const origCwd = process.cwd();
@@ -163,6 +296,44 @@ describe("secretgate status", () => {
     if (origHome === undefined) delete process.env.HOME;
     else process.env.HOME = origHome;
     process.chdir(origCwd);
+  });
+
+  it("leads with a DISABLED banner — wired-but-off must never read as protected", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    await run(["disable", "--project"], capture().io);
+    const { io, text } = capture();
+    expect(await run(["status"], io)).toBe(0);
+    const lines = text().split("\n");
+    expect(lines.findIndex((l) => l.includes("DISABLED"))).toBeLessThan(lines.findIndex((l) => l.includes("claude-code")));
+    expect(text()).toContain("secretgate enable");
+  });
+
+  it("names the env var when that is what is off", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    process.env.SECRETGATE_DISABLE = "1";
+    const { io, text } = capture();
+    await run(["status"], io);
+    expect(text()).toContain("unset SECRETGATE_DISABLE");
+  });
+
+  it("lists pauses that apply elsewhere, so a forgotten one is still visible", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    await run(["disable", "--session", "elsewhere"], capture().io);
+    const { io, text } = capture();
+    await run(["status"], io);
+    expect(text()).toContain("also paused: session elsewhere");
+  });
+
+  it("says nothing about disabling when nothing is disabled", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    const { io, text } = capture();
+    await run(["status"], io);
+    expect(text()).not.toContain("DISABLED");
+    expect(text()).not.toContain("also paused");
   });
 
   it("reports global and project claude-code scopes from a project directory", async () => {

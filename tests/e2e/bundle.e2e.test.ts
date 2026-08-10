@@ -156,4 +156,59 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     expect(r.stdout).toContain("opencode  not wired");
     expect(r.stdout).toContain("vault");
   });
+
+  // The env scope is the one an agent inherits from the shell that launched it,
+  // so it has to work in a real spawned process — not just in-process.
+  it("SECRETGATE_DISABLE=1 stops the block in a real spawned hook, and restore still runs", async () => {
+    const prompt = JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: home, session_id: "e2e", prompt: `deploy with ${FAKE.githubPat}` });
+    expect(JSON.parse((await runBundle(["hook", "claude-code", "user-prompt-submit"], prompt)).stdout).decision).toBe("block");
+
+    // stash a placeholder while still enabled, then turn the firewall off
+    const piped = await runBundle(["pipe"], `TOKEN=${FAKE.githubPat}\n`);
+    const placeholder = piped.stdout.match(/SECRETGATE_[0-9a-f]{12,16}/)![0];
+
+    env.SECRETGATE_DISABLE = "1";
+    const off = await runBundle(["hook", "claude-code", "user-prompt-submit"], prompt);
+    const out = JSON.parse(off.stdout);
+    expect(out.decision).toBeUndefined();
+    expect(out.systemMessage).toMatch(/secretgate is DISABLED/);
+
+    const write = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      cwd: home,
+      tool_name: "Write",
+      tool_input: { file_path: "/x/copy.env", content: `TOKEN=${placeholder}\n` },
+    });
+    const restored = await runBundle(["hook", "claude-code", "pre-tool-use"], write);
+    expect(JSON.parse(restored.stdout).hookSpecificOutput.updatedInput.content).toBe(`TOKEN=${FAKE.githubPat}\n`);
+  });
+
+  it("`disable` then `enable` round-trips through the real hook, and status shouts in between", async () => {
+    const prompt = JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: home, session_id: "e2e", prompt: `deploy with ${FAKE.githubPat}` });
+    const d = await runBundle(["disable", "--project", "--minutes", "10"]);
+    expect(d.code).toBe(0);
+    expect(d.stdout).toContain("DISABLED for directory");
+
+    // the pause is recorded for the process cwd (the repo), not for `home`,
+    // so a hook reporting a different cwd stays protected — assert both ways
+    expect(JSON.parse((await runBundle(["hook", "claude-code", "user-prompt-submit"], prompt)).stdout).decision).toBe("block");
+
+    const here = JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: process.cwd(), session_id: "e2e", prompt: `deploy with ${FAKE.githubPat}` });
+    expect(JSON.parse((await runBundle(["hook", "claude-code", "user-prompt-submit"], here)).stdout).decision).toBeUndefined();
+
+    expect((await runBundle(["status"])).stdout).toContain("DISABLED");
+
+    expect((await runBundle(["enable", "--project"])).stdout).toContain("re-enabled for directory");
+    expect(JSON.parse((await runBundle(["hook", "claude-code", "user-prompt-submit"], here)).stdout).decision).toBe("block");
+  });
+
+  it("init self-verifies green even when the shell that runs it has secretgate disabled", async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    env.SECRETGATE_DISABLE = "1";
+    const r = await runBundle(["init"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("a secret pasted in a prompt is blocked");
+    expect(r.stdout).toContain("secretgate is active");
+  });
 });

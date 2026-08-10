@@ -4,6 +4,18 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig } from "./config.js";
+import {
+  DEFAULT_DISABLE_MINUTES,
+  MAX_DISABLE_MINUTES,
+  activePauses,
+  addPause,
+  clearPauses,
+  describeDisable,
+  disableState,
+  envDisabled,
+  removePause,
+  sessionForCwd,
+} from "./disable.js";
 import { pathMatchesGlob, sha256 } from "./engine/allowlist.js";
 import type { Finding } from "./engine/scanner.js";
 import { scan, sensitiveFileNameRule } from "./engine/scanner.js";
@@ -37,11 +49,17 @@ Commands:
   pipe        Read stdin, write it back with secrets redacted to placeholders
   allow       Allowlist a value (hashed), a rule id (--rule) or a path glob (--path)
   vault       Manage the placeholder vault (list | clear) — never prints secrets
+  disable     Turn the firewall off for this run (--minutes N | --forever, --project, --session <id>)
+  enable      Turn it back on (--project, --session <id>, --all)
   hook        Internal: agent hook entrypoint (secretgate hook <agent> <event>)
 
 Options:
   --version   Print the version
   --help      Print this help
+
+Disabling: \`secretgate disable\` pauses the current agent run for ${DEFAULT_DISABLE_MINUTES} minutes and
+expires on its own. \`SECRETGATE_DISABLE=1 <agent>\` disables one process without
+touching any state. Neither stops placeholder restore, and \`scan\`/\`pipe\` always run.
 `;
 
 // Read stdin, but STOP once we exceed `cap` bytes — an unbounded read would OOM
@@ -262,6 +280,119 @@ async function cmdVault(args: string[], io: Io): Promise<number> {
   return 2;
 }
 
+interface DisableFlags {
+  project: boolean;
+  session?: string;
+  minutes: number | null;
+  all: boolean;
+}
+
+function parseDisableFlags(args: string[], io: Io, verb: string): DisableFlags | undefined {
+  const flags: DisableFlags = { project: false, minutes: DEFAULT_DISABLE_MINUTES, all: false };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--project") flags.project = true;
+    else if (a === "--all") flags.all = true;
+    else if (a === "--forever") flags.minutes = null;
+    else if (a === "--session") {
+      const id = args[++i];
+      if (!id || id.startsWith("--")) {
+        io.stderr(`${verb}: --session expects a session id\n`);
+        return undefined;
+      }
+      flags.session = id;
+    } else if (a === "--minutes") {
+      const raw = args[++i];
+      const n = Number(raw);
+      if (!raw || !Number.isFinite(n) || n <= 0) {
+        io.stderr(`${verb}: --minutes expects a positive number\n`);
+        return undefined;
+      }
+      flags.minutes = Math.min(Math.floor(n), MAX_DISABLE_MINUTES);
+    } else {
+      io.stderr(`unknown option: ${a}\n`);
+      return undefined;
+    }
+  }
+  if (flags.project && flags.session) {
+    io.stderr(`${verb}: --project and --session are different scopes; pass only one\n`);
+    return undefined;
+  }
+  return flags;
+}
+
+// Turning a secrets firewall off is a security decision, so `disable` is loud by
+// construction: it says exactly what stopped protecting the user, when it comes
+// back, and how to bring it back sooner. The default TTL means a forgotten
+// `disable` heals itself.
+async function cmdDisable(args: string[], io: Io): Promise<number> {
+  const flags = parseDisableFlags(args, io, "disable");
+  if (!flags) return 2;
+  if (flags.all) {
+    io.stderr("disable: --all only applies to `secretgate enable`\n");
+    return 2;
+  }
+
+  const cwd = process.cwd();
+  let scope: "session" | "path";
+  let target: string;
+  if (flags.project) {
+    scope = "path";
+    target = cwd;
+  } else {
+    // No --session: pause the agent run that is live in this directory. Falls
+    // back to the directory itself when no session has been seen here — which is
+    // what happens when `disable` is typed in a plain shell before any agent ran.
+    const session = flags.session ?? sessionForCwd(cwd);
+    scope = session ? "session" : "path";
+    target = session ?? cwd;
+  }
+
+  const until = addPause({ scope, target, minutes: flags.minutes, cwd });
+  const what = scope === "session" ? `session ${target}` : `directory ${target}`;
+  io.stdout(`secretgate: DISABLED for ${what} ${until ? `until ${until}` : "until you re-enable it"}\n`);
+  io.stdout("secretgate: prompts, tool input and tool output are no longer scanned. Placeholder restore still runs, and `scan`/`pipe` still work.\n");
+  io.stdout(`secretgate: re-enable with \`secretgate enable${scope === "path" ? " --project" : flags.session ? ` --session ${target}` : ""}\`\n`);
+  if (scope === "session" && !flags.session)
+    io.stdout("secretgate: this pause covers that one agent run — restarting the agent starts a new, protected session.\n");
+  return 0;
+}
+
+async function cmdEnable(args: string[], io: Io): Promise<number> {
+  const flags = parseDisableFlags(args, io, "enable");
+  if (!flags) return 2;
+  if (flags.all) {
+    const cleared = clearPauses();
+    io.stdout(`secretgate: re-enabled everywhere (${cleared} pause(s) cleared)\n`);
+    return 0;
+  }
+
+  const cwd = process.cwd();
+  const targets: Array<["session" | "path", string]> = [];
+  if (flags.project) {
+    targets.push(["path", cwd]);
+  } else if (flags.session) {
+    targets.push(["session", flags.session]);
+  } else {
+    // Mirror `disable` with no flag: clear the session live here AND the
+    // directory pause, so one `enable` undoes one `disable` either way.
+    const session = sessionForCwd(cwd);
+    if (session) targets.push(["session", session]);
+    targets.push(["path", cwd]);
+  }
+
+  const removed = targets.flatMap(([scope, target]) => removePause(scope, target).map((cleared) => [scope, cleared] as const));
+  for (const [scope, cleared] of removed) io.stdout(`secretgate: re-enabled for ${scope === "session" ? `session ${cleared}` : `directory ${cleared}`}\n`);
+  if (removed.length === 0) {
+    io.stdout("secretgate: nothing was disabled here — already protected\n");
+    for (const p of activePauses()) io.stdout(`secretgate: note — ${p.scope} ${p.target} is still paused (\`secretgate enable --all\` clears everything)\n`);
+  }
+  // No file can undo an env var: say so, or the user re-enables and stays off.
+  if (envDisabled())
+    io.stderr("secretgate: WARNING — SECRETGATE_DISABLE is set in this environment; unset it (and restart the agent) or secretgate stays off.\n");
+  return 0;
+}
+
 // Hooks fire on every prompt/tool call. HARD_READ_CAP is the OOM guard (stop
 // reading past it); SCAN_CAP is the largest payload we will scan — beyond it we
 // fail CLOSED (block / deny / withhold). SCAN_CAP is deliberately small so that
@@ -448,7 +579,12 @@ function verifyClaudeCodeWiring(io: Io): boolean {
   // high-entropy fake token, built by concatenation (never a literal in-repo)
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
   const tmpHome = mkdtempSync(join(tmpdir(), "secretgate-verify-"));
-  const env = { ...process.env, SECRETGATE_HOME: tmpHome };
+  // Throwaway vault AND a forced-on firewall: this asserts the wiring works, so
+  // it must not inherit a `SECRETGATE_DISABLE` from the shell running `init` and
+  // report a perfectly good install as broken. The tmpHome does the same for a
+  // session/directory pause, whose state lives under SECRETGATE_HOME.
+  const env: NodeJS.ProcessEnv = { ...process.env, SECRETGATE_HOME: tmpHome };
+  delete env.SECRETGATE_DISABLE;
   const runHook = (event: string, payload: unknown): any => {
     const out = execFileSync("node", [bundle, "hook", "claude-code", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
     return out.trim() ? JSON.parse(out) : {};
@@ -605,6 +741,17 @@ function hookWireCount(settings: Record<string, any> | undefined, marker: string
 async function cmdStatus(_args: string[], io: Io): Promise<number> {
   io.stdout(`secretgate ${VERSION}\n\n`);
 
+  // First thing on the page, before any "wired" line: a firewall that is wired
+  // AND off must never read as protected.
+  const here = disableState({ cwd: process.cwd(), sessionId: sessionForCwd(process.cwd()) });
+  if (here.disabled) {
+    io.stdout(`!! DISABLED here — ${describeDisable(here)}\n`);
+    io.stdout(`!! nothing is being scanned here. Re-enable: ${here.scope === "env" ? "unset SECRETGATE_DISABLE" : "`secretgate enable`"}\n`);
+  }
+  const pauses = activePauses().filter((p) => !(p.scope === here.scope && p.target === here.target));
+  for (const p of pauses) io.stdout(`!! also paused: ${p.scope} ${p.target}${p.until ? ` until ${p.until}` : " (no expiry)"}\n`);
+  if (here.disabled || pauses.length > 0) io.stdout("\n");
+
   // pinned bundle
   const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
   if (existsSync(pinned)) {
@@ -669,6 +816,8 @@ const commands: Record<string, Command> = {
   pipe: cmdPipe,
   allow: cmdAllow,
   vault: cmdVault,
+  disable: cmdDisable,
+  enable: cmdEnable,
   install: cmdInstall,
   uninstall: cmdUninstall,
   status: cmdStatus,

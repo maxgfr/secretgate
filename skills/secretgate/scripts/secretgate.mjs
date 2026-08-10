@@ -21,15 +21,15 @@ __export(gitleaks_bin_exports, {
   scanWithGitleaks: () => scanWithGitleaks
 });
 import { spawn } from "child_process";
-import { existsSync as existsSync4, mkdtempSync, readFileSync as readFileSync7, rmSync as rmSync2 } from "fs";
+import { existsSync as existsSync4, mkdtempSync, readFileSync as readFileSync8, rmSync as rmSync2 } from "fs";
 import { tmpdir } from "os";
-import { delimiter, join as join5 } from "path";
+import { delimiter, join as join6 } from "path";
 function gitleaksPath() {
   if (cachedPath !== void 0) return cachedPath;
   const exe = process.platform === "win32" ? "gitleaks.exe" : "gitleaks";
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (dir && existsSync4(join5(dir, exe))) {
-      cachedPath = join5(dir, exe);
+    if (dir && existsSync4(join6(dir, exe))) {
+      cachedPath = join6(dir, exe);
       return cachedPath;
     }
   }
@@ -39,9 +39,9 @@ function gitleaksPath() {
 function scanWithGitleaks(text, opts = {}) {
   const bin = opts.bin ?? gitleaksPath();
   if (!bin) return Promise.resolve([]);
-  const dir = mkdtempSync(join5(tmpdir(), "secretgate-gl-"));
-  const report = join5(dir, "report.json");
-  return new Promise((resolve2, reject) => {
+  const dir = mkdtempSync(join6(tmpdir(), "secretgate-gl-"));
+  const report = join6(dir, "report.json");
+  return new Promise((resolve3, reject) => {
     const child = spawn(bin, ["stdin", "--no-banner", "--exit-code", String(LEAK_EXIT), "--report-format", "json", "--report-path", report], {
       stdio: ["pipe", "ignore", "pipe"],
       timeout: opts.timeoutMs ?? 1e4
@@ -57,15 +57,15 @@ function scanWithGitleaks(text, opts = {}) {
     child.on("close", (code) => {
       try {
         if (code === 0) {
-          resolve2([]);
+          resolve3([]);
           return;
         }
         if (code !== LEAK_EXIT) {
           reject(new Error(`gitleaks exited ${code}: ${stderr.slice(0, 500)}`));
           return;
         }
-        const raw = JSON.parse(readFileSync7(report, "utf8"));
-        resolve2(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
+        const raw = JSON.parse(readFileSync8(report, "utf8"));
+        resolve3(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
       } catch (err) {
         reject(err);
       } finally {
@@ -85,9 +85,9 @@ var init_gitleaks_bin = __esm({
 
 // src/cli.ts
 import { execFileSync } from "child_process";
-import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync4, mkdtempSync as mkdtempSync2, readFileSync as readFileSync8, readdirSync, realpathSync, rmSync as rmSync3, statSync } from "fs";
+import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readFileSync as readFileSync9, readdirSync, realpathSync as realpathSync2, rmSync as rmSync3, statSync } from "fs";
 import { homedir as homedir4, tmpdir as tmpdir2 } from "os";
-import { dirname as dirname2, join as join6, relative, resolve } from "path";
+import { dirname as dirname3, join as join7, relative, resolve as resolve2 } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 // src/config.ts
@@ -221,6 +221,158 @@ function loadConfig(cwd) {
 }
 function allowlistPath() {
   return join2(defaultVaultHome(), "allowlist.json");
+}
+
+// src/disable.ts
+import { randomBytes as randomBytes2 } from "crypto";
+import { closeSync as closeSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, realpathSync, renameSync as renameSync2, writeSync as writeSync2 } from "fs";
+import { basename, dirname, join as join3, resolve, sep } from "path";
+var NOT_DISABLED = { disabled: false };
+var SESSION_INDEX_MAX = 20;
+var DEFAULT_DISABLE_MINUTES = 60;
+var MAX_DISABLE_MINUTES = 1440;
+function disablePath() {
+  return join3(defaultVaultHome(), "disabled.json");
+}
+function sessionIndexPath() {
+  return join3(defaultVaultHome(), "sessions.json");
+}
+function writeFileAtomic2(path, content, mode) {
+  mkdirSync2(defaultVaultHome(), { recursive: true, mode: 448 });
+  const tmp = `${path}.${process.pid}.${randomBytes2(4).toString("hex")}.tmp`;
+  const fd = openSync2(tmp, "w", mode);
+  try {
+    writeSync2(fd, content);
+  } finally {
+    closeSync2(fd);
+  }
+  renameSync2(tmp, path);
+}
+function readJson2(path) {
+  try {
+    return JSON.parse(readFileSync3(path, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function emptyDisableFile() {
+  return { version: 1, sessions: {}, paths: {} };
+}
+function readDisableFile() {
+  const parsed = readJson2(disablePath());
+  if (parsed?.version !== 1) return emptyDisableFile();
+  return {
+    version: 1,
+    sessions: isRecord(parsed.sessions) ? parsed.sessions : {},
+    paths: isRecord(parsed.paths) ? parsed.paths : {}
+  };
+}
+function isRecord(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+function isLive(entry, now) {
+  if (!entry) return false;
+  if (entry.until === null) return true;
+  const until = Date.parse(String(entry.until));
+  return Number.isFinite(until) && until > now;
+}
+function prune(file, now) {
+  const keep = (rec) => Object.fromEntries(Object.entries(rec).filter(([, e]) => isLive(e, now)));
+  return { version: 1, sessions: keep(file.sessions), paths: keep(file.paths) };
+}
+function envDisabled() {
+  const raw = (process.env.SECRETGATE_DISABLE ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+function canonical(p) {
+  let head = resolve(p);
+  const tail = [];
+  for (; ; ) {
+    try {
+      return join3(realpathSync(head), ...[...tail].reverse());
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return resolve(p);
+      tail.push(basename(head));
+      head = parent;
+    }
+  }
+}
+function covers(dir, cwd) {
+  const a = canonical(dir);
+  const b = canonical(cwd);
+  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
+}
+function disableState(ctx = {}) {
+  if (envDisabled()) return { disabled: true, scope: "env" };
+  const now = Date.now();
+  const file = readDisableFile();
+  if (ctx.sessionId) {
+    const entry = file.sessions[ctx.sessionId];
+    if (isLive(entry, now)) return { disabled: true, scope: "session", until: entry?.until ?? void 0, target: ctx.sessionId };
+  }
+  if (ctx.cwd) {
+    for (const [dir, entry] of Object.entries(file.paths)) {
+      if (isLive(entry, now) && covers(dir, ctx.cwd)) return { disabled: true, scope: "path", until: entry.until ?? void 0, target: dir };
+    }
+  }
+  return NOT_DISABLED;
+}
+function activePauses() {
+  const file = prune(readDisableFile(), Date.now());
+  return [
+    ...Object.entries(file.sessions).map(([target, e]) => ({ scope: "session", target, until: e.until })),
+    ...Object.entries(file.paths).map(([target, e]) => ({ scope: "path", target, until: e.until }))
+  ];
+}
+function addPause(req) {
+  const now = Date.now();
+  const file = prune(readDisableFile(), now);
+  const until = req.minutes === null ? null : new Date(now + Math.min(req.minutes, MAX_DISABLE_MINUTES) * 6e4).toISOString();
+  const entry = req.scope === "session" && req.cwd ? { until, cwd: req.cwd } : { until };
+  file[req.scope === "session" ? "sessions" : "paths"][req.target] = entry;
+  writeFileAtomic2(disablePath(), JSON.stringify(file, null, 2), 384);
+  return until;
+}
+function removePause(scope, target) {
+  const file = prune(readDisableFile(), Date.now());
+  const bucket = file[scope === "session" ? "sessions" : "paths"];
+  const keys = scope === "path" ? Object.keys(bucket).filter((d) => covers(d, target)) : target in bucket ? [target] : [];
+  for (const key of keys) delete bucket[key];
+  writeFileAtomic2(disablePath(), JSON.stringify(file, null, 2), 384);
+  return keys;
+}
+function clearPauses() {
+  const before = activePauses().length;
+  writeFileAtomic2(disablePath(), JSON.stringify(emptyDisableFile(), null, 2), 384);
+  return before;
+}
+function readSessionIndex() {
+  const parsed = readJson2(sessionIndexPath());
+  if (parsed?.version !== 1 || !isRecord(parsed.sessions)) return {};
+  return parsed.sessions;
+}
+var bySeqDesc = (a, b) => (b[1]?.seq ?? 0) - (a[1]?.seq ?? 0);
+function recordSession(sessionId, cwd) {
+  if (!sessionId || !cwd) return;
+  try {
+    const sessions = readSessionIndex();
+    if (sessions[sessionId]?.cwd === cwd) return;
+    const nextSeq = Math.max(0, ...Object.values(sessions).map((e) => e?.seq ?? 0)) + 1;
+    sessions[sessionId] = { cwd, lastSeen: (/* @__PURE__ */ new Date()).toISOString(), seq: nextSeq };
+    const trimmed = Object.entries(sessions).sort(bySeqDesc).slice(0, SESSION_INDEX_MAX);
+    writeFileAtomic2(sessionIndexPath(), JSON.stringify({ version: 1, sessions: Object.fromEntries(trimmed) }, null, 2), 384);
+  } catch {
+  }
+}
+function sessionForCwd(cwd) {
+  return Object.entries(readSessionIndex()).filter(([, e]) => typeof e?.cwd === "string" && covers(e.cwd, cwd)).sort(bySeqDesc)[0]?.[0];
+}
+function describeDisable(state) {
+  if (!state.disabled) return "";
+  const where = state.scope === "env" ? "SECRETGATE_DISABLE is set for this process" : state.scope === "session" ? `session ${state.target} is paused` : `directory ${state.target} is paused`;
+  const when = state.until ? ` until ${state.until}` : state.scope === "env" ? "" : " until re-enabled";
+  return `${where}${when}`;
 }
 
 // src/engine/allowlist.ts
@@ -4956,9 +5108,42 @@ function withholdOutput(reason) {
     exit: 0
   };
 }
-async function handleClaudeCode(event, rawStdin) {
+function parseOrUndefined(raw) {
   try {
-    const input = JSON.parse(rawStdin);
+    return JSON.parse(raw);
+  } catch {
+    return void 0;
+  }
+}
+var str = (v) => typeof v === "string" && v.length > 0 ? v : void 0;
+function disabledResult(event, input, state, notices) {
+  if (event === "pre-tool-use") {
+    if (input === null || typeof input !== "object") return DEFER;
+    try {
+      return restoreOnly(input);
+    } catch {
+      return DEFER;
+    }
+  }
+  if (event === "user-prompt-submit") {
+    if (!notices) return PASS;
+    return {
+      stdout: JSON.stringify({
+        systemMessage: `secretgate is DISABLED \u2014 ${describeDisable(state)}. Prompts, tool input and tool output are NOT being scanned. Re-enable with \`secretgate enable\`.`
+      }),
+      exit: 0
+    };
+  }
+  if (event === "post-tool-use") return PASS;
+  return { stdout: "", exit: 2 };
+}
+async function handleClaudeCode(event, rawStdin, opts = {}) {
+  const parsed = parseOrUndefined(rawStdin);
+  if (event === "user-prompt-submit") recordSession(str(parsed?.session_id), str(parsed?.cwd));
+  const state = disableState({ cwd: str(parsed?.cwd), sessionId: str(parsed?.session_id) });
+  if (state.disabled) return disabledResult(event, parsed, state, opts.notices !== false);
+  try {
+    const input = parsed ?? JSON.parse(rawStdin);
     switch (event) {
       case "user-prompt-submit":
         return userPromptSubmit(input);
@@ -5050,7 +5235,6 @@ var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep"]);
 function preToolUse(input) {
   const toolName = normalizeToolName(String(input.tool_name ?? ""));
   const toolInput = input.tool_input ?? {};
-  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : void 0);
   if (READ_TOOLS.has(toolName)) {
     const target = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.path === "string" ? toolInput.path : void 0;
     const hit = target ? sensitivePathMatch(target) : void 0;
@@ -5066,20 +5250,22 @@ function preToolUse(input) {
       return deny(`secretgate: this command touches '${touched}', which looks sensitive. Its content must not enter the model.`);
     }
   }
-  const restoreThis = RESTORE_TOOLS.has(toolName) || toolName === "Bash" && cfg.restoreBash;
-  if (restoreThis) {
-    const vault = new Vault();
-    const { value, changed } = mapStrings(toolInput, (s) => restorePlaceholders(s, vault).text);
-    if (changed) {
-      return {
-        stdout: JSON.stringify({
-          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: value }
-        }),
-        exit: 0
-      };
-    }
-  }
-  return DEFER;
+  return restoreOnly(input);
+}
+function restoreOnly(input) {
+  const toolName = normalizeToolName(String(input.tool_name ?? ""));
+  const toolInput = input.tool_input ?? {};
+  const cfg = loadConfig(str(input.cwd));
+  if (!RESTORE_TOOLS.has(toolName) && !(toolName === "Bash" && cfg.restoreBash)) return DEFER;
+  const vault = new Vault();
+  const { value, changed } = mapStrings(toolInput, (s) => restorePlaceholders(s, vault).text);
+  if (!changed) return DEFER;
+  return {
+    stdout: JSON.stringify({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput: value }
+    }),
+    exit: 0
+  };
 }
 function postToolUse(input) {
   if (!("tool_response" in input)) return PASS;
@@ -5105,20 +5291,20 @@ function postToolUse(input) {
 // src/hooks/codex.ts
 async function handleCodex(event, rawStdin) {
   if (event === "post-tool-use") return { stdout: "", exit: 0 };
-  const r = await handleClaudeCode(event, rawStdin);
+  const r = await handleClaudeCode(event, rawStdin, { notices: false });
   return r === DEFER ? { stdout: "", exit: 0 } : r;
 }
 
 // src/install/allow-store.ts
-import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync as closeSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, renameSync as renameSync2, writeSync as writeSync2 } from "fs";
-import { dirname } from "path";
+import { randomBytes as randomBytes3 } from "crypto";
+import { closeSync as closeSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, renameSync as renameSync3, writeSync as writeSync3 } from "fs";
+import { dirname as dirname2 } from "path";
 function writeAllow(add) {
   const path = allowlistPath();
-  mkdirSync2(dirname(path), { recursive: true, mode: 448 });
+  mkdirSync3(dirname2(path), { recursive: true, mode: 448 });
   let current = {};
   try {
-    current = JSON.parse(readFileSync3(path, "utf8"));
+    current = JSON.parse(readFileSync4(path, "utf8"));
   } catch {
   }
   const merged = {
@@ -5126,20 +5312,20 @@ function writeAllow(add) {
     rules: [.../* @__PURE__ */ new Set([...current.rules ?? [], ...add.rules ?? []])],
     paths: [.../* @__PURE__ */ new Set([...current.paths ?? [], ...add.paths ?? []])]
   };
-  const tmp = `${path}.${process.pid}.${randomBytes2(4).toString("hex")}.tmp`;
-  const fd = openSync2(tmp, "w", 384);
+  const tmp = `${path}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
+  const fd = openSync3(tmp, "w", 384);
   try {
-    writeSync2(fd, JSON.stringify(merged, null, 2));
+    writeSync3(fd, JSON.stringify(merged, null, 2));
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
-  renameSync2(tmp, path);
+  renameSync3(tmp, path);
   return merged;
 }
 
 // src/install/json-merge.ts
-import { randomBytes as randomBytes3 } from "crypto";
-import { closeSync as closeSync3, copyFileSync, existsSync, openSync as openSync3, readFileSync as readFileSync4, renameSync as renameSync3, writeSync as writeSync3 } from "fs";
+import { randomBytes as randomBytes4 } from "crypto";
+import { closeSync as closeSync4, copyFileSync, existsSync, openSync as openSync4, readFileSync as readFileSync5, renameSync as renameSync4, writeSync as writeSync4 } from "fs";
 var SettingsParseError = class extends Error {
   constructor(path, cause) {
     super(`refusing to edit ${path}: it is not valid JSON (${cause}). Fix it manually, then re-run.`);
@@ -5160,7 +5346,7 @@ function editJsonFile(path, mutate) {
   let original;
   let obj = {};
   if (existsSync(path)) {
-    original = readFileSync4(path, "utf8");
+    original = readFileSync5(path, "utf8");
     if (original.trim() !== "") {
       try {
         obj = JSON.parse(original);
@@ -5185,14 +5371,14 @@ function editJsonFile(path, mutate) {
     backupPath = `${path}.secretgate-backup-${stamp}`;
     copyFileSync(path, backupPath);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
-  const fd = openSync3(tmp, "w", 420);
+  const tmp = `${path}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
+  const fd = openSync4(tmp, "w", 420);
   try {
-    writeSync3(fd, next);
+    writeSync4(fd, next);
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
-  renameSync3(tmp, path);
+  renameSync4(tmp, path);
   return { path, changed: true, backupPath };
 }
 
@@ -5259,10 +5445,10 @@ function uninstallClaudeCode({ settingsPath }) {
 }
 
 // src/install/codex.ts
-import { randomBytes as randomBytes4 } from "crypto";
-import { closeSync as closeSync4, copyFileSync as copyFileSync2, existsSync as existsSync2, openSync as openSync4, readFileSync as readFileSync5, renameSync as renameSync4, writeSync as writeSync4 } from "fs";
+import { randomBytes as randomBytes5 } from "crypto";
+import { closeSync as closeSync5, copyFileSync as copyFileSync2, existsSync as existsSync2, openSync as openSync5, readFileSync as readFileSync6, renameSync as renameSync5, writeSync as writeSync5 } from "fs";
 import { homedir as homedir2 } from "os";
-import { join as join3 } from "path";
+import { join as join4 } from "path";
 
 // src/install/toml-touch.ts
 var BLOCK_START = "# >>> secretgate managed >>>";
@@ -5324,7 +5510,7 @@ function disableHooksFeature(content) {
 // src/install/codex.ts
 var MARKER2 = "hook codex";
 function codexHome() {
-  return process.env.CODEX_HOME ?? join3(homedir2(), ".codex");
+  return process.env.CODEX_HOME ?? join4(homedir2(), ".codex");
 }
 function withoutOurGroups2(groups) {
   if (!Array.isArray(groups)) return [];
@@ -5339,17 +5525,17 @@ function writeTextWithBackup(path, content) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync2(path, `${path}.secretgate-backup-${stamp}`);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
-  const fd = openSync4(tmp, "w", 420);
+  const tmp = `${path}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
+  const fd = openSync5(tmp, "w", 420);
   try {
-    writeSync4(fd, content);
+    writeSync5(fd, content);
   } finally {
-    closeSync4(fd);
+    closeSync5(fd);
   }
-  renameSync4(tmp, path);
+  renameSync5(tmp, path);
 }
 function installCodex({ codexDir, command }) {
-  const hooksReport = editJsonFile(join3(codexDir, "hooks.json"), (root) => {
+  const hooksReport = editJsonFile(join4(codexDir, "hooks.json"), (root) => {
     root.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS2) {
       const kept = withoutOurGroups2(root.hooks[event]);
@@ -5360,8 +5546,8 @@ function installCodex({ codexDir, command }) {
       root.hooks[event] = [...kept, group];
     }
   });
-  const configPath = join3(codexDir, "config.toml");
-  const current = existsSync2(configPath) ? readFileSync5(configPath, "utf8") : "";
+  const configPath = join4(codexDir, "config.toml");
+  const current = existsSync2(configPath) ? readFileSync6(configPath, "utf8") : "";
   const edit = enableHooksFeature(current);
   if (edit.changed) writeTextWithBackup(configPath, edit.content);
   return {
@@ -5375,7 +5561,7 @@ function installCodex({ codexDir, command }) {
   };
 }
 function uninstallCodex({ codexDir }) {
-  const hooksPath = join3(codexDir, "hooks.json");
+  const hooksPath = join4(codexDir, "hooks.json");
   let hooksReport = { path: hooksPath, changed: false };
   if (existsSync2(hooksPath)) {
     hooksReport = editJsonFile(hooksPath, (root) => {
@@ -5389,10 +5575,10 @@ function uninstallCodex({ codexDir }) {
       }
     });
   }
-  const configPath = join3(codexDir, "config.toml");
+  const configPath = join4(codexDir, "config.toml");
   let configChanged = false;
   if (existsSync2(configPath)) {
-    const edit = disableHooksFeature(readFileSync5(configPath, "utf8"));
+    const edit = disableHooksFeature(readFileSync6(configPath, "utf8"));
     if (edit.changed) {
       writeTextWithBackup(configPath, edit.content);
       configChanged = true;
@@ -5402,36 +5588,36 @@ function uninstallCodex({ codexDir }) {
 }
 
 // src/install/opencode.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync6, rmSync, writeFileSync } from "fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, readFileSync as readFileSync7, rmSync, writeFileSync } from "fs";
 import { homedir as homedir3 } from "os";
-import { join as join4 } from "path";
+import { join as join5 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
-  return join4(xdg && xdg !== "" ? xdg : join4(homedir3(), ".config"), "opencode");
+  return join5(xdg && xdg !== "" ? xdg : join5(homedir3(), ".config"), "opencode");
 }
 function installOpencode({ configDir, pluginSource }) {
-  const target = join4(configDir, "plugin", "secretgate.js");
-  const content = readFileSync6(pluginSource, "utf8");
+  const target = join5(configDir, "plugin", "secretgate.js");
+  const content = readFileSync7(pluginSource, "utf8");
   if (existsSync3(target)) {
-    const existing = readFileSync6(target, "utf8");
+    const existing = readFileSync7(target, "utf8");
     if (!existing.includes(OWNERSHIP_MARKER)) {
       throw new Error(`refusing to overwrite ${target}: the existing file is not ours (foreign plugin?). Remove it manually first.`);
     }
     if (existing === content) return { path: target, changed: false };
   }
-  mkdirSync3(join4(configDir, "plugin"), { recursive: true });
+  mkdirSync4(join5(configDir, "plugin"), { recursive: true });
   writeFileSync(target, content);
   return { path: target, changed: true };
 }
 function uninstallOpencode({ configDir }) {
   let changed = false;
-  const target = join4(configDir, "plugin", "secretgate.js");
-  if (existsSync3(target) && readFileSync6(target, "utf8").includes(OWNERSHIP_MARKER)) {
+  const target = join5(configDir, "plugin", "secretgate.js");
+  if (existsSync3(target) && readFileSync7(target, "utf8").includes(OWNERSHIP_MARKER)) {
     rmSync(target);
     changed = true;
   }
-  const configPath = join4(configDir, "opencode.json");
+  const configPath = join5(configDir, "opencode.json");
   if (existsSync3(configPath)) {
     const r = editJsonFile(configPath, (cfg) => {
       if (Array.isArray(cfg.plugin)) {
@@ -5461,11 +5647,17 @@ Commands:
   pipe        Read stdin, write it back with secrets redacted to placeholders
   allow       Allowlist a value (hashed), a rule id (--rule) or a path glob (--path)
   vault       Manage the placeholder vault (list | clear) \u2014 never prints secrets
+  disable     Turn the firewall off for this run (--minutes N | --forever, --project, --session <id>)
+  enable      Turn it back on (--project, --session <id>, --all)
   hook        Internal: agent hook entrypoint (secretgate hook <agent> <event>)
 
 Options:
   --version   Print the version
   --help      Print this help
+
+Disabling: \`secretgate disable\` pauses the current agent run for ${DEFAULT_DISABLE_MINUTES} minutes and
+expires on its own. \`SECRETGATE_DISABLE=1 <agent>\` disables one process without
+touching any state. Neither stops placeholder restore, and \`scan\`/\`pipe\` always run.
 `;
 async function readIoStdinCapped(io, cap) {
   if (io.stdin) {
@@ -5508,7 +5700,7 @@ var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
-    const full = join6(root, entry.name);
+    const full = join7(root, entry.name);
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkFiles(full);
     } else if (entry.isFile()) {
@@ -5519,7 +5711,7 @@ function* walkFiles(root) {
 function readTextFile(path) {
   const stats = statSync(path);
   if (stats.size === 0 || stats.size > MAX_FILE_BYTES) return void 0;
-  const buf = readFileSync8(path);
+  const buf = readFileSync9(path);
   const probe = buf.subarray(0, 8192);
   if (probe.includes(0)) return void 0;
   return buf.toString("utf8");
@@ -5558,7 +5750,7 @@ async function cmdScan(args, io) {
     const text = await readIoStdin(io);
     for (const finding of scan(text, { allowlist: cfg.allowlist })) hits.push({ finding, path: "stdin" });
   } else {
-    const root = resolve(target);
+    const root = resolve2(target);
     const stats = statSync(root, { throwIfNoEntry: false });
     if (!stats) {
       io.stderr(`scan: no such file or directory: ${target}
@@ -5665,6 +5857,104 @@ async function cmdVault(args, io) {
   io.stderr("vault: expected 'list' or 'clear'\n");
   return 2;
 }
+function parseDisableFlags(args, io, verb) {
+  const flags = { project: false, minutes: DEFAULT_DISABLE_MINUTES, all: false };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--project") flags.project = true;
+    else if (a === "--all") flags.all = true;
+    else if (a === "--forever") flags.minutes = null;
+    else if (a === "--session") {
+      const id = args[++i];
+      if (!id || id.startsWith("--")) {
+        io.stderr(`${verb}: --session expects a session id
+`);
+        return void 0;
+      }
+      flags.session = id;
+    } else if (a === "--minutes") {
+      const raw = args[++i];
+      const n = Number(raw);
+      if (!raw || !Number.isFinite(n) || n <= 0) {
+        io.stderr(`${verb}: --minutes expects a positive number
+`);
+        return void 0;
+      }
+      flags.minutes = Math.min(Math.floor(n), MAX_DISABLE_MINUTES);
+    } else {
+      io.stderr(`unknown option: ${a}
+`);
+      return void 0;
+    }
+  }
+  if (flags.project && flags.session) {
+    io.stderr(`${verb}: --project and --session are different scopes; pass only one
+`);
+    return void 0;
+  }
+  return flags;
+}
+async function cmdDisable(args, io) {
+  const flags = parseDisableFlags(args, io, "disable");
+  if (!flags) return 2;
+  if (flags.all) {
+    io.stderr("disable: --all only applies to `secretgate enable`\n");
+    return 2;
+  }
+  const cwd = process.cwd();
+  let scope;
+  let target;
+  if (flags.project) {
+    scope = "path";
+    target = cwd;
+  } else {
+    const session = flags.session ?? sessionForCwd(cwd);
+    scope = session ? "session" : "path";
+    target = session ?? cwd;
+  }
+  const until = addPause({ scope, target, minutes: flags.minutes, cwd });
+  const what = scope === "session" ? `session ${target}` : `directory ${target}`;
+  io.stdout(`secretgate: DISABLED for ${what} ${until ? `until ${until}` : "until you re-enable it"}
+`);
+  io.stdout("secretgate: prompts, tool input and tool output are no longer scanned. Placeholder restore still runs, and `scan`/`pipe` still work.\n");
+  io.stdout(`secretgate: re-enable with \`secretgate enable${scope === "path" ? " --project" : flags.session ? ` --session ${target}` : ""}\`
+`);
+  if (scope === "session" && !flags.session)
+    io.stdout("secretgate: this pause covers that one agent run \u2014 restarting the agent starts a new, protected session.\n");
+  return 0;
+}
+async function cmdEnable(args, io) {
+  const flags = parseDisableFlags(args, io, "enable");
+  if (!flags) return 2;
+  if (flags.all) {
+    const cleared = clearPauses();
+    io.stdout(`secretgate: re-enabled everywhere (${cleared} pause(s) cleared)
+`);
+    return 0;
+  }
+  const cwd = process.cwd();
+  const targets = [];
+  if (flags.project) {
+    targets.push(["path", cwd]);
+  } else if (flags.session) {
+    targets.push(["session", flags.session]);
+  } else {
+    const session = sessionForCwd(cwd);
+    if (session) targets.push(["session", session]);
+    targets.push(["path", cwd]);
+  }
+  const removed = targets.flatMap(([scope, target]) => removePause(scope, target).map((cleared) => [scope, cleared]));
+  for (const [scope, cleared] of removed) io.stdout(`secretgate: re-enabled for ${scope === "session" ? `session ${cleared}` : `directory ${cleared}`}
+`);
+  if (removed.length === 0) {
+    io.stdout("secretgate: nothing was disabled here \u2014 already protected\n");
+    for (const p of activePauses()) io.stdout(`secretgate: note \u2014 ${p.scope} ${p.target} is still paused (\`secretgate enable --all\` clears everything)
+`);
+  }
+  if (envDisabled())
+    io.stderr("secretgate: WARNING \u2014 SECRETGATE_DISABLE is set in this environment; unset it (and restart the agent) or secretgate stays off.\n");
+  return 0;
+}
 var HARD_READ_CAP = 64 * 1024 * 1024;
 var SCAN_CAP = 2 * 1024 * 1024;
 async function cmdHook(args, io) {
@@ -5692,8 +5982,8 @@ async function cmdHook(args, io) {
 function installedCliCommand() {
   const self = fileURLToPath(import.meta.url);
   if (!self.endsWith(".mjs")) return `node "${self}"`;
-  const target = join6(defaultVaultHome(), "bin", "secretgate.mjs");
-  mkdirSync4(dirname2(target), { recursive: true, mode: 448 });
+  const target = join7(defaultVaultHome(), "bin", "secretgate.mjs");
+  mkdirSync5(dirname3(target), { recursive: true, mode: 448 });
   copyFileSync3(self, target);
   chmodSync(target, 493);
   return `node "${target}"`;
@@ -5719,21 +6009,21 @@ function parseAgentFlags(args, io) {
   return flags;
 }
 function opencodePluginSource() {
-  const selfDir = dirname2(fileURLToPath(import.meta.url));
-  const candidates = [join6(selfDir, "secretgate-opencode.mjs"), join6(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const selfDir = dirname3(fileURLToPath(import.meta.url));
+  const candidates = [join7(selfDir, "secretgate-opencode.mjs"), join7(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
   const found = candidates.find((c) => existsSync5(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
   return found;
 }
 function claudeSettingsPath(project) {
-  return project ? join6(process.cwd(), ".claude", "settings.json") : join6(homedir4(), ".claude", "settings.json");
+  return project ? join7(process.cwd(), ".claude", "settings.json") : join7(homedir4(), ".claude", "settings.json");
 }
 function projectSettingsAliasesGlobal() {
   const canon = (p) => {
     try {
-      return realpathSync(p);
+      return realpathSync2(p);
     } catch {
-      return resolve(p);
+      return resolve2(p);
     }
   };
   return canon(process.cwd()) === canon(homedir4());
@@ -5758,7 +6048,7 @@ function installForAgents(flags, io) {
       if (flags.project && projectSettingsAliasesGlobal()) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
-      mkdirSync4(dirname2(settingsPath), { recursive: true });
+      mkdirSync5(dirname3(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
@@ -5779,7 +6069,7 @@ function installForAgents(flags, io) {
   if (flags.codex) {
     outcome.installed.codex = attempt("codex", () => {
       const dir = codexHome();
-      mkdirSync4(dir, { recursive: true });
+      mkdirSync5(dir, { recursive: true });
       const r = installCodex({ codexDir: dir, command: installedCliCommand() });
       io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
 `);
@@ -5801,19 +6091,20 @@ async function cmdInstall(args, io) {
 }
 function detectAgents() {
   return {
-    claudeCode: existsSync5(join6(homedir4(), ".claude")),
+    claudeCode: existsSync5(join7(homedir4(), ".claude")),
     codex: existsSync5(codexHome()),
     opencode: existsSync5(opencodeConfigDir()),
     project: false
   };
 }
 function verifyClaudeCodeWiring(io) {
-  const pinned = join6(defaultVaultHome(), "bin", "secretgate.mjs");
+  const pinned = join7(defaultVaultHome(), "bin", "secretgate.mjs");
   const self = fileURLToPath(import.meta.url);
   const bundle = existsSync5(pinned) ? pinned : self;
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join6(tmpdir2(), "secretgate-verify-"));
+  const tmpHome = mkdtempSync2(join7(tmpdir2(), "secretgate-verify-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
+  delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
     const out = execFileSync("node", [bundle, "hook", "claude-code", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
     return out.trim() ? JSON.parse(out) : {};
@@ -5951,7 +6242,7 @@ async function cmdUninstall(args, io) {
 }
 function readJsonSafe(path) {
   try {
-    return JSON.parse(readFileSync8(path, "utf8"));
+    return JSON.parse(readFileSync9(path, "utf8"));
   } catch {
     return void 0;
   }
@@ -5969,9 +6260,20 @@ async function cmdStatus(_args, io) {
   io.stdout(`secretgate ${VERSION}
 
 `);
-  const pinned = join6(defaultVaultHome(), "bin", "secretgate.mjs");
+  const here = disableState({ cwd: process.cwd(), sessionId: sessionForCwd(process.cwd()) });
+  if (here.disabled) {
+    io.stdout(`!! DISABLED here \u2014 ${describeDisable(here)}
+`);
+    io.stdout(`!! nothing is being scanned here. Re-enable: ${here.scope === "env" ? "unset SECRETGATE_DISABLE" : "`secretgate enable`"}
+`);
+  }
+  const pauses = activePauses().filter((p) => !(p.scope === here.scope && p.target === here.target));
+  for (const p of pauses) io.stdout(`!! also paused: ${p.scope} ${p.target}${p.until ? ` until ${p.until}` : " (no expiry)"}
+`);
+  if (here.disabled || pauses.length > 0) io.stdout("\n");
+  const pinned = join7(defaultVaultHome(), "bin", "secretgate.mjs");
   if (existsSync5(pinned)) {
-    const pinnedVersion = /VERSION = "([^"]+)"/.exec(readFileSync8(pinned, "utf8"))?.[1] ?? "unknown";
+    const pinnedVersion = /VERSION = "([^"]+)"/.exec(readFileSync9(pinned, "utf8"))?.[1] ?? "unknown";
     io.stdout(`bundle    pinned at ${pinned} (v${pinnedVersion}${pinnedVersion !== VERSION ? ` \u2014 CLI is v${VERSION}, re-run install to refresh` : ""})
 `);
   } else {
@@ -5987,11 +6289,11 @@ async function cmdStatus(_args, io) {
 `);
   }
   io.stdout("claude-code limitation: @file mentions bypass tool hooks (deny rules are the only cover there).\n");
-  const codexHooks = readJsonSafe(join6(codexHome(), "hooks.json"));
+  const codexHooks = readJsonSafe(join7(codexHome(), "hooks.json"));
   const codexWired = hookWireCount(codexHooks, "hook codex");
   let codexFeature = false;
   try {
-    codexFeature = /^\s*hooks\s*=\s*true\b/m.test(readFileSync8(join6(codexHome(), "config.toml"), "utf8"));
+    codexFeature = /^\s*hooks\s*=\s*true\b/m.test(readFileSync9(join7(codexHome(), "config.toml"), "utf8"));
   } catch {
   }
   io.stdout(
@@ -5999,8 +6301,8 @@ async function cmdStatus(_args, io) {
 `
   );
   if (codexWired > 0) io.stdout("codex     limitations: interactive sessions only (`codex exec` bug); no tool-output redaction upstream yet.\n");
-  const ocPlugin = join6(opencodeConfigDir(), "plugin", "secretgate.js");
-  const ocConfig = readJsonSafe(join6(opencodeConfigDir(), "opencode.json"));
+  const ocPlugin = join7(opencodeConfigDir(), "plugin", "secretgate.js");
+  const ocConfig = readJsonSafe(join7(opencodeConfigDir(), "opencode.json"));
   const ocPinned = Array.isArray(ocConfig?.plugin) && ocConfig.plugin.some((p) => /^secretgate@/.test(p));
   io.stdout(`opencode  ${existsSync5(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}
 `);
@@ -6012,7 +6314,7 @@ async function cmdStatus(_args, io) {
   const entries = vault.list();
   io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
   try {
-    const mode = statSync(join6(defaultVaultHome(), "vault.json")).mode & 511;
+    const mode = statSync(join7(defaultVaultHome(), "vault.json")).mode & 511;
     io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
 `);
   } catch {
@@ -6026,6 +6328,8 @@ var commands = {
   pipe: cmdPipe,
   allow: cmdAllow,
   vault: cmdVault,
+  disable: cmdDisable,
+  enable: cmdEnable,
   install: cmdInstall,
   uninstall: cmdUninstall,
   status: cmdStatus,
@@ -6060,7 +6364,7 @@ function isProcessEntrypoint() {
   if (!argv1) return false;
   const selfPath = fileURLToPath(import.meta.url);
   try {
-    return realpathSync(selfPath) === realpathSync(argv1);
+    return realpathSync2(selfPath) === realpathSync2(argv1);
   } catch {
     return import.meta.url === pathToFileURL(argv1).href;
   }
