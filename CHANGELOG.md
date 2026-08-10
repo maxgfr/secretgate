@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.3.0](https://github.com/maxgfr/secretgate/compare/v1.2.0...v1.3.0) (2026-08-10)
+
+
+### Features
+
+* **disable:** session-lifetime scope — off for this run, auto re-enabled next session ([#4](https://github.com/maxgfr/secretgate/issues/4)) ([581aceb](https://github.com/maxgfr/secretgate/commit/581aceb658ba0f55b20ea0e7446bb0da253b18ab))
+
 # [1.2.0](https://github.com/maxgfr/secretgate/compare/v1.1.9...v1.2.0) (2026-08-10)
 
 
