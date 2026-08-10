@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -172,6 +172,57 @@ describe("a corrupt or hostile store never disables the firewall", () => {
   });
 });
 
+describe("session-lifetime pause", () => {
+  it("disables the run with no clock and reports the lifetime scope", () => {
+    recordSession("s1", work);
+    const until = addPause({ scope: "session", target: "s1", minutes: null, cwd: work, lifetime: true });
+    expect(until).toBeNull();
+    const st = disableState({ cwd: work, sessionId: "s1" });
+    expect(st).toMatchObject({ disabled: true, scope: "session", target: "s1", lifetime: true });
+    expect(st.until).toBeUndefined();
+    // a new session (a new conversation) is protected without waiting on a timer
+    expect(disableState({ cwd: work, sessionId: "s2" }).disabled).toBe(false);
+  });
+
+  it("carries no wall-clock expiry even when minutes are passed", () => {
+    recordSession("s1", work);
+    expect(addPause({ scope: "session", target: "s1", minutes: 60, cwd: work, lifetime: true })).toBeNull();
+  });
+
+  it("is garbage-collected once its session leaves the recent index (the run ended)", () => {
+    recordSession("s1", work);
+    addPause({ scope: "session", target: "s1", minutes: null, cwd: work, lifetime: true });
+    expect(activePauses().some((p) => p.target === "s1")).toBe(true);
+    // simulate the run ending: its id is no longer among the recent sessions
+    writeFileSync(join(home, "sessions.json"), JSON.stringify({ version: 1, sessions: {} }));
+    expect(activePauses().some((p) => p.target === "s1")).toBe(false);
+    // and the next write compacts it out of the store for good
+    addPause({ scope: "path", target: work, minutes: 60 });
+    expect(JSON.parse(readFileSync(disabledPath(), "utf8")).sessions.s1).toBeUndefined();
+  });
+
+  it("keeps an explicit indefinite session pause even when the session is gone (back-compat)", () => {
+    // lifetime NOT set: the old `--session <id> --forever` behaviour — held until
+    // the user re-enables, never collected by the session index.
+    addPause({ scope: "session", target: "ghost", minutes: null, cwd: work });
+    writeFileSync(join(home, "sessions.json"), JSON.stringify({ version: 1, sessions: {} }));
+    expect(activePauses().some((p) => p.target === "ghost")).toBe(true);
+  });
+
+  it("marks the lifetime scope in activePauses", () => {
+    recordSession("s1", work);
+    addPause({ scope: "session", target: "s1", minutes: null, cwd: work, lifetime: true });
+    expect(activePauses().find((p) => p.target === "s1")?.lifetime).toBe(true);
+  });
+
+  it("never disables a fresh session because an uncollected orphan lingers", () => {
+    // Even if an orphan is still on disk (no write has compacted it yet), the
+    // hook matches only the CURRENT id, so a new run is safe.
+    addPause({ scope: "session", target: "old-run", minutes: null, cwd: work, lifetime: true });
+    expect(disableState({ cwd: work, sessionId: "brand-new" }).disabled).toBe(false);
+  });
+});
+
 describe("session index", () => {
   it("maps a session to the directory it ran in, most recent first", () => {
     recordSession("s1", work);
@@ -207,5 +258,6 @@ describe("describeDisable", () => {
       "session s1 is paused until 2030-01-01T00:00:00.000Z",
     );
     expect(describeDisable({ disabled: true, scope: "path", target: "/proj" })).toBe("directory /proj is paused until re-enabled");
+    expect(describeDisable({ disabled: true, scope: "session", target: "s1", lifetime: true })).toBe("session s1 is paused until the session ends");
   });
 });

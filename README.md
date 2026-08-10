@@ -122,6 +122,7 @@ incident, a fixtures repo. Three scopes, narrowest first:
 ```bash
 SECRETGATE_DISABLE=1 claude       # one process. No state, dies with the shell.
 secretgate disable                # this agent run, 60 min (--minutes N | --forever)
+secretgate disable --session      # this agent run, for its whole lifetime (no timer)
 secretgate disable --project      # this directory tree, until `enable --project`
 secretgate enable                 # back on   (--all clears every pause)
 ```
@@ -130,6 +131,12 @@ secretgate enable                 # back on   (--all clears every pause)
 directory — another session in the same repo stays protected. Run it from the
 agent's own shell to pause exactly that run. A pause **expires on its own**, and
 `secretgate status` leads with a loud banner while any of them is active.
+
+`secretgate disable --session` pauses that same run for the **session's
+lifetime** instead of a fixed 60 minutes: no clock to wait on, and it is
+collected the moment the run ends (its id leaves the recent-session index), so a
+**new conversation is protected automatically** and no stale pause is left
+behind. `secretgate enable --session` turns it back on now.
 
 Two things a disable never switches off: **placeholder restore** (otherwise the
 agent would write dead `SECRETGATE_…` tokens into your files) and the standalone
@@ -150,8 +157,8 @@ secretgate scan       <file|dir|-> [--json] [--exclude <glob>]   exit 1 on findi
 secretgate pipe       stdin -> stdout, secrets redacted
 secretgate allow      <value> | --rule <id> | --path <glob>
 secretgate vault      list | clear
-secretgate disable    [--minutes N | --forever] [--project] [--session <id>]
-secretgate enable     [--project] [--session <id>] [--all]
+secretgate disable    [--minutes N | --forever | --session] [--project] [--session <id>]
+secretgate enable     [--project] [--session [id]] [--all]
 secretgate hook       <agent> <event>        (internal hook entrypoint)
 ```
 

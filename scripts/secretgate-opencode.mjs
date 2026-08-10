@@ -210,7 +210,8 @@ function disableState(ctx = {}) {
   const file = readDisableFile();
   if (ctx.sessionId) {
     const entry = file.sessions[ctx.sessionId];
-    if (isLive(entry, now)) return { disabled: true, scope: "session", until: entry?.until ?? void 0, target: ctx.sessionId };
+    if (isLive(entry, now))
+      return { disabled: true, scope: "session", until: entry?.until ?? void 0, target: ctx.sessionId, ...entry?.lifetime ? { lifetime: true } : {} };
   }
   if (ctx.cwd) {
     for (const [dir, entry] of Object.entries(file.paths)) {
