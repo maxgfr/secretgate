@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.2.0](https://github.com/maxgfr/secretgate/compare/v1.1.9...v1.2.0) (2026-08-10)
+
+
+### Features
+
+* **cli:** disable the firewall for one run, three scopes, always time-bounded ([7e722d6](https://github.com/maxgfr/secretgate/commit/7e722d696107fad7e4c3ab882148f7dca997db2f))
+
 ## [1.1.9](https://github.com/maxgfr/secretgate/compare/v1.1.8...v1.1.9) (2026-07-25)
 
 
