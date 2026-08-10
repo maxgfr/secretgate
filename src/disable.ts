@@ -14,6 +14,11 @@ import { defaultVaultHome } from "./vault/vault.js";
 //   session `secretgate disable`            — one agent run, keyed by session id
 //   path    `secretgate disable --project`  — one directory tree
 //
+// The session scope is time-bounded by default (a forgotten `disable` heals
+// itself). `secretgate disable --session` makes it SESSION-LIFETIME instead: no
+// clock, but collected the moment the run leaves the recent-session index, so a
+// new session is protected with nothing to wait on and no stale state left.
+//
 // Placeholder RESTORE is never disabled by any of them: a disabled run must not
 // leave dead SECRETGATE_ placeholders behind in files.
 
@@ -26,6 +31,9 @@ export interface DisableState {
   until?: string;
   /** session id or directory the match came from — for status and messages */
   target?: string;
+  /** True when a session pause is bounded by the session's lifetime rather than a
+   *  clock — it ends when the run ends, not at a timestamp. */
+  lifetime?: boolean;
 }
 
 const NOT_DISABLED: DisableState = { disabled: false };
@@ -34,6 +42,12 @@ interface PauseEntry {
   /** ISO timestamp, or null for "until explicitly re-enabled" */
   until: string | null;
   cwd?: string;
+  /** Session scope only: this pause lasts for the SESSION's lifetime. It carries
+   *  no wall-clock expiry (`until` is null) and is garbage-collected the moment
+   *  its session drops out of the recent-session index — i.e. the agent run
+   *  ended — so a new session is protected again with no timer to wait on and no
+   *  stale entry left behind. Absent on every other pause (back-compat). */
+  lifetime?: true;
 }
 
 interface DisableFile {
@@ -122,10 +136,28 @@ function isLive(entry: PauseEntry | undefined, now: number): boolean {
 }
 
 // Drop everything that has already expired, so the store stays a truthful
-// picture of what is currently off (status reads it directly).
+// picture of what is currently off (status reads it directly). Session-lifetime
+// pauses have no clock to expire on, so they are collected the moment their
+// session leaves the recent index — the "the agent run ended" signal. Only
+// lifetime entries are collected this way: an explicit `--session <id> --forever`
+// pause is kept until the user re-enables it, exactly as before.
+//
+// Called only from the write/status paths (addPause/removePause/activePauses),
+// never from the hook's `disableState`, so reading the session index here costs
+// nothing on the hot path — and `disableState` matches only the CURRENT session
+// id, which a lifetime orphan (a DIFFERENT, ended session) can never equal, so a
+// not-yet-collected orphan can never disable a live session.
 function prune(file: DisableFile, now: number): DisableFile {
-  const keep = (rec: Record<string, PauseEntry>): Record<string, PauseEntry> => Object.fromEntries(Object.entries(rec).filter(([, e]) => isLive(e, now)));
-  return { version: 1, sessions: keep(file.sessions), paths: keep(file.paths) };
+  const keepPaths = Object.fromEntries(Object.entries(file.paths).filter(([, e]) => isLive(e, now)));
+  const live = liveSessionIds();
+  const keepSessions = Object.fromEntries(Object.entries(file.sessions).filter(([id, e]) => isLive(e, now) && !(e.lifetime === true && !live.has(id))));
+  return { version: 1, sessions: keepSessions, paths: keepPaths };
+}
+
+/** Session ids the index still remembers — the "these runs are still around"
+ *  set that session-lifetime pauses are garbage-collected against. */
+function liveSessionIds(): Set<string> {
+  return new Set(Object.keys(readSessionIndex()));
 }
 
 export function envDisabled(): boolean {
@@ -170,7 +202,8 @@ export function disableState(ctx: { cwd?: string; sessionId?: string } = {}): Di
 
   if (ctx.sessionId) {
     const entry = file.sessions[ctx.sessionId];
-    if (isLive(entry, now)) return { disabled: true, scope: "session", until: entry?.until ?? undefined, target: ctx.sessionId };
+    if (isLive(entry, now))
+      return { disabled: true, scope: "session", until: entry?.until ?? undefined, target: ctx.sessionId, ...(entry?.lifetime ? { lifetime: true } : {}) };
   }
   if (ctx.cwd) {
     for (const [dir, entry] of Object.entries(file.paths)) {
@@ -181,10 +214,10 @@ export function disableState(ctx: { cwd?: string; sessionId?: string } = {}): Di
 }
 
 /** Everything currently disabled, for `secretgate status`. */
-export function activePauses(): Array<{ scope: "session" | "path"; target: string; until: string | null }> {
+export function activePauses(): Array<{ scope: "session" | "path"; target: string; until: string | null; lifetime?: boolean }> {
   const file = prune(readDisableFile(), Date.now());
   return [
-    ...Object.entries(file.sessions).map(([target, e]) => ({ scope: "session" as const, target, until: e.until })),
+    ...Object.entries(file.sessions).map(([target, e]) => ({ scope: "session" as const, target, until: e.until, lifetime: e.lifetime === true })),
     ...Object.entries(file.paths).map(([target, e]) => ({ scope: "path" as const, target, until: e.until })),
   ];
 }
@@ -195,14 +228,22 @@ export interface PauseRequest {
   /** null => until explicitly re-enabled */
   minutes: number | null;
   cwd?: string;
+  /** Session scope only: make this a session-lifetime pause (see
+   *  `PauseEntry.lifetime`). Forces an indefinite `until` and lets the pause be
+   *  collected once the session ends. Ignored for the path scope. */
+  lifetime?: boolean;
 }
 
 /** Write a pause. Returns the ISO expiry, or null for an indefinite one. */
 export function addPause(req: PauseRequest): string | null {
   const now = Date.now();
   const file = prune(readDisableFile(), now);
-  const until = req.minutes === null ? null : new Date(now + Math.min(req.minutes, MAX_DISABLE_MINUTES) * 60_000).toISOString();
+  const lifetime = req.scope === "session" && req.lifetime === true;
+  // A lifetime pause is bounded by the session, not the clock, so it never carries
+  // a wall-clock expiry regardless of what minutes were passed.
+  const until = lifetime || req.minutes === null ? null : new Date(now + Math.min(req.minutes, MAX_DISABLE_MINUTES) * 60_000).toISOString();
   const entry: PauseEntry = req.scope === "session" && req.cwd ? { until, cwd: req.cwd } : { until };
+  if (lifetime) entry.lifetime = true;
   file[req.scope === "session" ? "sessions" : "paths"][req.target] = entry;
   writeFileAtomic(disablePath(), JSON.stringify(file, null, 2), 0o600);
   return until;
@@ -274,6 +315,6 @@ export function describeDisable(state: DisableState): string {
       : state.scope === "session"
         ? `session ${state.target} is paused`
         : `directory ${state.target} is paused`;
-  const when = state.until ? ` until ${state.until}` : state.scope === "env" ? "" : " until re-enabled";
+  const when = state.until ? ` until ${state.until}` : state.lifetime ? " until the session ends" : state.scope === "env" ? "" : " until re-enabled";
   return `${where}${when}`;
 }

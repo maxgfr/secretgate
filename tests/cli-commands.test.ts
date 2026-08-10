@@ -209,6 +209,38 @@ describe("secretgate disable + enable", () => {
     expect(Date.parse(disableState({ cwd: work }).until!) - Date.now()).toBeLessThanOrEqual(1440 * 60_000 + 5_000);
   });
 
+  it("--session pauses THIS run for its lifetime — no timer, a new session is protected", async () => {
+    process.chdir(work);
+    recordSession("run-77", work);
+    const { io, text } = capture();
+    expect(await run(["disable", "--session"], io)).toBe(0);
+    expect(text()).toContain("DISABLED for session run-77 until this session ends");
+    expect(text()).toContain("a new conversation");
+    const st = disableState({ cwd: work, sessionId: "run-77" });
+    expect(st).toMatchObject({ disabled: true, scope: "session", lifetime: true });
+    expect(st.until).toBeUndefined();
+    // a new conversation (new session id) is protected without waiting on a timer
+    expect(disableState({ cwd: work, sessionId: "fresh" }).disabled).toBe(false);
+  });
+
+  it("--session with no run seen here refuses rather than silently pausing the directory", async () => {
+    process.chdir(work);
+    const { io, errText } = capture();
+    expect(await run(["disable", "--session"], io)).toBe(2);
+    expect(errText()).toContain("no agent run has been seen");
+    expect(disableState({ cwd: work }).disabled).toBe(false);
+  });
+
+  it("enable --session re-protects this run", async () => {
+    process.chdir(work);
+    recordSession("run-77", work);
+    await run(["disable", "--session"], capture().io);
+    expect(disableState({ cwd: work, sessionId: "run-77" }).disabled).toBe(true);
+    const { io } = capture();
+    expect(await run(["enable", "--session"], io)).toBe(0);
+    expect(disableState({ cwd: work, sessionId: "run-77" }).disabled).toBe(false);
+  });
+
   it("rejects bad flags instead of half-disabling", async () => {
     const cases = [
       ["disable", "--minutes", "abc"],

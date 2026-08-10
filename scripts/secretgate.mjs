@@ -277,8 +277,13 @@ function isLive(entry, now) {
   return Number.isFinite(until) && until > now;
 }
 function prune(file, now) {
-  const keep = (rec) => Object.fromEntries(Object.entries(rec).filter(([, e]) => isLive(e, now)));
-  return { version: 1, sessions: keep(file.sessions), paths: keep(file.paths) };
+  const keepPaths = Object.fromEntries(Object.entries(file.paths).filter(([, e]) => isLive(e, now)));
+  const live = liveSessionIds();
+  const keepSessions = Object.fromEntries(Object.entries(file.sessions).filter(([id, e]) => isLive(e, now) && !(e.lifetime === true && !live.has(id))));
+  return { version: 1, sessions: keepSessions, paths: keepPaths };
+}
+function liveSessionIds() {
+  return new Set(Object.keys(readSessionIndex()));
 }
 function envDisabled() {
   const raw = (process.env.SECRETGATE_DISABLE ?? "").trim().toLowerCase();
@@ -309,7 +314,8 @@ function disableState(ctx = {}) {
   const file = readDisableFile();
   if (ctx.sessionId) {
     const entry = file.sessions[ctx.sessionId];
-    if (isLive(entry, now)) return { disabled: true, scope: "session", until: entry?.until ?? void 0, target: ctx.sessionId };
+    if (isLive(entry, now))
+      return { disabled: true, scope: "session", until: entry?.until ?? void 0, target: ctx.sessionId, ...entry?.lifetime ? { lifetime: true } : {} };
   }
   if (ctx.cwd) {
     for (const [dir, entry] of Object.entries(file.paths)) {
@@ -321,15 +327,17 @@ function disableState(ctx = {}) {
 function activePauses() {
   const file = prune(readDisableFile(), Date.now());
   return [
-    ...Object.entries(file.sessions).map(([target, e]) => ({ scope: "session", target, until: e.until })),
+    ...Object.entries(file.sessions).map(([target, e]) => ({ scope: "session", target, until: e.until, lifetime: e.lifetime === true })),
     ...Object.entries(file.paths).map(([target, e]) => ({ scope: "path", target, until: e.until }))
   ];
 }
 function addPause(req) {
   const now = Date.now();
   const file = prune(readDisableFile(), now);
-  const until = req.minutes === null ? null : new Date(now + Math.min(req.minutes, MAX_DISABLE_MINUTES) * 6e4).toISOString();
+  const lifetime = req.scope === "session" && req.lifetime === true;
+  const until = lifetime || req.minutes === null ? null : new Date(now + Math.min(req.minutes, MAX_DISABLE_MINUTES) * 6e4).toISOString();
   const entry = req.scope === "session" && req.cwd ? { until, cwd: req.cwd } : { until };
+  if (lifetime) entry.lifetime = true;
   file[req.scope === "session" ? "sessions" : "paths"][req.target] = entry;
   writeFileAtomic2(disablePath(), JSON.stringify(file, null, 2), 384);
   return until;
@@ -371,7 +379,7 @@ function sessionForCwd(cwd) {
 function describeDisable(state) {
   if (!state.disabled) return "";
   const where = state.scope === "env" ? "SECRETGATE_DISABLE is set for this process" : state.scope === "session" ? `session ${state.target} is paused` : `directory ${state.target} is paused`;
-  const when = state.until ? ` until ${state.until}` : state.scope === "env" ? "" : " until re-enabled";
+  const when = state.until ? ` until ${state.until}` : state.lifetime ? " until the session ends" : state.scope === "env" ? "" : " until re-enabled";
   return `${where}${when}`;
 }
 
@@ -5647,8 +5655,8 @@ Commands:
   pipe        Read stdin, write it back with secrets redacted to placeholders
   allow       Allowlist a value (hashed), a rule id (--rule) or a path glob (--path)
   vault       Manage the placeholder vault (list | clear) \u2014 never prints secrets
-  disable     Turn the firewall off for this run (--minutes N | --forever, --project, --session <id>)
-  enable      Turn it back on (--project, --session <id>, --all)
+  disable     Turn the firewall off for this run (--minutes N | --forever | --session, --project, --session <id>)
+  enable      Turn it back on (--project, --session [id], --all)
   hook        Internal: agent hook entrypoint (secretgate hook <agent> <event>)
 
 Options:
@@ -5656,8 +5664,10 @@ Options:
   --help      Print this help
 
 Disabling: \`secretgate disable\` pauses the current agent run for ${DEFAULT_DISABLE_MINUTES} minutes and
-expires on its own. \`SECRETGATE_DISABLE=1 <agent>\` disables one process without
-touching any state. Neither stops placeholder restore, and \`scan\`/\`pipe\` always run.
+expires on its own. \`secretgate disable --session\` pauses it for the session's
+LIFETIME instead \u2014 off until this run ends, then a new session is protected with
+no timer to wait on. \`SECRETGATE_DISABLE=1 <agent>\` disables one process without
+touching any state. None stop placeholder restore, and \`scan\`/\`pipe\` always run.
 `;
 async function readIoStdinCapped(io, cap) {
   if (io.stdin) {
@@ -5858,20 +5868,21 @@ async function cmdVault(args, io) {
   return 2;
 }
 function parseDisableFlags(args, io, verb) {
-  const flags = { project: false, minutes: DEFAULT_DISABLE_MINUTES, all: false };
+  const flags = { project: false, sessionCurrent: false, minutes: DEFAULT_DISABLE_MINUTES, minutesExplicit: false, all: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--project") flags.project = true;
     else if (a === "--all") flags.all = true;
-    else if (a === "--forever") flags.minutes = null;
-    else if (a === "--session") {
-      const id = args[++i];
-      if (!id || id.startsWith("--")) {
-        io.stderr(`${verb}: --session expects a session id
-`);
-        return void 0;
+    else if (a === "--forever") {
+      flags.minutes = null;
+      flags.minutesExplicit = true;
+    } else if (a === "--session") {
+      const id = args[i + 1];
+      if (!id || id.startsWith("--")) flags.sessionCurrent = true;
+      else {
+        flags.session = id;
+        i++;
       }
-      flags.session = id;
     } else if (a === "--minutes") {
       const raw = args[++i];
       const n = Number(raw);
@@ -5881,13 +5892,14 @@ function parseDisableFlags(args, io, verb) {
         return void 0;
       }
       flags.minutes = Math.min(Math.floor(n), MAX_DISABLE_MINUTES);
+      flags.minutesExplicit = true;
     } else {
       io.stderr(`unknown option: ${a}
 `);
       return void 0;
     }
   }
-  if (flags.project && flags.session) {
+  if (flags.project && (flags.session || flags.sessionCurrent)) {
     io.stderr(`${verb}: --project and --session are different scopes; pass only one
 `);
     return void 0;
@@ -5904,7 +5916,17 @@ async function cmdDisable(args, io) {
   const cwd = process.cwd();
   let scope;
   let target;
-  if (flags.project) {
+  let lifetime = false;
+  if (flags.sessionCurrent) {
+    const session = sessionForCwd(cwd);
+    if (!session) {
+      io.stderr("disable: no agent run has been seen in this directory yet \u2014 run this from inside your agent (once a prompt has fired), or use --project.\n");
+      return 2;
+    }
+    scope = "session";
+    target = session;
+    lifetime = !flags.minutesExplicit;
+  } else if (flags.project) {
     scope = "path";
     target = cwd;
   } else {
@@ -5912,14 +5934,16 @@ async function cmdDisable(args, io) {
     scope = session ? "session" : "path";
     target = session ?? cwd;
   }
-  const until = addPause({ scope, target, minutes: flags.minutes, cwd });
+  const until = addPause({ scope, target, minutes: flags.minutes, cwd, lifetime });
   const what = scope === "session" ? `session ${target}` : `directory ${target}`;
-  io.stdout(`secretgate: DISABLED for ${what} ${until ? `until ${until}` : "until you re-enable it"}
+  const bound = until ? `until ${until}` : lifetime ? "until this session ends" : "until you re-enable it";
+  io.stdout(`secretgate: DISABLED for ${what} ${bound}
 `);
   io.stdout("secretgate: prompts, tool input and tool output are no longer scanned. Placeholder restore still runs, and `scan`/`pipe` still work.\n");
-  io.stdout(`secretgate: re-enable with \`secretgate enable${scope === "path" ? " --project" : flags.session ? ` --session ${target}` : ""}\`
+  io.stdout(`secretgate: re-enable with \`secretgate enable${scope === "path" ? " --project" : flags.session ? ` --session ${target}` : " --session"}\`
 `);
-  if (scope === "session" && !flags.session)
+  if (lifetime) io.stdout("secretgate: this pause covers ONLY this run \u2014 a new session (a new conversation) is protected automatically.\n");
+  else if (scope === "session" && !flags.session)
     io.stdout("secretgate: this pause covers that one agent run \u2014 restarting the agent starts a new, protected session.\n");
   return 0;
 }
@@ -5938,6 +5962,9 @@ async function cmdEnable(args, io) {
     targets.push(["path", cwd]);
   } else if (flags.session) {
     targets.push(["session", flags.session]);
+  } else if (flags.sessionCurrent) {
+    const session = sessionForCwd(cwd);
+    if (session) targets.push(["session", session]);
   } else {
     const session = sessionForCwd(cwd);
     if (session) targets.push(["session", session]);
@@ -6268,8 +6295,11 @@ async function cmdStatus(_args, io) {
 `);
   }
   const pauses = activePauses().filter((p) => !(p.scope === here.scope && p.target === here.target));
-  for (const p of pauses) io.stdout(`!! also paused: ${p.scope} ${p.target}${p.until ? ` until ${p.until}` : " (no expiry)"}
+  for (const p of pauses) {
+    const bound = p.until ? ` until ${p.until}` : p.lifetime ? " (until the session ends)" : " (no expiry)";
+    io.stdout(`!! also paused: ${p.scope} ${p.target}${bound}
 `);
+  }
   if (here.disabled || pauses.length > 0) io.stdout("\n");
   const pinned = join7(defaultVaultHome(), "bin", "secretgate.mjs");
   if (existsSync5(pinned)) {
