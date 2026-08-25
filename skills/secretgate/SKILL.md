@@ -55,8 +55,10 @@ Once wired, redaction is automatic and deterministic (the hook does it, not you)
 - **File reads**: `.env*`, keys, `~/.aws`, `~/.ssh`… are denied outright
   (`.env.example`/`.sample`/`.template` stay readable). The value never enters
   the model.
-- **Tool/bash output**: redacted to `SECRETGATE_<hash>` placeholders (Claude
-  Code + OpenCode; Codex cannot rewrite output yet).
+- **Tool/bash output**: redacted to `SECRETGATE_<hash>` placeholders. Claude
+  Code/OpenCode rewrite in place. Codex uses `PostToolUse` block-and-replace:
+  when a successful supported tool result contains a secret, the raw result is
+  rejected and Codex gives the model only Secretgate's redacted `reason`.
 - **Restore**: when the agent writes a placeholder into a file (Write/Edit),
   the REAL value lands on disk. Bash restore is OFF by default
   (prompt-injection exfiltration guard) — enable with `restoreBash: true` in
@@ -81,9 +83,12 @@ Once wired, redaction is automatic and deterministic (the hook does it, not you)
 
 - Claude Code `@file` mentions inline content without firing tool hooks
   (permissions.deny rules are the only cover there).
-- Codex non-interactive runs (`codex exec`) — upstream bug, hooks don't fire.
-- Images/screenshots/clipboard, MCP tool traffic, and anything already in the
-  conversation before install.
+- Images/screenshots/clipboard, tool transports that do not emit an agent hook,
+  and anything already in the conversation before install.
+- Codex tool results that do not fire `PostToolUse` (notably failed MCP results),
+  plus Codex's local telemetry/logging copy of a blocked raw result. Native
+  output rewrite fields are still unsupported; model-context protection uses
+  the supported block-and-replace path.
 - If a hook process is killed/times out, the agent proceeds (agent-side
   fail-open); secretgate itself fails CLOSED on its own errors for pre-events.
 - A blocked prompt is echoed back locally by Claude Code (`Original prompt:`

@@ -680,6 +680,53 @@ function verifyClaudeCodeWiring(io: Io): boolean {
   return ok;
 }
 
+// Codex cannot apply updatedToolOutput, so its adapter deliberately emits
+// decision:block with the redacted result in reason. Codex then replaces the
+// original model-visible result with that feedback. Verify the exact bundled
+// adapter shape rather than assuming the shared scanner is enough.
+function verifyCodexWiring(io: Io): boolean {
+  const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
+  const self = fileURLToPath(import.meta.url);
+  const bundle = existsSync(pinned) ? pinned : self;
+  const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
+  const tmpHome = mkdtempSync(join(tmpdir(), "secretgate-verify-codex-"));
+  const env: NodeJS.ProcessEnv = { ...process.env, SECRETGATE_HOME: tmpHome };
+  delete env.SECRETGATE_DISABLE;
+  const runHook = (event: string, payload: unknown): { decision?: string; reason?: unknown } => {
+    const out = execFileSync("node", [bundle, "hook", "codex", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+    return out.trim() ? (JSON.parse(out) as { decision?: string; reason?: unknown }) : {};
+  };
+  let ok = true;
+  try {
+    const block = runHook("user-prompt-submit", { hook_event_name: "UserPromptSubmit", cwd: tmpHome, prompt: `deploy with ${fake}` });
+    if (block.decision === "block" && !JSON.stringify(block).includes(fake)) {
+      io.stdout("  ✓ codex: a secret pasted in a prompt is blocked (and the raw value is not echoed)\n");
+    } else {
+      io.stdout("  ✗ codex prompt block FAILED — a pasted secret would reach the model\n");
+      ok = false;
+    }
+    const post = runHook("post-tool-use", {
+      hook_event_name: "PostToolUse",
+      cwd: tmpHome,
+      tool_name: "Bash",
+      tool_input: { command: "env" },
+      tool_response: `PATH=/bin\nTOKEN=${fake}\n`,
+    });
+    if (post.decision === "block" && String(post.reason).includes("SECRETGATE_") && !JSON.stringify(post).includes(fake)) {
+      io.stdout("  ✓ codex: a secret in tool output is replaced with a redacted result before model context\n");
+    } else {
+      io.stdout("  ✗ codex tool-output replacement FAILED — a secret would reach the model\n");
+      ok = false;
+    }
+  } catch (err) {
+    io.stdout(`  ✗ could not run the wired Codex hook: ${err instanceof Error ? err.message.split("\n")[0] : "unknown"}\n`);
+    ok = false;
+  } finally {
+    rmSync(tmpHome, { recursive: true, force: true });
+  }
+  return ok;
+}
+
 // `init` — the one-shot: install for the agents on this machine (or the ones
 // named), then PROVE the protection actually fires end-to-end.
 async function cmdInit(args: string[], io: Io): Promise<number> {
@@ -708,7 +755,7 @@ async function cmdInit(args: string[], io: Io): Promise<number> {
   let ok = true;
   // Verify only what actually installed.
   if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
-  if (outcome.installed.codex) io.stdout("  · codex: prompt/tool-input protection installed (tool-output redaction is not possible on Codex yet).\n");
+  if (outcome.installed.codex) ok = verifyCodexWiring(io) && ok;
   if (outcome.installed.opencode) io.stdout("  · opencode: plugin installed; restart OpenCode to load it.\n");
   if (!outcome.installed.claudeCode && !outcome.installed.codex && !outcome.installed.opencode) {
     io.stdout("  (nothing installed to verify)\n");
@@ -820,7 +867,7 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   io.stdout(
     `codex     ${codexWired > 0 && codexFeature ? `wired (${codexWired} hooks, feature gate on)` : codexWired > 0 ? "hooks present but [features] hooks = true is MISSING" : "not wired"}  ${codexHome()}\n`,
   );
-  if (codexWired > 0) io.stdout("codex     limitations: interactive sessions only (`codex exec` bug); no tool-output redaction upstream yet.\n");
+  if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
 
   // opencode
   const ocPlugin = join(opencodeConfigDir(), "plugin", "secretgate.js");

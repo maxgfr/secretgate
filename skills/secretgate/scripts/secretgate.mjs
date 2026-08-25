@@ -41,7 +41,7 @@ function scanWithGitleaks(text, opts = {}) {
   if (!bin) return Promise.resolve([]);
   const dir = mkdtempSync(join6(tmpdir(), "secretgate-gl-"));
   const report = join6(dir, "report.json");
-  return new Promise((resolve3, reject) => {
+  return new Promise((resolve4, reject) => {
     const child = spawn(bin, ["stdin", "--no-banner", "--exit-code", String(LEAK_EXIT), "--report-format", "json", "--report-path", report], {
       stdio: ["pipe", "ignore", "pipe"],
       timeout: opts.timeoutMs ?? 1e4
@@ -57,7 +57,7 @@ function scanWithGitleaks(text, opts = {}) {
     child.on("close", (code) => {
       try {
         if (code === 0) {
-          resolve3([]);
+          resolve4([]);
           return;
         }
         if (code !== LEAK_EXIT) {
@@ -65,7 +65,7 @@ function scanWithGitleaks(text, opts = {}) {
           return;
         }
         const raw = JSON.parse(readFileSync8(report, "utf8"));
-        resolve3(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
+        resolve4(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
       } catch (err) {
         reject(err);
       } finally {
@@ -87,7 +87,7 @@ var init_gitleaks_bin = __esm({
 import { execFileSync } from "child_process";
 import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync5, mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, readFileSync as readFileSync9, readdirSync, realpathSync as realpathSync2, rmSync as rmSync3, statSync } from "fs";
 import { homedir as homedir4, tmpdir as tmpdir2 } from "os";
-import { dirname as dirname3, join as join7, relative, resolve as resolve2 } from "path";
+import { dirname as dirname3, join as join7, relative, resolve as resolve3 } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 // src/config.ts
@@ -5298,8 +5298,23 @@ function postToolUse(input) {
 
 // src/hooks/codex.ts
 async function handleCodex(event, rawStdin) {
-  if (event === "post-tool-use") return { stdout: "", exit: 0 };
   const r = await handleClaudeCode(event, rawStdin, { notices: false });
+  if (event === "post-tool-use") {
+    if (!r.stdout.trim()) return r;
+    const output = JSON.parse(r.stdout);
+    const replacement = output.hookSpecificOutput?.updatedToolOutput;
+    if (replacement === void 0) return { stdout: "", exit: r.exit };
+    const text = typeof replacement === "string" ? replacement : JSON.stringify(replacement);
+    return {
+      stdout: JSON.stringify({
+        decision: "block",
+        reason: `secretgate replaced the original tool result with this locally redacted output:
+
+${text}`
+      }),
+      exit: 0
+    };
+  }
   return r === DEFER ? { stdout: "", exit: 0 } : r;
 }
 
@@ -5453,10 +5468,10 @@ function uninstallClaudeCode({ settingsPath }) {
 }
 
 // src/install/codex.ts
-import { randomBytes as randomBytes5 } from "crypto";
+import { createHash as createHash2, randomBytes as randomBytes5 } from "crypto";
 import { closeSync as closeSync5, copyFileSync as copyFileSync2, existsSync as existsSync2, openSync as openSync5, readFileSync as readFileSync6, renameSync as renameSync5, writeSync as writeSync5 } from "fs";
 import { homedir as homedir2 } from "os";
-import { join as join4 } from "path";
+import { join as join4, resolve as resolve2 } from "path";
 
 // src/install/toml-touch.ts
 var BLOCK_START = "# >>> secretgate managed >>>";
@@ -5498,14 +5513,43 @@ ${MANUAL_SNIPPET}`);
 `;
   return { content: `${base}${base === "" ? "" : "\n"}${block}`, changed: true };
 }
-function disableHooksFeature(content) {
+function removeLegacyHookLine(lines) {
+  const range = featuresTableRange(lines);
+  if (!range) return lines;
+  const hookOffset = lines.slice(range.start + 1, range.end).findIndex((line) => /^\s*hooks\s*=\s*true\s*(#.*)?$/.test(line));
+  if (hookOffset === -1) return lines;
+  const hookIndex = range.start + 1 + hookOffset;
+  const withoutHook = [...lines.slice(0, hookIndex), ...lines.slice(hookIndex + 1)];
+  const updatedRange = featuresTableRange(withoutHook);
+  if (!updatedRange) return withoutHook;
+  const tableIsEmpty = withoutHook.slice(updatedRange.start + 1, updatedRange.end).every((line) => line.trim() === "");
+  if (!tableIsEmpty) return withoutHook;
+  return [...withoutHook.slice(0, updatedRange.start), ...withoutHook.slice(updatedRange.end)];
+}
+function removeManagedBlocks(content) {
+  const lines = content.split("\n");
+  const kept = [];
   let changed = false;
-  let out = content;
-  const blockRe = new RegExp(`\\n?${BLOCK_START}[\\s\\S]*?${BLOCK_END}\\n?`, "g");
-  if (blockRe.test(out)) {
-    out = out.replace(blockRe, "\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]?.trim() !== BLOCK_START) {
+      kept.push(lines[i]);
+      continue;
+    }
+    const end = lines.findIndex((line, index) => index > i && line.trim() === BLOCK_END);
+    if (end === -1) {
+      kept.push(lines[i]);
+      continue;
+    }
+    kept.push(...removeLegacyHookLine(lines.slice(i + 1, end)));
     changed = true;
+    i = end;
   }
+  return { content: changed ? kept.join("\n") : content, changed };
+}
+function disableHooksFeature(content) {
+  const managed = removeManagedBlocks(content);
+  let changed = managed.changed;
+  let out = managed.content;
   const lines = out.split("\n");
   const kept = lines.filter((l) => l.trim() !== OUR_LINE);
   if (kept.length !== lines.length) {
@@ -5513,6 +5557,75 @@ function disableHooksFeature(content) {
     changed = true;
   }
   return { content: changed ? out.replace(/\n{3,}/g, "\n\n") : content, changed };
+}
+function hookStateHeader(key) {
+  return `[hooks.state.${JSON.stringify(key)}]`;
+}
+function exactTableRange(lines, header) {
+  const start = lines.findIndex((line) => line.trim() === header);
+  if (start === -1) return void 0;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index++) {
+    if (/^\s*\[/.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+function upsertHookTrust(content, entries) {
+  let out = content;
+  let changed = false;
+  for (const entry of entries) {
+    const header = hookStateHeader(entry.key);
+    const trustedLine = `trusted_hash = ${JSON.stringify(entry.trustedHash)}`;
+    const lines = out.split("\n");
+    const range = exactTableRange(lines, header);
+    if (!range) {
+      const base = out === "" || out.endsWith("\n") ? out : `${out}
+`;
+      out = `${base}${base === "" ? "" : "\n"}${header}
+${trustedLine}
+`;
+      changed = true;
+      continue;
+    }
+    const trustedOffset = lines.slice(range.start + 1, range.end).findIndex((line) => /^\s*trusted_hash\s*=/.test(line));
+    if (trustedOffset === -1) {
+      lines.splice(range.start + 1, 0, trustedLine);
+      out = lines.join("\n");
+      changed = true;
+      continue;
+    }
+    const trustedIndex = range.start + 1 + trustedOffset;
+    if (lines[trustedIndex] !== trustedLine) {
+      lines[trustedIndex] = trustedLine;
+      out = lines.join("\n");
+      changed = true;
+    }
+  }
+  return { content: out, changed };
+}
+function removeHookTrust(content, keys) {
+  let out = content;
+  let changed = false;
+  for (const key of keys) {
+    const lines = out.split("\n");
+    const range = exactTableRange(lines, hookStateHeader(key));
+    if (!range) continue;
+    const body = lines.slice(range.start + 1, range.end);
+    const keptBody = body.filter((line) => !/^\s*trusted_hash\s*=/.test(line));
+    if (keptBody.length === body.length) continue;
+    const hasOtherSettings = keptBody.some((line) => line.trim() !== "" && !/^\s*#/.test(line));
+    if (hasOtherSettings) {
+      lines.splice(range.start + 1, body.length, ...keptBody);
+    } else {
+      lines.splice(range.start, range.end - range.start);
+    }
+    out = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+    changed = true;
+  }
+  return { content: out, changed };
 }
 
 // src/install/codex.ts
@@ -5526,8 +5639,56 @@ function withoutOurGroups2(groups) {
 }
 var EVENTS2 = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
-  { event: "PreToolUse", arg: "pre-tool-use", matcher: ".*" }
+  { event: "PreToolUse", arg: "pre-tool-use", matcher: ".*" },
+  { event: "PostToolUse", arg: "post-tool-use", matcher: ".*" }
 ];
+var EVENT_KEY = {
+  UserPromptSubmit: "user_prompt_submit",
+  PreToolUse: "pre_tool_use",
+  PostToolUse: "post_tool_use"
+};
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, child]) => [key, canonicalize(child)])
+    );
+  }
+  return value;
+}
+function hookTrustHash(event, group, handler) {
+  if (typeof handler.command !== "string") throw new Error("cannot trust a command hook without a command");
+  const normalizedHandler = {
+    type: "command",
+    command: handler.command,
+    timeout: Math.max(handler.timeout ?? 600, 1),
+    async: handler.async ?? false,
+    ...handler.statusMessage === void 0 ? {} : { statusMessage: handler.statusMessage }
+  };
+  const identity = {
+    event_name: EVENT_KEY[event],
+    ...event === "UserPromptSubmit" || group.matcher === void 0 ? {} : { matcher: group.matcher },
+    hooks: [normalizedHandler]
+  };
+  const serialized = JSON.stringify(canonicalize(identity));
+  return `sha256:${createHash2("sha256").update(serialized).digest("hex")}`;
+}
+function ourHookTrustEntries(hooksPath) {
+  const root = JSON.parse(readFileSync6(hooksPath, "utf8"));
+  const entries = [];
+  for (const { event } of EVENTS2) {
+    for (const [groupIndex, group] of (root.hooks?.[event] ?? []).entries()) {
+      for (const [handlerIndex, handler] of (group.hooks ?? []).entries()) {
+        if (typeof handler.command !== "string" || !handler.command.includes(MARKER2)) continue;
+        entries.push({
+          key: `${hooksPath}:${EVENT_KEY[event]}:${groupIndex}:${handlerIndex}`,
+          trustedHash: hookTrustHash(event, group, handler)
+        });
+      }
+    }
+  }
+  return entries;
+}
 function writeTextWithBackup(path, content) {
   if (existsSync2(path)) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
@@ -5543,7 +5704,8 @@ function writeTextWithBackup(path, content) {
   renameSync5(tmp, path);
 }
 function installCodex({ codexDir, command }) {
-  const hooksReport = editJsonFile(join4(codexDir, "hooks.json"), (root) => {
+  const hooksPath = resolve2(codexDir, "hooks.json");
+  const hooksReport = editJsonFile(hooksPath, (root) => {
     root.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS2) {
       const kept = withoutOurGroups2(root.hooks[event]);
@@ -5556,20 +5718,21 @@ function installCodex({ codexDir, command }) {
   });
   const configPath = join4(codexDir, "config.toml");
   const current = existsSync2(configPath) ? readFileSync6(configPath, "utf8") : "";
-  const edit = enableHooksFeature(current);
-  if (edit.changed) writeTextWithBackup(configPath, edit.content);
+  const featureEdit = enableHooksFeature(current);
+  const trustEdit = upsertHookTrust(featureEdit.content, ourHookTrustEntries(hooksPath));
+  if (featureEdit.changed || trustEdit.changed) writeTextWithBackup(configPath, trustEdit.content);
   return {
     hooks: hooksReport,
-    configChanged: edit.changed,
+    configChanged: featureEdit.changed || trustEdit.changed,
     guidance: [
-      "codex: hooks protect INTERACTIVE sessions only \u2014 a known Codex bug keeps them from firing under `codex exec` (observed on 0.137\u20130.138).",
-      "codex: tool OUTPUT redaction is not possible yet (Codex parses but ignores output rewrites); prompts and tool inputs are covered.",
+      "codex: tool outputs are protected with PostToolUse block-and-replace: when a secret is found, Codex rejects the raw result and gives the model only Secretgate's locally redacted replacement.",
       'codex: for OS-enforced file protection, consider a permissions profile in config.toml, e.g.:\n  [permissions.secretgate.filesystem.":workspace_roots"]\n  "**/*.env" = "deny"\n  (not added automatically \u2014 it does not compose with legacy sandbox_mode settings).'
     ]
   };
 }
 function uninstallCodex({ codexDir }) {
-  const hooksPath = join4(codexDir, "hooks.json");
+  const hooksPath = resolve2(codexDir, "hooks.json");
+  const trustKeys = existsSync2(hooksPath) ? ourHookTrustEntries(hooksPath).map((entry) => entry.key) : [];
   let hooksReport = { path: hooksPath, changed: false };
   if (existsSync2(hooksPath)) {
     hooksReport = editJsonFile(hooksPath, (root) => {
@@ -5586,9 +5749,10 @@ function uninstallCodex({ codexDir }) {
   const configPath = join4(codexDir, "config.toml");
   let configChanged = false;
   if (existsSync2(configPath)) {
-    const edit = disableHooksFeature(readFileSync6(configPath, "utf8"));
-    if (edit.changed) {
-      writeTextWithBackup(configPath, edit.content);
+    const trustEdit = removeHookTrust(readFileSync6(configPath, "utf8"), trustKeys);
+    const featureEdit = disableHooksFeature(trustEdit.content);
+    if (trustEdit.changed || featureEdit.changed) {
+      writeTextWithBackup(configPath, featureEdit.content);
       configChanged = true;
     }
   }
@@ -5760,7 +5924,7 @@ async function cmdScan(args, io) {
     const text = await readIoStdin(io);
     for (const finding of scan(text, { allowlist: cfg.allowlist })) hits.push({ finding, path: "stdin" });
   } else {
-    const root = resolve2(target);
+    const root = resolve3(target);
     const stats = statSync(root, { throwIfNoEntry: false });
     if (!stats) {
       io.stderr(`scan: no such file or directory: ${target}
@@ -6050,7 +6214,7 @@ function projectSettingsAliasesGlobal() {
     try {
       return realpathSync2(p);
     } catch {
-      return resolve2(p);
+      return resolve3(p);
     }
   };
   return canon(process.cwd()) === canon(homedir4());
@@ -6194,6 +6358,51 @@ TOKEN=${fake}
   }
   return ok;
 }
+function verifyCodexWiring(io) {
+  const pinned = join7(defaultVaultHome(), "bin", "secretgate.mjs");
+  const self = fileURLToPath(import.meta.url);
+  const bundle = existsSync5(pinned) ? pinned : self;
+  const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
+  const tmpHome = mkdtempSync2(join7(tmpdir2(), "secretgate-verify-codex-"));
+  const env = { ...process.env, SECRETGATE_HOME: tmpHome };
+  delete env.SECRETGATE_DISABLE;
+  const runHook = (event, payload) => {
+    const out = execFileSync("node", [bundle, "hook", "codex", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+    return out.trim() ? JSON.parse(out) : {};
+  };
+  let ok = true;
+  try {
+    const block = runHook("user-prompt-submit", { hook_event_name: "UserPromptSubmit", cwd: tmpHome, prompt: `deploy with ${fake}` });
+    if (block.decision === "block" && !JSON.stringify(block).includes(fake)) {
+      io.stdout("  \u2713 codex: a secret pasted in a prompt is blocked (and the raw value is not echoed)\n");
+    } else {
+      io.stdout("  \u2717 codex prompt block FAILED \u2014 a pasted secret would reach the model\n");
+      ok = false;
+    }
+    const post = runHook("post-tool-use", {
+      hook_event_name: "PostToolUse",
+      cwd: tmpHome,
+      tool_name: "Bash",
+      tool_input: { command: "env" },
+      tool_response: `PATH=/bin
+TOKEN=${fake}
+`
+    });
+    if (post.decision === "block" && String(post.reason).includes("SECRETGATE_") && !JSON.stringify(post).includes(fake)) {
+      io.stdout("  \u2713 codex: a secret in tool output is replaced with a redacted result before model context\n");
+    } else {
+      io.stdout("  \u2717 codex tool-output replacement FAILED \u2014 a secret would reach the model\n");
+      ok = false;
+    }
+  } catch (err) {
+    io.stdout(`  \u2717 could not run the wired Codex hook: ${err instanceof Error ? err.message.split("\n")[0] : "unknown"}
+`);
+    ok = false;
+  } finally {
+    rmSync3(tmpHome, { recursive: true, force: true });
+  }
+  return ok;
+}
 async function cmdInit(args, io) {
   let flags;
   const explicit = args.some((a) => a.startsWith("--") && a !== "--project");
@@ -6218,7 +6427,7 @@ async function cmdInit(args, io) {
   io.stdout("\n== verify the firewall actually fires ==\n");
   let ok = true;
   if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
-  if (outcome.installed.codex) io.stdout("  \xB7 codex: prompt/tool-input protection installed (tool-output redaction is not possible on Codex yet).\n");
+  if (outcome.installed.codex) ok = verifyCodexWiring(io) && ok;
   if (outcome.installed.opencode) io.stdout("  \xB7 opencode: plugin installed; restart OpenCode to load it.\n");
   if (!outcome.installed.claudeCode && !outcome.installed.codex && !outcome.installed.opencode) {
     io.stdout("  (nothing installed to verify)\n");
@@ -6330,7 +6539,7 @@ async function cmdStatus(_args, io) {
     `codex     ${codexWired > 0 && codexFeature ? `wired (${codexWired} hooks, feature gate on)` : codexWired > 0 ? "hooks present but [features] hooks = true is MISSING" : "not wired"}  ${codexHome()}
 `
   );
-  if (codexWired > 0) io.stdout("codex     limitations: interactive sessions only (`codex exec` bug); no tool-output redaction upstream yet.\n");
+  if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
   const ocPlugin = join7(opencodeConfigDir(), "plugin", "secretgate.js");
   const ocConfig = readJsonSafe(join7(opencodeConfigDir(), "opencode.json"));
   const ocPinned = Array.isArray(ocConfig?.plugin) && ocConfig.plugin.some((p) => /^secretgate@/.test(p));

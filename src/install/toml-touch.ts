@@ -14,6 +14,11 @@ export interface TomlEdit {
   changed: boolean;
 }
 
+export interface HookTrustEntry {
+  key: string;
+  trustedHash: string;
+}
+
 const MANUAL_SNIPPET = `[features]\nhooks = true`;
 
 function featuresTableRange(lines: string[]): { start: number; end: number } | undefined {
@@ -49,15 +54,53 @@ export function enableHooksFeature(content: string): TomlEdit {
   return { content: `${base}${base === "" ? "" : "\n"}${block}`, changed: true };
 }
 
-export function disableHooksFeature(content: string): TomlEdit {
+function removeLegacyHookLine(lines: string[]): string[] {
+  const range = featuresTableRange(lines);
+  if (!range) return lines;
+
+  const hookOffset = lines.slice(range.start + 1, range.end).findIndex((line) => /^\s*hooks\s*=\s*true\s*(#.*)?$/.test(line));
+  if (hookOffset === -1) return lines;
+
+  const hookIndex = range.start + 1 + hookOffset;
+  const withoutHook = [...lines.slice(0, hookIndex), ...lines.slice(hookIndex + 1)];
+  const updatedRange = featuresTableRange(withoutHook);
+  if (!updatedRange) return withoutHook;
+
+  const tableIsEmpty = withoutHook.slice(updatedRange.start + 1, updatedRange.end).every((line) => line.trim() === "");
+  if (!tableIsEmpty) return withoutHook;
+
+  return [...withoutHook.slice(0, updatedRange.start), ...withoutHook.slice(updatedRange.end)];
+}
+
+function removeManagedBlocks(content: string): TomlEdit {
+  const lines = content.split("\n");
+  const kept: string[] = [];
   let changed = false;
-  let out = content;
-  // 1) whole managed block
-  const blockRe = new RegExp(`\\n?${BLOCK_START}[\\s\\S]*?${BLOCK_END}\\n?`, "g");
-  if (blockRe.test(out)) {
-    out = out.replace(blockRe, "\n");
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]?.trim() !== BLOCK_START) {
+      kept.push(lines[i]!);
+      continue;
+    }
+
+    const end = lines.findIndex((line, index) => index > i && line.trim() === BLOCK_END);
+    if (end === -1) {
+      kept.push(lines[i]!);
+      continue;
+    }
+
+    kept.push(...removeLegacyHookLine(lines.slice(i + 1, end)));
     changed = true;
+    i = end;
   }
+
+  return { content: changed ? kept.join("\n") : content, changed };
+}
+
+export function disableHooksFeature(content: string): TomlEdit {
+  const managed = removeManagedBlocks(content);
+  let changed = managed.changed;
+  let out = managed.content;
   // 2) our single line inside a shared [features] table
   const lines = out.split("\n");
   const kept = lines.filter((l) => l.trim() !== OUR_LINE);
@@ -66,4 +109,83 @@ export function disableHooksFeature(content: string): TomlEdit {
     changed = true;
   }
   return { content: changed ? out.replace(/\n{3,}/g, "\n\n") : content, changed };
+}
+
+function hookStateHeader(key: string): string {
+  return `[hooks.state.${JSON.stringify(key)}]`;
+}
+
+function exactTableRange(lines: string[], header: string): { start: number; end: number } | undefined {
+  const start = lines.findIndex((line) => line.trim() === header);
+  if (start === -1) return undefined;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index++) {
+    if (/^\s*\[/.test(lines[index]!)) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+export function upsertHookTrust(content: string, entries: HookTrustEntry[]): TomlEdit {
+  let out = content;
+  let changed = false;
+
+  for (const entry of entries) {
+    const header = hookStateHeader(entry.key);
+    const trustedLine = `trusted_hash = ${JSON.stringify(entry.trustedHash)}`;
+    const lines = out.split("\n");
+    const range = exactTableRange(lines, header);
+
+    if (!range) {
+      const base = out === "" || out.endsWith("\n") ? out : `${out}\n`;
+      out = `${base}${base === "" ? "" : "\n"}${header}\n${trustedLine}\n`;
+      changed = true;
+      continue;
+    }
+
+    const trustedOffset = lines.slice(range.start + 1, range.end).findIndex((line) => /^\s*trusted_hash\s*=/.test(line));
+    if (trustedOffset === -1) {
+      lines.splice(range.start + 1, 0, trustedLine);
+      out = lines.join("\n");
+      changed = true;
+      continue;
+    }
+
+    const trustedIndex = range.start + 1 + trustedOffset;
+    if (lines[trustedIndex] !== trustedLine) {
+      lines[trustedIndex] = trustedLine;
+      out = lines.join("\n");
+      changed = true;
+    }
+  }
+
+  return { content: out, changed };
+}
+
+export function removeHookTrust(content: string, keys: string[]): TomlEdit {
+  let out = content;
+  let changed = false;
+
+  for (const key of keys) {
+    const lines = out.split("\n");
+    const range = exactTableRange(lines, hookStateHeader(key));
+    if (!range) continue;
+
+    const body = lines.slice(range.start + 1, range.end);
+    const keptBody = body.filter((line) => !/^\s*trusted_hash\s*=/.test(line));
+    if (keptBody.length === body.length) continue;
+
+    const hasOtherSettings = keptBody.some((line) => line.trim() !== "" && !/^\s*#/.test(line));
+    if (hasOtherSettings) {
+      lines.splice(range.start + 1, body.length, ...keptBody);
+    } else {
+      lines.splice(range.start, range.end - range.start);
+    }
+    out = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+    changed = true;
+  }
+
+  return { content: out, changed };
 }

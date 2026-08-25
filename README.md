@@ -69,9 +69,9 @@ anything per-use.
 |---|---|---|---|
 | Secret pasted in a prompt | ✅ blocked + redacted copy | ✅ blocked + redacted copy | ✅ redacted in place |
 | Agent reads a sensitive file | ✅ hook deny + `permissions.deny` | ✅ hook deny | ✅ hook deny (`.env` also denied by OpenCode itself) |
-| Secret in **any** tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ❌ upstream: output rewrite parsed but not applied | ✅ redacted (incl. grep/glob) |
+| Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
 | Placeholder written to a file | ✅ real value restored | ✅ real value restored | ✅ real value restored |
-| Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ❌ (no output control) | plugin best-effort |
+| Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ✅ **withheld** via block-and-replace | plugin best-effort |
 
 **Fail-closed by design.** If a scan crashes, times out against a crafted
 payload, or the output is too large to scan, secretgate **withholds** the tool
@@ -84,8 +84,8 @@ past the agent's timeout (which would otherwise fail open).
 | Gap | Why | Mitigation |
 |---|---|---|
 | Claude Code `@file` mentions | inlined without firing tool hooks | `permissions.deny` rules (broadened to cover keys, `.aws`, `.ssh`, `credentials.json`, …) block the common sensitive files |
-| Codex tool **output** | upstream can't rewrite tool output yet | prompts + tool inputs are protected; tool output is not — prefer Claude Code / OpenCode for output-heavy work |
-| `codex exec` (non-interactive) | upstream bug: hooks don't fire (0.137–0.138) | interactive sessions only for now |
+| Codex failed/unsupported tool output | `PostToolUse` only fires for successful supported tools; native output rewrite remains unsupported | Bash/apply_patch and successful MCP/local-function results are block-and-replace protected; an MCP result marked as an error can still bypass the post hook |
+| Codex local telemetry/logs | block-and-replace changes the model-visible result, not Codex's local logging copy | the raw result stays local; protect access to Codex logs and telemetry configuration |
 | Low-entropy secrets (`password: hunter2`) | indistinguishable from prose without huge false positives | catches strong/quoted passwords; use a real password manager |
 | Passphrases with spaces (`password = "correct horse battery"`) | a spaced value after a `password` key is a UI label or a sentence far more often than a credential — 155 of 649 such matches on a 42k-file corpus were labels like `"password": "Client Secret"` | gitleaks' own generic rule stops at `[\w.=-]` for the same reason; use a real password manager |
 | Restore → off-machine exfil | a prompt-injected agent could write a placeholder to a file (restored to the real value) then `git push` / upload it | Bash restore is **off** by default; the secret never reaches the model, only a file the agent already had write access to |

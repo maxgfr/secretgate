@@ -193,6 +193,46 @@ describe("PostToolUse — output redaction", () => {
   });
 });
 
+describe("Codex PostToolUse — block-and-replace redaction", () => {
+  it("blocks the raw result and returns only a redacted replacement in reason", async () => {
+    const response = `PATH=/bin\nTOKEN=${FAKE.githubPat}\n`;
+    const r = await handleCodex("post-tool-use", postToolEvent("Bash", { command: "env" }, response));
+    const out = JSON.parse(r.stdout);
+
+    expect(r.exit).toBe(0);
+    expect(out.decision).toBe("block");
+    expect(out.reason).toContain("PATH=/bin");
+    expect(out.reason).toMatch(/TOKEN=SECRETGATE_[0-9a-f]{12,16}/);
+    expect(out.reason).not.toContain(FAKE.githubPat);
+    expect(out.hookSpecificOutput).toBeUndefined();
+  });
+
+  it("serializes a redacted MCP/JSON result into the replacement reason", async () => {
+    const response = { content: [{ type: "text", text: `token=${FAKE.slackBotToken}` }], isError: false };
+    const r = await handleCodex("post-tool-use", postToolEvent("mcp__demo__read", { path: "/demo" }, response));
+    const out = JSON.parse(r.stdout);
+
+    expect(out.decision).toBe("block");
+    expect(out.reason).toContain('"isError":false');
+    expect(out.reason).toMatch(/SECRETGATE_[0-9a-f]{12,16}/);
+    expect(out.reason).not.toContain(FAKE.slackBotToken);
+  });
+
+  it("emits nothing for a clean result", async () => {
+    const r = await handleCodex("post-tool-use", postToolEvent("Bash", { command: "ls" }, "src\ntests\n"));
+    expect(r).toEqual({ stdout: "", exit: 0 });
+  });
+
+  it("fails closed with a safe replacement when stdin cannot be scanned", async () => {
+    const r = await handleCodex("post-tool-use", "__SECRETGATE_OVERSIZED__");
+    const out = JSON.parse(r.stdout);
+
+    expect(out.decision).toBe("block");
+    expect(out.reason).toMatch(/withheld|could not scan/);
+    expect(out.reason).not.toContain(FAKE.githubPat);
+  });
+});
+
 // The off switch. Everything below asserts the SAME shape for each scope, so a
 // scope that stops taking effect fails loudly rather than silently protecting
 // (or silently not protecting).
@@ -229,6 +269,11 @@ describe.each([
     const r = await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "env" }, `TOKEN=${FAKE.slackBotToken}\n`));
     expect(r.stdout).toBe("");
     expect(r.exit).toBe(0);
+  });
+
+  it("also stops Codex block-and-replace output redaction", async () => {
+    const r = await handleCodex("post-tool-use", postToolEvent("Bash", { command: "env" }, `TOKEN=${FAKE.slackBotToken}\n`));
+    expect(r).toEqual({ stdout: "", exit: 0 });
   });
 
   // The one thing a disable must NOT switch off: without it the agent would

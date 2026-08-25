@@ -67,6 +67,24 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     expect(JSON.parse(r2.stdout).hookSpecificOutput.updatedInput.content).toBe(`TOKEN=${FAKE.githubPat}\n`);
   });
 
+  it("protects Codex tool output through block-and-replace without echoing the raw secret", async () => {
+    const post = JSON.stringify({
+      hook_event_name: "PostToolUse",
+      cwd: home,
+      tool_name: "Bash",
+      tool_input: { command: "env" },
+      tool_response: `PATH=/bin\nTOKEN=${FAKE.githubPat}\n`,
+    });
+    const r = await runBundle(["hook", "codex", "post-tool-use"], post);
+    const out = JSON.parse(r.stdout);
+
+    expect(r.code).toBe(0);
+    expect(out.decision).toBe("block");
+    expect(out.reason).toContain("PATH=/bin");
+    expect(out.reason).toMatch(/SECRETGATE_[0-9a-f]{12,16}/);
+    expect(r.stdout).not.toContain(FAKE.githubPat);
+  });
+
   it("install --claude-code wires ~/.claude/settings.json idempotently; uninstall unwires", async () => {
     const r1 = await runBundle(["install", "--claude-code"]);
     expect(r1.code).toBe(0);

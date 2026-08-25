@@ -1,9 +1,9 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { closeSync, copyFileSync, existsSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { type EditReport, editJsonFile } from "./json-merge.js";
-import { disableHooksFeature, enableHooksFeature } from "./toml-touch.js";
+import { disableHooksFeature, enableHooksFeature, removeHookTrust, upsertHookTrust, type HookTrustEntry } from "./toml-touch.js";
 
 const MARKER = "hook codex";
 
@@ -13,7 +13,7 @@ export function codexHome(): string {
 
 interface HookGroup {
   matcher?: string;
-  hooks: Array<{ type: string; command: string; timeout?: number; statusMessage?: string }>;
+  hooks: Array<{ type: string; command?: string; timeout?: number; async?: boolean; statusMessage?: string }>;
 }
 
 function withoutOurGroups(groups: HookGroup[] | undefined): HookGroup[] {
@@ -21,13 +21,68 @@ function withoutOurGroups(groups: HookGroup[] | undefined): HookGroup[] {
   return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !String(h.command ?? "").includes(MARKER)) })).filter((g) => g.hooks.length > 0);
 }
 
-// Codex has no working PostToolUse output rewrite, so only the two events that
-// actually protect are wired. hooks.json REQUIRES the top-level {"hooks":{}}
+// Codex does not apply PostToolUse output-rewrite fields, but decision:block
+// replaces the model-visible result with the hook's safe feedback. Wire all
+// three protection surfaces. hooks.json REQUIRES the top-level {"hooks":{}}
 // wrapper (a documented footgun).
 const EVENTS: Array<{ event: string; arg: string; matcher?: string }> = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
   { event: "PreToolUse", arg: "pre-tool-use", matcher: ".*" },
+  { event: "PostToolUse", arg: "post-tool-use", matcher: ".*" },
 ];
+
+const EVENT_KEY: Record<string, string> = {
+  UserPromptSubmit: "user_prompt_submit",
+  PreToolUse: "pre_tool_use",
+  PostToolUse: "post_tool_use",
+};
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, child]) => [key, canonicalize(child)]),
+    );
+  }
+  return value;
+}
+
+function hookTrustHash(event: string, group: HookGroup, handler: HookGroup["hooks"][number]): string {
+  if (typeof handler.command !== "string") throw new Error("cannot trust a command hook without a command");
+  const normalizedHandler = {
+    type: "command",
+    command: handler.command,
+    timeout: Math.max(handler.timeout ?? 600, 1),
+    async: handler.async ?? false,
+    ...(handler.statusMessage === undefined ? {} : { statusMessage: handler.statusMessage }),
+  };
+  const identity = {
+    event_name: EVENT_KEY[event],
+    ...(event === "UserPromptSubmit" || group.matcher === undefined ? {} : { matcher: group.matcher }),
+    hooks: [normalizedHandler],
+  };
+  const serialized = JSON.stringify(canonicalize(identity));
+  return `sha256:${createHash("sha256").update(serialized).digest("hex")}`;
+}
+
+function ourHookTrustEntries(hooksPath: string): HookTrustEntry[] {
+  const root = JSON.parse(readFileSync(hooksPath, "utf8")) as { hooks?: Record<string, HookGroup[]> };
+  const entries: HookTrustEntry[] = [];
+  for (const { event } of EVENTS) {
+    for (const [groupIndex, group] of (root.hooks?.[event] ?? []).entries()) {
+      for (const [handlerIndex, handler] of (group.hooks ?? []).entries()) {
+        if (typeof handler.command !== "string" || !handler.command.includes(MARKER)) continue;
+        entries.push({
+          key: `${hooksPath}:${EVENT_KEY[event]}:${groupIndex}:${handlerIndex}`,
+          trustedHash: hookTrustHash(event, group, handler),
+        });
+      }
+    }
+  }
+  return entries;
+}
 
 function writeTextWithBackup(path: string, content: string): void {
   if (existsSync(path)) {
@@ -51,7 +106,8 @@ export interface CodexInstallReport {
 }
 
 export function installCodex({ codexDir, command }: { codexDir: string; command: string }): CodexInstallReport {
-  const hooksReport = editJsonFile(join(codexDir, "hooks.json"), (root) => {
+  const hooksPath = resolve(codexDir, "hooks.json");
+  const hooksReport = editJsonFile(hooksPath, (root) => {
     root.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS) {
       const kept = withoutOurGroups(root.hooks[event]);
@@ -65,22 +121,23 @@ export function installCodex({ codexDir, command }: { codexDir: string; command:
 
   const configPath = join(codexDir, "config.toml");
   const current = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
-  const edit = enableHooksFeature(current);
-  if (edit.changed) writeTextWithBackup(configPath, edit.content);
+  const featureEdit = enableHooksFeature(current);
+  const trustEdit = upsertHookTrust(featureEdit.content, ourHookTrustEntries(hooksPath));
+  if (featureEdit.changed || trustEdit.changed) writeTextWithBackup(configPath, trustEdit.content);
 
   return {
     hooks: hooksReport,
-    configChanged: edit.changed,
+    configChanged: featureEdit.changed || trustEdit.changed,
     guidance: [
-      "codex: hooks protect INTERACTIVE sessions only — a known Codex bug keeps them from firing under `codex exec` (observed on 0.137–0.138).",
-      "codex: tool OUTPUT redaction is not possible yet (Codex parses but ignores output rewrites); prompts and tool inputs are covered.",
+      "codex: tool outputs are protected with PostToolUse block-and-replace: when a secret is found, Codex rejects the raw result and gives the model only Secretgate's locally redacted replacement.",
       'codex: for OS-enforced file protection, consider a permissions profile in config.toml, e.g.:\n  [permissions.secretgate.filesystem.":workspace_roots"]\n  "**/*.env" = "deny"\n  (not added automatically — it does not compose with legacy sandbox_mode settings).',
     ],
   };
 }
 
 export function uninstallCodex({ codexDir }: { codexDir: string }): { hooks: EditReport; configChanged: boolean } {
-  const hooksPath = join(codexDir, "hooks.json");
+  const hooksPath = resolve(codexDir, "hooks.json");
+  const trustKeys = existsSync(hooksPath) ? ourHookTrustEntries(hooksPath).map((entry) => entry.key) : [];
   let hooksReport: EditReport = { path: hooksPath, changed: false };
   if (existsSync(hooksPath)) {
     hooksReport = editJsonFile(hooksPath, (root) => {
@@ -97,9 +154,10 @@ export function uninstallCodex({ codexDir }: { codexDir: string }): { hooks: Edi
   const configPath = join(codexDir, "config.toml");
   let configChanged = false;
   if (existsSync(configPath)) {
-    const edit = disableHooksFeature(readFileSync(configPath, "utf8"));
-    if (edit.changed) {
-      writeTextWithBackup(configPath, edit.content);
+    const trustEdit = removeHookTrust(readFileSync(configPath, "utf8"), trustKeys);
+    const featureEdit = disableHooksFeature(trustEdit.content);
+    if (trustEdit.changed || featureEdit.changed) {
+      writeTextWithBackup(configPath, featureEdit.content);
       configChanged = true;
     }
   }
