@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.3.1](https://github.com/maxgfr/secretgate/compare/v1.3.0...v1.3.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **codex:** protect tool output and trust hooks ([3a57198](https://github.com/maxgfr/secretgate/commit/3a57198936b39a69ad6c301cb8604223cb85ff1a))
+
 # [1.3.0](https://github.com/maxgfr/secretgate/compare/v1.2.0...v1.3.0) (2026-08-10)
 
 

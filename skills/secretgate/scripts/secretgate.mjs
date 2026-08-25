@@ -5803,7 +5803,7 @@ function uninstallOpencode({ configDir }) {
 }
 
 // src/version.ts
-var VERSION = "1.3.0";
+var VERSION = "1.3.1";
 
 // src/cli.ts
 var USAGE = `secretgate ${VERSION} \u2014 local secrets firewall for coding agents
