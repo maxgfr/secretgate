@@ -1,4 +1,6 @@
-import { pathMatchesGlob } from "./engine/allowlist.js";
+import { homedir } from "node:os";
+import { relative, resolve } from "node:path";
+import { isAllowedPath, pathMatchesGlob, type UserAllowlist } from "./engine/allowlist.js";
 
 // Files whose CONTENT is assumed sensitive: the firewall denies reading them
 // outright (first line of defense — the secret never even enters a tool
@@ -26,8 +28,11 @@ export const EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.templ
 
 // Globs above are rooted with `**/` so they match absolute and relative paths
 // alike; `~` is expanded by the caller when needed.
-export function sensitivePathMatch(path: string): string | undefined {
+export function sensitivePathMatch(path: string, allowlist?: UserAllowlist, cwd = process.cwd()): string | undefined {
   const normalized = path.replaceAll("\\", "/");
+  const expanded = normalized.startsWith("~/") ? `${homedir()}/${normalized.slice(2)}` : normalized;
+  const absolute = resolve(cwd, expanded).replaceAll("\\", "/");
+  if ([normalized, absolute, relative(cwd, absolute).replaceAll("\\", "/")].some((p) => isAllowedPath(p, allowlist))) return undefined;
   // case-insensitive: on macOS/Windows `.ENV` and `.env` are the SAME file, so
   // matching case-sensitively would let `Read(".ENV")` / `cat .ENV` slip past.
   if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g, true))) return undefined;
@@ -65,7 +70,7 @@ const READ_COMMANDS = new Set([
 // references a sensitive path. Splits on shell separators so `foo && cat .env`
 // is caught segment by segment. The agent's own permission rules and
 // PostToolUse redaction are the stronger/backstop layers.
-export function commandTouchesSensitivePath(command: string): string | undefined {
+export function commandTouchesSensitivePath(command: string, allowlist?: UserAllowlist, cwd?: string): string | undefined {
   for (const segment of command.split(/[;\n]|&&|\|\||\||&/)) {
     const tokens = segment.trim().split(/\s+/);
     if (tokens.length === 0) continue;
@@ -74,9 +79,9 @@ export function commandTouchesSensitivePath(command: string): string | undefined
     for (const raw of tokens.slice(1)) {
       // stop at a write redirection target — that's not a read
       if (raw.startsWith(">")) break;
-      const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
+      const token = raw.replace(/^['"`]+|['"`]+$/g, "");
       if (token.length < 2 || token.startsWith("-")) continue;
-      const hit = sensitivePathMatch(token);
+      const hit = sensitivePathMatch(token, allowlist, cwd);
       if (hit) return token;
     }
   }

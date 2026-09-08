@@ -1,12 +1,10 @@
 import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
-const execFileP = promisify(execFile);
 const BUNDLE = join(__dirname, "..", "..", "scripts", "secretgate.mjs");
 
 // End-to-end over the COMMITTED bundle (what agents actually invoke). CI runs
@@ -144,7 +142,7 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     expect(r.stdout).toContain("detected Claude Code");
     expect(r.stdout).toContain("a secret pasted in a prompt is blocked");
     expect(r.stdout).toContain("a secret in tool output is redacted");
-    expect(r.stdout).toContain("secretgate is active");
+    expect(r.stdout).toContain("secretgate installed; local checks passed");
     // and it never printed the raw fake token
     expect(r.stdout).not.toMatch(/ghp_[A-Za-z0-9]{36}/);
   });
@@ -161,7 +159,7 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     });
     const r = await runBundle(["hook", "claude-code", "post-tool-use"], payload);
     const out = JSON.parse(r.stdout);
-    expect(out.hookSpecificOutput.updatedToolOutput).toMatch(/secretgate withheld/);
+    expect(out.hookSpecificOutput.updatedToolOutput.stdout).toMatch(/secretgate withheld/);
     expect(r.stdout).not.toContain(FAKE.githubPat);
   });
 
@@ -227,6 +225,6 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     const r = await runBundle(["init"]);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("a secret pasted in a prompt is blocked");
-    expect(r.stdout).toContain("secretgate is active");
+    expect(r.stdout).toContain("secretgate installed; local checks passed");
   });
 });

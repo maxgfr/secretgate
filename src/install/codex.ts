@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { type EditReport, editJsonFile } from "./json-merge.js";
@@ -84,6 +84,29 @@ function ourHookTrustEntries(hooksPath: string): HookTrustEntry[] {
   return entries;
 }
 
+export function codexWiringStatus(codexDir: string): { trusted: number; expected: number; feature: boolean } {
+  try {
+    const hooksPath = join(realpathSync(codexDir), "hooks.json");
+    const config = readFileSync(join(codexDir, "config.toml"), "utf8");
+    const entries = ourHookTrustEntries(hooksPath);
+    const tables = config.split(/(?=^\s*\[)/m);
+    const trusted = entries.filter((entry) =>
+      tables.some((table) => {
+        const lines = table.trim().split("\n");
+        return (
+          lines[0]?.trim() === `[hooks.state.${JSON.stringify(entry.key)}]` &&
+          lines.some((line) => line.trim() === `trusted_hash = ${JSON.stringify(entry.trustedHash)}`) &&
+          !lines.some((line) => /^\s*enabled\s*=\s*false\b/.test(line))
+        );
+      }),
+    ).length;
+    const feature = tables.some((table) => /^\s*\[features\]\s*(?:#.*)?\n/.test(table) && /^\s*hooks\s*=\s*true\b/m.test(table));
+    return { trusted, expected: entries.length, feature };
+  } catch {
+    return { trusted: 0, expected: 0, feature: false };
+  }
+}
+
 function writeTextWithBackup(path: string, content: string): void {
   if (existsSync(path)) {
     const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
@@ -106,7 +129,8 @@ export interface CodexInstallReport {
 }
 
 export function installCodex({ codexDir, command }: { codexDir: string; command: string }): CodexInstallReport {
-  const hooksPath = resolve(codexDir, "hooks.json");
+  mkdirSync(codexDir, { recursive: true });
+  const hooksPath = join(realpathSync(codexDir), "hooks.json");
   const hooksReport = editJsonFile(hooksPath, (root) => {
     root.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS) {
@@ -122,7 +146,10 @@ export function installCodex({ codexDir, command }: { codexDir: string; command:
   const configPath = join(codexDir, "config.toml");
   const current = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
   const featureEdit = enableHooksFeature(current);
-  const trustEdit = upsertHookTrust(featureEdit.content, ourHookTrustEntries(hooksPath));
+  const legacyPath = resolve(codexDir, "hooks.json");
+  const legacyKeys = legacyPath === hooksPath ? [] : ourHookTrustEntries(hooksPath).map((entry) => entry.key.replace(hooksPath, legacyPath));
+  const migrated = removeHookTrust(featureEdit.content, legacyKeys);
+  const trustEdit = upsertHookTrust(migrated.content, ourHookTrustEntries(hooksPath));
   if (featureEdit.changed || trustEdit.changed) writeTextWithBackup(configPath, trustEdit.content);
 
   return {
@@ -136,7 +163,7 @@ export function installCodex({ codexDir, command }: { codexDir: string; command:
 }
 
 export function uninstallCodex({ codexDir }: { codexDir: string }): { hooks: EditReport; configChanged: boolean } {
-  const hooksPath = resolve(codexDir, "hooks.json");
+  const hooksPath = existsSync(codexDir) ? join(realpathSync(codexDir), "hooks.json") : resolve(codexDir, "hooks.json");
   const trustKeys = existsSync(hooksPath) ? ourHookTrustEntries(hooksPath).map((entry) => entry.key) : [];
   let hooksReport: EditReport = { path: hooksPath, changed: false };
   if (existsSync(hooksPath)) {
@@ -155,7 +182,11 @@ export function uninstallCodex({ codexDir }: { codexDir: string }): { hooks: Edi
   let configChanged = false;
   if (existsSync(configPath)) {
     const trustEdit = removeHookTrust(readFileSync(configPath, "utf8"), trustKeys);
-    const featureEdit = disableHooksFeature(trustEdit.content);
+    const remaining = existsSync(hooksPath) ? JSON.parse(readFileSync(hooksPath, "utf8")).hooks : undefined;
+    // The shared feature gate also enables foreign/inline/plugin hooks.
+    const foreignHooks = remaining && Object.keys(remaining).length > 0;
+    const sharedConfig = /\[hooks\.(?!state\b)|\[plugins\./.test(trustEdit.content);
+    const featureEdit = foreignHooks || sharedConfig ? { content: trustEdit.content, changed: false } : disableHooksFeature(trustEdit.content);
     if (trustEdit.changed || featureEdit.changed) {
       writeTextWithBackup(configPath, featureEdit.content);
       configChanged = true;

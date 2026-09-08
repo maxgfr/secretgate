@@ -1,4 +1,5 @@
 import { type EditReport, editJsonFile } from "./json-merge.js";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 
 // Deny rules complement the hooks: they also apply where tool hooks don't fire
 // — notably @file mentions, which inline a file's content WITHOUT firing tool
@@ -60,7 +61,10 @@ export interface InstallOptions {
 }
 
 export function installClaudeCode({ settingsPath, command }: InstallOptions): EditReport {
-  return editJsonFile(settingsPath, (s) => {
+  const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
+  const previous = existsSync(ownershipPath) ? JSON.parse(readFileSync(ownershipPath, "utf8")) : {};
+  const added: string[] = [];
+  const report = editJsonFile(settingsPath, (s) => {
     s.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS) {
       const kept = withoutOurGroups(s.hooks[event]);
@@ -71,12 +75,19 @@ export function installClaudeCode({ settingsPath, command }: InstallOptions): Ed
     }
     s.permissions ??= {};
     const deny: string[] = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
-    s.permissions.deny = [...deny, ...CC_DENY_RULES.filter((r) => !deny.includes(r))];
+    added.push(...CC_DENY_RULES.filter((r) => !deny.includes(r)));
+    s.permissions.deny = [...deny, ...added];
   });
+  editJsonFile(ownershipPath, (state) => {
+    state.deny = [...new Set([...(previous.deny ?? []), ...added])];
+  });
+  return report;
 }
 
 export function uninstallClaudeCode({ settingsPath }: { settingsPath: string }): EditReport {
-  return editJsonFile(settingsPath, (s) => {
+  const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
+  const owned: string[] = existsSync(ownershipPath) ? (JSON.parse(readFileSync(ownershipPath, "utf8")).deny ?? []) : [];
+  const report = editJsonFile(settingsPath, (s) => {
     if (s.hooks && typeof s.hooks === "object") {
       for (const { event } of EVENTS) {
         const kept = withoutOurGroups(s.hooks[event]);
@@ -85,9 +96,11 @@ export function uninstallClaudeCode({ settingsPath }: { settingsPath: string }):
       }
     }
     if (Array.isArray(s.permissions?.deny)) {
-      s.permissions.deny = s.permissions.deny.filter((r: string) => !CC_DENY_RULES.includes(r));
+      s.permissions.deny = s.permissions.deny.filter((r: string) => !owned.includes(r));
       if (s.permissions.deny.length === 0) delete s.permissions.deny;
       if (Object.keys(s.permissions).length === 0) delete s.permissions;
     }
   });
+  if (existsSync(ownershipPath)) rmSync(ownershipPath);
+  return report;
 }

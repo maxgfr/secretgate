@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -23,6 +23,12 @@ afterEach(() => {
 });
 
 describe("chat.message — prompt redaction (OpenCode can rewrite, not just block)", () => {
+  it("loads rule exceptions from the plugin project, not the server cwd", async () => {
+    writeFileSync(join(home, ".secretgate.json"), JSON.stringify({ allowlist: { rules: ["github-pat"] } }));
+    const output = { parts: [{ text: FAKE.githubPat }] };
+    await hooks["chat.message"]!({}, output);
+    expect(output.parts[0]!.text).toBe(FAKE.githubPat);
+  });
   it("redacts secrets by mutating parts IN PLACE (same objects)", async () => {
     const parts = [
       { type: "text", text: `deploy with ${FAKE.githubPat} please` },
@@ -46,6 +52,20 @@ describe("chat.message — prompt redaction (OpenCode can rewrite, not just bloc
 });
 
 describe("tool.execute.before — deny + restore", () => {
+  it("restores the actual OpenCode apply_patch input", async () => {
+    const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
+    const args = { patchText: `*** Begin Patch\n*** Add File: copy.txt\n+TOKEN=${placeholder}\n*** End Patch` };
+    await hooks["tool.execute.before"]!({ tool: "apply_patch" }, { args });
+    expect(args.patchText).toContain(FAKE.githubPat);
+  });
+
+  it("allows a configured sensitive path while still redacting its output", async () => {
+    writeFileSync(join(home, "allowlist.json"), JSON.stringify({ paths: [".env"] }));
+    await expect(hooks["tool.execute.before"]!({ tool: "read" }, { args: { filePath: join(home, ".env") } })).resolves.toBeUndefined();
+    const output = { output: FAKE.githubPat };
+    await hooks["tool.execute.after"]!({ tool: "read" }, output);
+    expect(output.output).not.toContain(FAKE.githubPat);
+  });
   it("throws on reading a sensitive file", async () => {
     await expect(hooks["tool.execute.before"]!({ tool: "read" }, { args: { filePath: "/proj/.env" } })).rejects.toThrow(/sensitive/);
   });
@@ -83,6 +103,40 @@ describe("tool.execute.before — deny + restore", () => {
   });
 });
 
+describe("MCP result contract", () => {
+  it("remasks restored arguments in model-bound history, including failed tool calls", async () => {
+    const args = { filePath: "copy.txt", content: new Vault().recordSecret(FAKE.githubPat, "github-pat", "test") };
+    await hooks["tool.execute.before"]!({ tool: "write" }, { args });
+    expect(args.content.includes(FAKE.githubPat)).toBe(true);
+    const output = {
+      messages: [{ info: { sessionID: "oc1" }, parts: [{ type: "tool", state: { status: "error", input: args, error: `write failed: ${FAKE.githubPat}` } }] }],
+    };
+    await hooks["experimental.chat.messages.transform"]!({}, output);
+    expect(JSON.stringify(output).includes(FAKE.githubPat)).toBe(false);
+  });
+
+  it("withholds all fields of a mixed MCP/native result on a scan error", async () => {
+    const output = { content: [{ type: "text", text: "x".repeat(2 * 1024 * 1024 + 1) }], output: FAKE.githubPat, metadata: { token: FAKE.githubPat } };
+    await hooks["tool.execute.after"]!({ tool: "mcp_test" }, output);
+    expect(JSON.stringify(output).includes(FAKE.githubPat)).toBe(false);
+  });
+  it("redacts MCP text and structured content in place, including error results", async () => {
+    const content = [{ type: "text", text: FAKE.githubPat }];
+    const output = { content, structuredContent: { token: FAKE.githubPat }, isError: true };
+    await hooks["tool.execute.after"]!({ tool: "mcp_test" }, output);
+    expect(output.content).toBe(content);
+    expect(JSON.stringify(output).includes(FAKE.githubPat)).toBe(false);
+    expect(output.isError).toBe(true);
+  });
+
+  it("withholds oversized output rather than stalling the server", async () => {
+    const output = { content: [{ type: "text", text: "x".repeat(2 * 1024 * 1024 + 1) + FAKE.githubPat }] };
+    await hooks["tool.execute.after"]!({ tool: "mcp_test" }, output);
+    expect(JSON.stringify(output).includes(FAKE.githubPat)).toBe(false);
+    expect(JSON.stringify(output)).toContain("withheld");
+  });
+});
+
 describe("tool.execute.after — output redaction", () => {
   it("redacts tool output in place (covers read AND grep/glob)", async () => {
     for (const tool of ["read", "grep", "bash"]) {
@@ -106,7 +160,7 @@ describe("tool.execute.after — output redaction", () => {
 describe.each([
   ["SECRETGATE_DISABLE=1", () => (process.env.SECRETGATE_DISABLE = "1")],
   ["a session pause", () => addPause({ scope: "session", target: "oc1", minutes: 60 })],
-  ["a directory pause", () => addPause({ scope: "path", target: process.cwd(), minutes: 60 })],
+  ["a directory pause", () => addPause({ scope: "path", target: home, minutes: 60 })],
 ])("disabled by %s", (_label, disable) => {
   beforeEach(() => {
     disable();
@@ -150,6 +204,6 @@ describe("the off switch is narrow (opencode)", () => {
 
   it("records the session id from chat.message so `disable` can target that run", async () => {
     await hooks["chat.message"]!({ sessionID: "oc1" }, { message: {}, parts: [{ type: "text", text: "hello" }] });
-    expect(sessionForCwd(process.cwd())).toBe("oc1");
+    expect(sessionForCwd(home)).toBe("oc1");
   });
 });

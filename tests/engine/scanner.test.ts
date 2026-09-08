@@ -141,6 +141,7 @@ describe("scan — url credentials (secretgate builtin)", () => {
   }
 
   it("does not flag placeholder/masked/interpolated/port URLs", () => {
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: literal interpolation syntax is the test input.
     for (const text of ["postgres://user:password@localhost/db", "https://user:****@host", "postgres://user:${DB_PASS}@host", "http://localhost:8080/path"]) {
       expect(
         scan(text).filter((f) => f.ruleId === "url-credentials"),
@@ -204,8 +205,11 @@ describe("scan — quoted password assignment (secretgate builtin)", () => {
   // every bundled JS file looks like (`apikey: ${this.supabaseKey}`).
   it("skips values that are entirely an interpolation or template reference", () => {
     for (const text of [
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal interpolation syntax is the test input.
       "let p = { apikey: `${this.supabaseKey}` };",
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal interpolation syntax is the test input.
       'api_key = "${config.apiKey}"',
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: literal interpolation syntax is the test input.
       'password = "${env:DB_PASSWORD}"',
       'password = "%(db_password)s"',
       'secret = "{settings.api_key}"',

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -101,7 +101,7 @@ describe("PreToolUse — placeholder restore", () => {
     const placeholder = vault.recordSecret(FAKE.githubPat, "github-pat", "test");
     const r = await handleClaudeCode("pre-tool-use", preToolEvent("Write", { file_path: "/proj/.env", content: `GITHUB_TOKEN=${placeholder}\n` }));
     const out = JSON.parse(r.stdout);
-    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
     expect(out.hookSpecificOutput.updatedInput.content).toBe(`GITHUB_TOKEN=${FAKE.githubPat}\n`);
     expect(out.hookSpecificOutput.updatedInput.file_path).toBe("/proj/.env");
   });
@@ -148,6 +148,36 @@ describe("PreToolUse — clean-call abstain shape (claude-code#77782)", () => {
 });
 
 describe("PostToolUse — output redaction", () => {
+  it("prevents later prompts from sending an unsupported unscannable result", async () => {
+    const r = await handleClaudeCode("post-tool-use", postToolEvent("FutureTool", {}, "x".repeat(2 * 1024 * 1024 + 1)));
+    expect(JSON.parse(r.stdout).continue).toBe(false);
+    const retry = await handleClaudeCode("user-prompt-submit", promptEvent("continue"));
+    expect(JSON.parse(retry.stdout).decision).toBe("block");
+    const fresh = await handleClaudeCode("user-prompt-submit", JSON.stringify({ session_id: "fresh", prompt: "hello" }));
+    expect(fresh.stdout).toBe("");
+  });
+  it("uses a valid native Bash result when the payload exceeds the scan cap", async () => {
+    const r = await handleClaudeCode(
+      "post-tool-use",
+      postToolEvent("Bash", { command: "cat large.log" }, { stdout: "x".repeat(2 * 1024 * 1024 + 1), stderr: "", interrupted: false }),
+    );
+    const output = JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput;
+    expect(output).toEqual({ stdout: expect.stringContaining("withheld"), stderr: "", interrupted: false, isImage: false });
+  });
+
+  it("does not echo a secret from malformed JSON in its error", async () => {
+    const r = await handleClaudeCode("user-prompt-submit", `bad ${FAKE.githubPat}`);
+    expect(r.stdout.includes(FAKE.githubPat)).toBe(false);
+    expect(JSON.parse(r.stdout).decision).toBe("block");
+  });
+
+  it("honors a read-path exception without disabling output redaction", async () => {
+    writeFileSync(join(home, "allowlist.json"), JSON.stringify({ paths: ["**/.env"] }));
+    const r = await handleClaudeCode("pre-tool-use", preToolEvent("Read", { file_path: "/proj/.env" }));
+    expect(r.stdout).toBe("{}");
+    const post = await handleClaudeCode("post-tool-use", postToolEvent("Read", {}, { file: { content: FAKE.githubPat } }));
+    expect(post.stdout.includes(FAKE.githubPat)).toBe(false);
+  });
   it("redacts secrets in tool_response strings via updatedToolOutput", async () => {
     const response = { type: "text", file: { filePath: "/proj/.env.ci", content: `GITHUB_TOKEN=${FAKE.githubPat}\nDEBUG=1\n` } };
     const r = await handleClaudeCode("post-tool-use", postToolEvent("Read", { file_path: "/proj/.env.ci" }, response));
@@ -156,7 +186,7 @@ describe("PostToolUse — output redaction", () => {
     expect(updated.file.content).not.toContain(FAKE.githubPat);
     expect(updated.file.content).toMatch(/GITHUB_TOKEN=SECRETGATE_[0-9a-f]{12,16}/);
     expect(updated.file.content).toContain("DEBUG=1");
-    expect(out.systemMessage).toContain("1");
+    expect(out.systemMessage).toBeUndefined();
     const placeholder = updated.file.content.match(/SECRETGATE_[0-9a-f]{12,16}/)![0];
     expect(new Vault().secretFor(placeholder)).toBe(FAKE.githubPat);
   });
@@ -179,8 +209,8 @@ describe("PostToolUse — output redaction", () => {
       const r = await handleClaudeCode("post-tool-use", bad);
       const out = JSON.parse(r.stdout);
       // the model receives a withholding notice, NEVER the raw (unscanned) output
-      expect(out.hookSpecificOutput.updatedToolOutput).toMatch(/secretgate withheld/);
-      expect(out.hookSpecificOutput.hookEventName).toBe("PostToolUse");
+      expect(out.continue).toBe(false);
+      expect(out.stopReason).toContain("start a fresh session");
     }
   });
 
@@ -194,6 +224,16 @@ describe("PostToolUse — output redaction", () => {
 });
 
 describe("Codex PostToolUse — block-and-replace redaction", () => {
+  it("keeps Codex's required allow on restored patch input", async () => {
+    const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
+    const r = await handleCodex(
+      "pre-tool-use",
+      preToolEvent("apply_patch", { command: `*** Begin Patch\n*** Add File: copy.txt\n+${placeholder}\n*** End Patch` }),
+    );
+    const output = JSON.parse(r.stdout).hookSpecificOutput;
+    expect(output.permissionDecision).toBe("allow");
+    expect(output.updatedInput.command.includes(FAKE.githubPat)).toBe(true);
+  });
   it("blocks the raw result and returns only a redacted replacement in reason", async () => {
     const response = `PATH=/bin\nTOKEN=${FAKE.githubPat}\n`;
     const r = await handleCodex("post-tool-use", postToolEvent("Bash", { command: "env" }, response));
@@ -282,7 +322,7 @@ describe.each([
     const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
     const r = await handleClaudeCode("pre-tool-use", preToolEvent("Write", { file_path: "/proj/.env", content: `TOKEN=${placeholder}\n` }));
     const out = JSON.parse(r.stdout);
-    expect(out.hookSpecificOutput.permissionDecision).toBe("allow");
+    expect(out.hookSpecificOutput.permissionDecision).toBeUndefined();
     expect(out.hookSpecificOutput.updatedInput.content).toBe(`TOKEN=${FAKE.githubPat}\n`);
   });
 

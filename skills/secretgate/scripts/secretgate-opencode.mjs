@@ -239,6 +239,10 @@ function recordSession(sessionId, cwd) {
   }
 }
 
+// src/paths.ts
+import { homedir as homedir2 } from "os";
+import { relative, resolve as resolve2 } from "path";
+
 // src/engine/allowlist.ts
 import { createHash } from "crypto";
 function sha256(value) {
@@ -303,8 +307,11 @@ var SENSITIVE_GLOBS = [
   "**/credentials.json"
 ];
 var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
-function sensitivePathMatch(path) {
+function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
   const normalized = path.replaceAll("\\", "/");
+  const expanded = normalized.startsWith("~/") ? `${homedir2()}/${normalized.slice(2)}` : normalized;
+  const absolute = resolve2(cwd, expanded).replaceAll("\\", "/");
+  if ([normalized, absolute, relative(cwd, absolute).replaceAll("\\", "/")].some((p) => isAllowedPath(p, allowlist))) return void 0;
   if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g, true))) return void 0;
   return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g, true));
 }
@@ -329,7 +336,7 @@ var READ_COMMANDS = /* @__PURE__ */ new Set([
   "printf",
   "print"
 ]);
-function commandTouchesSensitivePath(command) {
+function commandTouchesSensitivePath(command, allowlist, cwd) {
   for (const segment of command.split(/[;\n]|&&|\|\||\||&/)) {
     const tokens = segment.trim().split(/\s+/);
     if (tokens.length === 0) continue;
@@ -337,9 +344,9 @@ function commandTouchesSensitivePath(command) {
     if (!READ_COMMANDS.has(cmd)) continue;
     for (const raw of tokens.slice(1)) {
       if (raw.startsWith(">")) break;
-      const token = raw.replace(/^['"`]+|['"`]+$/g, "").replace(/^~\//, "/home/x/");
+      const token = raw.replace(/^['"`]+|['"`]+$/g, "");
       if (token.length < 2 || token.startsWith("-")) continue;
-      const hit = sensitivePathMatch(token);
+      const hit = sensitivePathMatch(token, allowlist, cwd);
       if (hit) return token;
     }
   }
@@ -4908,52 +4915,100 @@ function restorePlaceholders(text, vault) {
   return { text: out, restored };
 }
 
+// src/hooks/scan-budget.ts
+var SCAN_CAP = 2 * 1024 * 1024;
+var SCAN_DEADLINE_MS = 5e3;
+function isBinaryField(key, value, parent) {
+  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || key === "url" && typeof value === "string" && /^data:(image|audio)\//.test(value);
+}
+function eventRedactor(vault, source, allowlist) {
+  const deadline = performance.now() + SCAN_DEADLINE_MS;
+  let remaining = SCAN_CAP;
+  return (text) => {
+    remaining -= text.length;
+    const deadlineMs = deadline - performance.now();
+    if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
+    return redactText(text, vault, source, { allowlist, deadlineMs }).text;
+  };
+}
+
 // src/adapters/opencode-plugin.ts
 var ALLOW_TAG = "[allow-secret]";
 function mutateStringsInPlace(container, fn) {
   if (container === null || typeof container !== "object") return false;
-  let changed = false;
-  for (const key of Object.keys(container)) {
-    const v = container[key];
-    if (typeof v === "string") {
-      const mapped = fn(v);
-      if (mapped !== v) {
-        container[key] = mapped;
-        changed = true;
-      }
-    } else if (v !== null && typeof v === "object") {
-      if (mutateStringsInPlace(v, fn)) changed = true;
+  const pending = [];
+  const stack = [container];
+  const seen = /* @__PURE__ */ new Set();
+  while (stack.length) {
+    const current = stack.pop();
+    if (seen.has(current)) continue;
+    seen.add(current);
+    for (const key of Object.keys(current)) {
+      const value = current[key];
+      if (isBinaryField(key, value, current)) continue;
+      const mappedKey = fn(key);
+      const mapped = typeof value === "string" ? fn(value) : value;
+      if (mapped !== value || mappedKey !== key)
+        pending.push(() => {
+          if (mappedKey !== key) delete current[key];
+          Object.defineProperty(current, mappedKey, { value: mapped, enumerable: true, configurable: true, writable: true });
+        });
+      if (value !== null && typeof value === "object") stack.push(value);
     }
   }
-  return changed;
+  for (const apply of pending) apply();
+  return pending.length > 0;
 }
-var RESTORE_TOOLS = /* @__PURE__ */ new Set(["write", "edit", "patch", "multiedit"]);
+var RESTORE_TOOLS = /* @__PURE__ */ new Set(["write", "edit", "patch", "apply_patch", "multiedit"]);
 var READ_TOOLS = /* @__PURE__ */ new Set(["read", "grep"]);
-var isOff = (sessionId) => disableState({ cwd: process.cwd(), sessionId: typeof sessionId === "string" ? sessionId : void 0 }).disabled;
-var SecretgatePlugin = async (_ctx) => {
+var SecretgatePlugin = async (ctx) => {
+  const directory = ctx?.directory;
+  const cwd = typeof directory === "string" ? directory : process.cwd();
+  const isOff = (sessionId) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : void 0 }).disabled;
   return {
+    // OpenCode keeps rewritten args in tool history, including failed calls.
+    // Redact that history immediately before it is converted to model messages.
+    "experimental.chat.messages.transform": async (_input, output) => {
+      for (const message of output.messages ?? []) {
+        if (isOff(message.info?.sessionID)) continue;
+        try {
+          const cfg = loadConfig(cwd);
+          const vault = new Vault();
+          for (const part of message.parts ?? []) {
+            if (part?.type === "tool") mutateStringsInPlace(part, eventRedactor(vault, "opencode:history", cfg.allowlist));
+          }
+        } catch {
+          throw new Error("secretgate: tool history could not be scanned safely; start a fresh session.");
+        }
+      }
+    },
     "chat.message": async (input, output) => {
       const sessionID = input?.sessionID;
-      recordSession(typeof sessionID === "string" ? sessionID : void 0, process.cwd());
+      recordSession(typeof sessionID === "string" ? sessionID : void 0, cwd);
       if (isOff(sessionID)) return;
       const parts = output?.parts;
       if (!Array.isArray(parts)) return;
       if (parts.some((p) => typeof p?.text === "string" && p.text.includes(ALLOW_TAG))) return;
-      const cfg = loadConfig();
-      const vault = new Vault();
-      for (const part of parts) {
-        if (typeof part?.text !== "string") continue;
-        const r = redactText(part.text, vault, "opencode:prompt", { allowlist: cfg.allowlist });
-        if (r.replaced.length > 0) part.text = r.text;
+      try {
+        const cfg = loadConfig(cwd);
+        const vault = new Vault();
+        const redact = eventRedactor(vault, "opencode:prompt", cfg.allowlist);
+        const mapped = parts.map((part) => typeof part?.text === "string" ? redact(part.text) : void 0);
+        parts.forEach((part, i) => {
+          if (mapped[i] !== void 0) part.text = mapped[i];
+        });
+      } catch {
+        throw new Error("secretgate: prompt could not be scanned safely; shorten it and retry.");
       }
     },
     "tool.execute.before": async (input, output) => {
       const tool = String(input?.tool ?? "").toLowerCase();
       const args = output?.args ?? {};
+      const cfg = loadConfig(cwd);
       const off = isOff(input?.sessionID);
       if (!off && READ_TOOLS.has(tool)) {
         const target = typeof args.filePath === "string" ? args.filePath : typeof args.path === "string" ? args.path : void 0;
-        const hit = target ? sensitivePathMatch(target) : void 0;
+        const hit = target ? sensitivePathMatch(target, cfg.allowlist, cwd) : void 0;
         if (hit) {
           throw new Error(
             `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. Allow it with \`secretgate allow --path '${target}'\` if this is intentional.`
@@ -4961,12 +5016,11 @@ var SecretgatePlugin = async (_ctx) => {
         }
       }
       if (!off && tool === "bash" && typeof args.command === "string") {
-        const touched = commandTouchesSensitivePath(args.command);
+        const touched = commandTouchesSensitivePath(args.command, cfg.allowlist, cwd);
         if (touched) {
           throw new Error(`secretgate: this command touches '${touched}', which looks sensitive; its content must not enter the model.`);
         }
       }
-      const cfg = loadConfig();
       const restoreThis = RESTORE_TOOLS.has(tool) || tool === "bash" && cfg.restoreBash;
       if (restoreThis) {
         const vault = new Vault();
@@ -4976,19 +5030,23 @@ var SecretgatePlugin = async (_ctx) => {
     "tool.execute.after": async (input, output) => {
       if (isOff(input?.sessionID)) return;
       const tool = String(input?.tool ?? "").toLowerCase();
-      const cfg = loadConfig();
-      const vault = new Vault();
-      const redact = (s) => redactText(s, vault, `opencode:${tool}`, { allowlist: cfg.allowlist }).text;
-      if (typeof output?.output === "string") {
-        const mapped = redact(output.output);
-        if (mapped !== output.output) output.output = mapped;
-      }
-      if (typeof output?.title === "string") {
-        const mapped = redact(output.title);
-        if (mapped !== output.title) output.title = mapped;
-      }
-      if (output?.metadata !== null && typeof output?.metadata === "object") {
-        mutateStringsInPlace(output.metadata, redact);
+      try {
+        const cfg = loadConfig(cwd);
+        const vault = new Vault();
+        mutateStringsInPlace(output, eventRedactor(vault, `opencode:${tool}`, cfg.allowlist));
+      } catch {
+        const notice = "[secretgate withheld this tool output: scan failed or output exceeded the scan budget]";
+        if (!output || typeof output !== "object") throw new Error(notice);
+        const mcp = "content" in output;
+        for (const key of Object.keys(output)) delete output[key];
+        if (mcp) {
+          output.content = [{ type: "text", text: notice }];
+          output.isError = true;
+        } else {
+          output.output = notice;
+          output.title = "secretgate: output withheld";
+          output.metadata = {};
+        }
       }
     }
   };

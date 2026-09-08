@@ -78,6 +78,13 @@ describe("installClaudeCode", () => {
 });
 
 describe("uninstallClaudeCode", () => {
+  it("preserves a preexisting deny even when it is also one of our defaults", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { deny: [CC_DENY_RULES[0]] } }));
+    installClaudeCode({ settingsPath, command });
+    installClaudeCode({ settingsPath, command });
+    uninstallClaudeCode({ settingsPath });
+    expect(read().permissions.deny).toEqual([CC_DENY_RULES[0]]);
+  });
   it("removes exactly what install added, leaving user config intact", () => {
     writeFileSync(
       settingsPath,

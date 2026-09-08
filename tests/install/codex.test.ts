@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -8,7 +8,7 @@ let dir: string;
 const command = "node /home/u/.secretgate/bin/secretgate.mjs";
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "secretgate-codex-"));
+  dir = realpathSync(mkdtempSync(join(tmpdir(), "secretgate-codex-")));
 });
 
 afterEach(() => {
@@ -16,6 +16,16 @@ afterEach(() => {
 });
 
 describe("installCodex", () => {
+  it("registers trust against the canonical config path through a directory symlink", () => {
+    const actual = join(dir, "actual");
+    mkdirSync(actual);
+    const alias = join(dir, "alias");
+    symlinkSync(actual, alias, "junction");
+    installCodex({ codexDir: alias, command });
+    const config = readFileSync(join(actual, "config.toml"), "utf8");
+    expect(config).toContain(JSON.stringify(`${join(realpathSync(actual), "hooks.json")}:user_prompt_submit:0:0`));
+    expect(config).not.toContain(`${alias}/hooks.json`);
+  });
   it("writes hooks.json WITH the required top-level hooks wrapper", () => {
     const r = installCodex({ codexDir: dir, command });
     expect(r.hooks.changed).toBe(true);
@@ -103,6 +113,7 @@ describe("uninstallCodex", () => {
     uninstallCodex({ codexDir: dir });
     const parsed = JSON.parse(readFileSync(join(dir, "hooks.json"), "utf8"));
     expect(parsed.hooks.UserPromptSubmit[0].hooks[0].command).toBe("/my/own.sh");
+    expect(readFileSync(join(dir, "config.toml"), "utf8")).toMatch(/hooks\s*=\s*true/);
   });
 
   it("removes only Secretgate hook trust and preserves a foreign hook state", () => {
@@ -156,10 +167,10 @@ command = "/usr/local/bin/node_repl"
 
     const toml = readFileSync(join(dir, "config.toml"), "utf8");
     expect(toml).toContain('notify = ["/usr/local/bin/notify"]');
-    expect(toml).toContain("[features]\njs_repl = false");
+    expect(toml).toContain("js_repl = false");
     expect(toml).toContain("[plugins.browser]\nenabled = true");
     expect(toml).toContain('[mcp_servers.node_repl]\ncommand = "/usr/local/bin/node_repl"');
-    expect(toml).not.toContain("secretgate managed");
-    expect(toml).not.toMatch(/^hooks\s*=\s*true$/m);
+    expect(toml).toContain("secretgate managed");
+    expect(toml).toMatch(/^hooks\s*=\s*true$/m);
   });
 });

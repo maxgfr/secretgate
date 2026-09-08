@@ -10,11 +10,21 @@ export async function handleCodex(event: string, rawStdin: string): Promise<Hook
   // `notices: false`: the "secretgate is DISABLED" banner is a bare
   // `systemMessage`, a Claude Code output field. Codex has no equivalent, so it
   // stays silent there rather than handing Codex JSON it has no field for.
-  const r = await handleClaudeCode(event, rawStdin, { notices: false });
+  const r = await handleClaudeCode(event, rawStdin, { notices: false, blockFallback: true });
+  if (event === "pre-tool-use" && r.stdout.trim()) {
+    const output = JSON.parse(r.stdout);
+    if (output.hookSpecificOutput?.updatedInput !== undefined) {
+      // Codex requires allow with rewritten arguments; its own tool approvals
+      // remain enforced separately. Claude supports decision-free updatedInput.
+      output.hookSpecificOutput.permissionDecision = "allow";
+      return { ...r, stdout: JSON.stringify(output) };
+    }
+  }
   if (event === "post-tool-use") {
     if (!r.stdout.trim()) return r;
-    const output = JSON.parse(r.stdout) as { hookSpecificOutput?: { updatedToolOutput?: unknown } };
-    const replacement = output.hookSpecificOutput?.updatedToolOutput;
+    const output = JSON.parse(r.stdout) as { continue?: boolean; stopReason?: string; hookSpecificOutput?: { updatedToolOutput?: unknown } };
+    const replacement =
+      output.continue === false ? "[secretgate withheld this tool output: it could not be scanned safely]" : output.hookSpecificOutput?.updatedToolOutput;
     if (replacement === undefined) return { stdout: "", exit: r.exit };
     const text = typeof replacement === "string" ? replacement : JSON.stringify(replacement);
     return {

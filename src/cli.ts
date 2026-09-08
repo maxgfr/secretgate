@@ -23,7 +23,7 @@ import { handleClaudeCode } from "./hooks/claude-code.js";
 import { handleCodex } from "./hooks/codex.js";
 import { writeAllow } from "./install/allow-store.js";
 import { installClaudeCode, uninstallClaudeCode } from "./install/claude-code.js";
-import { codexHome, installCodex, uninstallCodex } from "./install/codex.js";
+import { codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
 import { SettingsParseError } from "./install/json-merge.js";
 import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
@@ -437,7 +437,6 @@ async function cmdEnable(args: string[], io: Io): Promise<number> {
 // larger prompt/output is withheld, never leaked. Real tool outputs are far
 // under 2 MB.
 const HARD_READ_CAP = 64 * 1024 * 1024;
-const SCAN_CAP = 2 * 1024 * 1024;
 
 async function cmdHook(args: string[], io: Io): Promise<number> {
   const [agent, event] = args;
@@ -449,7 +448,19 @@ async function cmdHook(args: string[], io: Io): Promise<number> {
   try {
     const read = await readIoStdinCapped(io, HARD_READ_CAP);
     // Truncated or over the scan cap -> non-JSON sentinel -> handler fails CLOSED.
-    raw = read.truncated || read.text.length > SCAN_CAP ? "__SECRETGATE_OVERSIZED__" : read.text;
+    // Keep complete envelopes so the handler can produce schema-valid fallbacks.
+    if (read.truncated) {
+      // Agent metadata normally precedes tool_response. Recover only string
+      // metadata from the prefix so a hard-cap failure can replace Bash output
+      // or prevent resuming a session whose output could not be replaced.
+      const envelope: Record<string, unknown> = { __secretgate_unscannable: true };
+      const prefix = read.text.slice(0, Math.max(0, read.text.indexOf('"tool_response"')));
+      for (const key of ["tool_name", "session_id", "cwd"]) {
+        const match = new RegExp(`"${key}"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*")`).exec(prefix);
+        if (match) envelope[key] = JSON.parse(match[1]!);
+      }
+      raw = JSON.stringify(envelope);
+    } else raw = read.text;
   } catch {
     raw = "__SECRETGATE_STDIN_ERROR__";
   }
@@ -685,6 +696,11 @@ function verifyClaudeCodeWiring(io: Io): boolean {
 // original model-visible result with that feedback. Verify the exact bundled
 // adapter shape rather than assuming the shared scanner is enough.
 function verifyCodexWiring(io: Io): boolean {
+  const state = codexWiringStatus(codexHome());
+  if (state.expected !== 3 || state.trusted !== 3 || !state.feature) {
+    io.stdout("  ✗ codex: expected three enabled, trusted hooks; run install --codex to repair wiring.\n");
+    return false;
+  }
   const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
   const self = fileURLToPath(import.meta.url);
   const bundle = existsSync(pinned) ? pinned : self;
@@ -727,6 +743,40 @@ function verifyCodexWiring(io: Io): boolean {
   return ok;
 }
 
+function verifyOpencodeBundle(io: Io): boolean {
+  const scratch = mkdtempSync(join(tmpdir(), "secretgate-verify-opencode-"));
+  const plugin = join(opencodeConfigDir(), "plugin", "secretgate.js");
+  // OpenCode loads ESM .js through Bun; Node 18 needs an explicit .mjs suffix.
+  const verificationModule = join(scratch, "secretgate.mjs");
+  const script = `
+    const { SecretgatePlugin } = await import(${JSON.stringify(pathToFileURL(verificationModule).href)});
+    const hooks = await SecretgatePlugin({ directory: process.cwd() });
+    const fake = 'ghp_' + ['aB3dE6','gH9jK2','mN5pQ8','sT1vW4','yZ7bC0','dF6hJ9'].join('');
+    const prompt = { parts: [{ text: fake }] };
+    await hooks['chat.message']({}, prompt);
+    const token = prompt.parts[0].text;
+    if (!token.startsWith('SECRETGATE_')) throw new Error('prompt redaction failed');
+    const result = { content: [{ type: 'text', text: fake }] };
+    await hooks['tool.execute.after']({ tool: 'mcp_verify' }, result);
+    if (JSON.stringify(result).includes(fake)) throw new Error('MCP redaction failed');
+    const args = { patchText: token };
+    await hooks['tool.execute.before']({ tool: 'apply_patch' }, { args });
+    if (args.patchText !== fake) throw new Error('patch restore failed');
+  `;
+  try {
+    copyFileSync(plugin, verificationModule);
+    const env = { ...process.env, SECRETGATE_HOME: scratch, SECRETGATE_DISABLE: "0" };
+    execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: scratch, env, stdio: "pipe", timeout: 15000 });
+    io.stdout("  ✓ opencode: installed plugin passes prompt, MCP and patch-restore checks.\n");
+    return true;
+  } catch {
+    io.stdout("  ✗ opencode: installed plugin verification failed; reinstall and retry.\n");
+    return false;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 // `init` — the one-shot: install for the agents on this machine (or the ones
 // named), then PROVE the protection actually fires end-to-end.
 async function cmdInit(args: string[], io: Io): Promise<number> {
@@ -751,12 +801,12 @@ async function cmdInit(args: string[], io: Io): Promise<number> {
   io.stdout("\n== install ==\n");
   const outcome = installForAgents(flags, io);
 
-  io.stdout("\n== verify the firewall actually fires ==\n");
+  io.stdout("\n== verify installed adapters (local checks, no model request) ==\n");
   let ok = true;
   // Verify only what actually installed.
   if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
   if (outcome.installed.codex) ok = verifyCodexWiring(io) && ok;
-  if (outcome.installed.opencode) io.stdout("  · opencode: plugin installed; restart OpenCode to load it.\n");
+  if (outcome.installed.opencode) ok = verifyOpencodeBundle(io) && ok;
   if (!outcome.installed.claudeCode && !outcome.installed.codex && !outcome.installed.opencode) {
     io.stdout("  (nothing installed to verify)\n");
     ok = false;
@@ -765,7 +815,7 @@ async function cmdInit(args: string[], io: Io): Promise<number> {
 
   io.stdout("\n");
   if (ok && outcome.errors.length === 0) {
-    io.stdout("secretgate is active. Restart your agent session so the hooks load, then you're protected.\n");
+    io.stdout("secretgate installed; local checks passed. Restart each agent to load the hooks. These checks do not certify an already-running session.\n");
     return 0;
   }
   io.stderr("secretgate: some agents did not install/verify cleanly — review the messages above, then re-run `secretgate init`.\n");
@@ -860,13 +910,15 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   // codex
   const codexHooks = readJsonSafe(join(codexHome(), "hooks.json"));
   const codexWired = hookWireCount(codexHooks, "hook codex");
-  let codexFeature = false;
-  try {
-    codexFeature = /^\s*hooks\s*=\s*true\b/m.test(readFileSync(join(codexHome(), "config.toml"), "utf8"));
-  } catch {}
+  const codexState = codexWiringStatus(codexHome());
+  const codexFeature = codexState.feature;
   io.stdout(
     `codex     ${codexWired > 0 && codexFeature ? `wired (${codexWired} hooks, feature gate on)` : codexWired > 0 ? "hooks present but [features] hooks = true is MISSING" : "not wired"}  ${codexHome()}\n`,
   );
+  if (codexWired > 0)
+    io.stdout(
+      `codex     trusted and enabled: ${codexState.trusted}/${codexState.expected}; ${codexState.trusted === 3 && codexState.expected === 3 ? "definitions match" : "re-run install --codex"}\n`,
+    );
   if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
 
   // opencode

@@ -2,7 +2,7 @@
   "name": "secretgate",
   "version": "1.3.1",
   "private": true,
-  "description": "Local secrets firewall for coding agents: detects credentials in prompts, file reads and tool output BEFORE they are sent to the LLM API — redacts them to stable placeholders and restores the real values locally. Zero-dependency engine with gitleaks-derived rules; installers for Claude Code, OpenAI Codex CLI and OpenCode. Distributed as an agent skill (npx skills add maxgfr/secretgate) — no npm package.",
+  "description": "Local secrets firewall for coding agents: detects credentials in prompts, file reads and tool output BEFORE they are sent to the LLM API \u2014 redacts them to stable placeholders and restores the real values locally. Zero-dependency engine with gitleaks-derived rules; installers for Claude Code, OpenAI Codex CLI and OpenCode. Distributed as an agent skill (npx skills add maxgfr/secretgate) \u2014 no npm package.",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -22,7 +22,8 @@
     "verify:bundle": "node scripts/verify-skill-bundle.mjs",
     "check:build": "node scripts/convert-rules.mjs --check && tsup && node scripts/copy-bundle.mjs && git diff --exit-code -- scripts/secretgate.mjs scripts/secretgate-opencode.mjs skills/secretgate/scripts/secretgate.mjs skills/secretgate/scripts/secretgate-opencode.mjs src/engine/rules.gen.ts && node scripts/verify-skill-bundle.mjs",
     "demo": "sh -c 'printf \"aws key AKIA%s ok\" Q7R2M3XBL4WPZ6TK | node scripts/secretgate.mjs scan - --json; [ $? -eq 1 ]'",
-    "release": "semantic-release"
+    "release": "semantic-release",
+    "test:live": "node tests/e2e/live-agents.mjs"
   },
   "license": "MIT",
   "author": "maxgfr",

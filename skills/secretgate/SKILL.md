@@ -1,104 +1,100 @@
 ---
 name: secretgate
-description: "Use when the user wants to protect secrets/credentials from being sent to an LLM by a coding agent, install or manage a local secrets firewall, or scan text/files/repos for leaked credentials. secretgate detects secrets (221 gitleaks-derived rules + entropy + Luhn, zero-dependency engine, `node scripts/secretgate.mjs`) in prompts, file reads and tool output BEFORE they reach the LLM API, redacts them to stable placeholders (SECRETGATE_xxx) and restores the real values locally when the agent writes them back to files. Ships installers for Claude Code (hooks), OpenAI Codex CLI (hooks) and OpenCode (plugin). Triggers: 'protect my secrets', 'secrets firewall', 'stop sending credentials to the LLM', 'install secretgate', 'scan for secrets', 'redact secrets before sending', 'block credentials in prompts'."
+description: "Use to install, verify or manage the local secrets firewall for Claude Code, Codex CLI and OpenCode, or scan text/files/repos for leaked credentials. The bundled CLI runs without npm install. It masks detected secrets in supported tool output, restores placeholders on file writes, blocks secret-bearing Claude/Codex prompts and rewrites OpenCode prompts. Triggers include 'install secretgate', 'protect my secrets', 'secrets firewall', 'scan for secrets', and 'turn secretgate off for this session'."
 license: MIT
 metadata:
   version: 1.3.1
 ---
 
-# secretgate — local secrets firewall for coding agents
+# Secretgate
 
-A credential must never travel to an LLM API. secretgate enforces that locally,
-with a deterministic engine (`node scripts/secretgate.mjs`, no npm install, no
-keys): 221 rules converted from gitleaks + entropy gates + Luhn-checked cards.
-Where the agent's hook API allows rewriting, secrets are **redacted to stable
-placeholders** and **restored locally** when the agent writes them back
-(redact-and-restore); where it only allows blocking (prompts on Claude
-Code/Codex), the prompt is **blocked with a redacted copy** to resend.
+Run commands from this skill's directory, or use the absolute path to its
+`scripts/secretgate.mjs`. No npm installation or API key is required.
 
-## Activation → install (do this first when the skill triggers)
+## Install or update
 
-When this skill activates (the user asks to protect secrets / install
-secretgate / set up the firewall), run the doctor, then wire whatever is not
-yet wired. secretgate is a skill, not an npm package — you run its own bundle:
+When asked to install or protect the user's agent:
 
-```bash
-node scripts/secretgate.mjs status                  # what is already wired
-node scripts/secretgate.mjs install --claude-code   # hooks + permissions.deny in ~/.claude/settings.json
-node scripts/secretgate.mjs install --codex         # ~/.codex/hooks.json + [features] hooks = true
-node scripts/secretgate.mjs install --opencode      # self-contained plugin in ~/.config/opencode/plugin/
-node scripts/secretgate.mjs install --all           # all three
-```
+1. Run `node scripts/secretgate.mjs status` to inspect the current installation.
+2. Run `node scripts/secretgate.mjs init` to detect installed agents, install the
+   bundled hooks/plugin and check their adapters. Use `init --all` when the user
+   requests all three; individual flags are `--claude-code`, `--codex`, `--opencode`.
+3. Read every agent's result. Report failures individually. Installation is
+   complete when the requested integrations pass their local checks.
+4. Tell the user to restart the affected agent sessions. Existing sessions do
+   not reload hooks automatically. Local adapter checks do not prove an agent
+   session has loaded them; never describe an untested session as verified.
 
-`--project` scopes the Claude Code install to `./.claude/settings.json`.
-`install` pins a copy of the bundle under `~/.secretgate/bin/` and wires the
-agent to call THAT, so it keeps working after the skill cache is evicted. Always
-tell the user to RESTART the agent session afterwards — hooks load at startup.
-Once wired, redaction is automatic and deterministic (the hook does it, not you).
+For an audit, start with `status` and read-only checks. Installation is only
+needed when requested or included in the task.
 
-## Commands
+Install pins the CLI under `~/.secretgate/bin/` and copies a standalone plugin
+into OpenCode's config directory. These survive eviction of the skill cache.
+`--project` scopes only Claude Code settings to the current project.
 
-| Command | What it does |
-|---|---|
-| `status` | Doctor: per-agent wiring, engine, vault health, limitations |
-| `scan <file\|dir\|->` | Scan for secrets (exit 1 on findings; `--json`; never prints raw secrets) |
-| `pipe` | stdin -> stdout with secrets redacted to placeholders |
-| `allow <value>` / `allow --rule <id>` / `allow --path <glob>` | Allowlist (values stored as SHA-256, never in clear) |
-| `vault list` / `vault clear` | Inspect placeholder mappings (never shows secrets) |
-| `disable` / `enable` | Turn the firewall off for one run, and back on (see below) |
-| `uninstall --<agent>` | Remove exactly what install added |
+## Everyday behavior
 
-## How the protection works (tell the user when asked)
+- Claude Code/Codex prompts containing detected secrets are blocked with a
+  redacted copy to resend. OpenCode rewrites prompt text in place.
+- Supported tool results are masked automatically. Claude Code uses a native
+  output rewrite; Codex replaces the result with redacted hook feedback;
+  OpenCode redacts tool results and restored arguments in model-bound history.
+- File writes and edits restore known `SECRETGATE_…` placeholders locally,
+  including Codex/OpenCode `apply_patch`. Claude Code's normal permission flow
+  remains in force. Bash restoration stays off unless `restoreBash: true` is
+  configured in `~/.secretgate/config.json`.
+- Clean operations are silent. A normal Claude pre-tool hook returns `{}` so
+  the regular permission flow continues.
+- Sensitive reads are denied. Templates such as `.env.example` stay readable.
+  `allow --path` exempts matching reads from the hook deny; tool output is still
+  scanned. The agent's independent permission rules can still refuse a read.
 
-- **Prompts**: Claude Code/Codex → blocked with a redacted copy (add
-  `[allow-secret]` to bypass once). OpenCode → silently redacted in place.
-- **File reads**: `.env*`, keys, `~/.aws`, `~/.ssh`… are denied outright
-  (`.env.example`/`.sample`/`.template` stay readable). The value never enters
-  the model.
-- **Tool/bash output**: redacted to `SECRETGATE_<hash>` placeholders. Claude
-  Code/OpenCode rewrite in place. Codex uses `PostToolUse` block-and-replace:
-  when a successful supported tool result contains a secret, the raw result is
-  rejected and Codex gives the model only Secretgate's redacted `reason`.
-- **Restore**: when the agent writes a placeholder into a file (Write/Edit),
-  the REAL value lands on disk. Bash restore is OFF by default
-  (prompt-injection exfiltration guard) — enable with `restoreBash: true` in
-  `~/.secretgate/config.json`.
-- **Turning it off for one run**: `SECRETGATE_DISABLE=1 <agent>` disables one
-  process; `secretgate disable` pauses the agent session running in this
-  directory for 60 min (`--minutes N`, `--forever`); `secretgate disable
-  --project` pauses the whole directory tree; `secretgate enable` (or `--all`)
-  turns it back on. A pause expires by itself and `status` leads with a banner
-  while one is active. Restore and `scan`/`pipe` keep working while disabled.
-  The switch lives only in `~/.secretgate/` — a repo's `.secretgate.json` can
-  widen the allowlist but can NEVER disable the firewall. When the user asks to
-  turn secretgate off, prefer the narrowest scope and say when it comes back.
-- **Clean tool calls**: the Claude Code pre-tool-use hook answers minimal JSON
-  (`{}`, decision-free = normal permission flow) instead of empty stdout.
-  Empty hook output triggers a Claude Code bug (anthropics/claude-code#77782)
-  that forces an interactive permission prompt on every matched tool call,
-  even in auto mode — and the documented `"defer"` decision value is rejected
-  by Claude Code <= 2.1.212, so `{}` is the abstain that works everywhere.
+## Exceptions and pauses
 
-## NOT covered (be honest with the user)
+Prefer a targeted exception: inline `# pragma: allowlist secret` or
+`gitleaks:allow`, then `allow <value>` (stored as SHA-256), then `allow --path
+<glob>`. Disable a whole rule with `allow --rule <id>` only when appropriate.
+Projects can add exceptions in `.secretgate.json`; OpenCode uses its project
+directory, including when its server starts elsewhere.
 
-- Claude Code `@file` mentions inline content without firing tool hooks
-  (permissions.deny rules are the only cover there).
-- Images/screenshots/clipboard, tool transports that do not emit an agent hook,
-  and anything already in the conversation before install.
-- Codex tool results that do not fire `PostToolUse` (notably failed MCP results),
-  plus Codex's local telemetry/logging copy of a blocked raw result. Native
-  output rewrite fields are still unsupported; model-context protection uses
-  the supported block-and-replace path.
-- If a hook process is killed/times out, the agent proceeds (agent-side
-  fail-open); secretgate itself fails CLOSED on its own errors for pre-events.
-- A blocked prompt is echoed back locally by Claude Code (`Original prompt:`
-  in the terminal and in `claude -p` JSON `result`) — the API never sees it,
-  but treat piped headless output as sensitive.
+`[allow-secret]` in a prompt bypasses that prompt's scan once.
 
-## False positives
+When asked to pause protection, use the narrowest requested scope:
 
-Prefer the narrowest fix: inline `# pragma: allowlist secret` (or
-`gitleaks:allow`) on the line → `allow <value>` (hashed) → `allow --path
-<glob>` → `allow --rule <id>` (last resort) → `disable` for one run. A project
-can commit extra allowlist entries in `.secretgate.json`
-(`{"allowlist": {"paths": […]}}`).
+- `SECRETGATE_DISABLE=1 <agent>`: one process.
+- `disable`: current indexed session, 60 minutes; directory fallback if no
+  session is known. `--minutes N`, `--forever`, `--session` and `--project`
+  provide explicit scopes/lifetimes; see `--help`.
+- `enable` reverses the current pause; `enable --all` clears every pause.
+
+State lives under `~/.secretgate/` (or `SECRETGATE_HOME`), never in a repository's
+configuration. Restore, `scan` and `pipe` keep working while protection is paused.
+Report the effective scope and expiry after changing a pause.
+
+## Verification and limits
+
+The repository's `pnpm run test:live` runs real CLI processes against a local
+model endpoint and checks their outgoing requests using synthetic credentials.
+It requires the three CLIs, but no model account. The separate
+`tests/e2e/claude-code.sh` exercises the authenticated Claude service and defaults
+to Fable 5.1. Distinguish these checks in reports.
+
+- Coverage is limited to text, recognized secrets and events the agent emits.
+  Images, screenshots, binary attachments, already-sent history and unsupported
+  tool transports are outside coverage.
+- Claude `@file` expansion can bypass tool hooks. Installed Read deny rules
+  cover common sensitive paths, not every possible credential-bearing file.
+- Failed MCP calls can bypass Codex's post hook. Raw tool output can remain in
+  agents' local logs/telemetry even when model-bound output is masked.
+- On an unscannable result, supported output envelopes are replaced by a safe
+  notice. Claude stops when no valid replacement can be constructed and blocks
+  subsequent prompts for the known session ID. Start a fresh session. If
+  malformed input omits the session ID, automatic resume protection is unavailable.
+- A process killed or timed out by the host can still fail open. Hook checks
+  cannot provide an OS-level guarantee against all ways of reading a file.
+- Claude can echo blocked prompts in local terminal/headless output. Treat that
+  output as sensitive; it is not evidence of a model request.
+
+`uninstall --<agent>` removes owned wiring and preserves unrelated settings and
+the vault. Legacy Claude deny rules without ownership records are retained,
+because their original owner cannot be determined safely.

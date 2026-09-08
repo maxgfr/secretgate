@@ -7,7 +7,11 @@
 // path a throw fails closed (safe), but that would withhold a legitimately deep
 // output — walking iteratively redacts it instead. Object KEYS are scanned too
 // (a secret can hide in a key name) while preserving the mapping.
-export function mapStrings(value: unknown, fn: (s: string) => string): { value: unknown; changed: boolean } {
+export function mapStrings(
+  value: unknown,
+  fn: (s: string) => string,
+  skip?: (key: string, value: unknown, parent: any) => boolean,
+): { value: unknown; changed: boolean } {
   let changed = false;
   const map = (s: string): string => {
     const out = fn(s);
@@ -36,7 +40,8 @@ export function mapStrings(value: unknown, fn: (s: string) => string): { value: 
       for (const key of Object.keys(src)) {
         const mappedKey = map(key);
         const v = src[key];
-        if (typeof v === "string") dest[mappedKey] = map(v);
+        if (skip?.(key, v, src)) Object.defineProperty(dest, mappedKey, { value: v, enumerable: true, configurable: true, writable: true });
+        else if (typeof v === "string") Object.defineProperty(dest, mappedKey, { value: map(v), enumerable: true, configurable: true, writable: true });
         else if (v !== null && typeof v === "object") {
           dest[mappedKey] = Array.isArray(v) ? [] : {};
           stack.push({ src: v, dest: dest[mappedKey] });

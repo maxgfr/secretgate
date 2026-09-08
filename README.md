@@ -26,9 +26,9 @@ npx skills add maxgfr/secretgate -g          # installs the skill globally
 
 The skill activates on that ask and runs `secretgate init` for you — which
 **auto-detects** Claude Code / Codex / OpenCode on this machine, wires each, and
-then **proves the firewall fires** by spawning the real hook with a fake secret
-(confirming the prompt is blocked and tool output is redacted) before declaring
-success. Restart the agent session afterwards so the hooks load.
+then checks the installed adapters with synthetic secrets. These local checks
+cover prompt masking/blocking, tool output and OpenCode MCP/patch handling; they
+do not certify that an already-running agent has loaded the hooks. Restart the agent session afterwards so the hooks load.
 
 Prefer to run it yourself? The bundle lands next to the installed `SKILL.md`
 (e.g. `~/.claude/skills/secretgate/scripts/secretgate.mjs`, or
@@ -71,11 +71,13 @@ anything per-use.
 | Agent reads a sensitive file | ✅ hook deny + `permissions.deny` | ✅ hook deny | ✅ hook deny (`.env` also denied by OpenCode itself) |
 | Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
 | Placeholder written to a file | ✅ real value restored | ✅ real value restored | ✅ real value restored |
-| Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ✅ **withheld** via block-and-replace | plugin best-effort |
+| Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ✅ **withheld** via block-and-replace | ✅ withheld on scan failure |
 
-**Fail-closed by design.** If a scan crashes, times out against a crafted
-payload, or the output is too large to scan, secretgate **withholds** the tool
-output (a notice replaces it) rather than letting unscanned content through. A
+**Scan failures are explicit.** Supported output envelopes are replaced with a
+withholding notice. If Claude Code cannot accept a safe replacement, Secretgate
+stops the turn and blocks later prompts for that session ID; start a fresh
+session. Malformed events without a session ID cannot be marked for this
+resume protection. Host process kills/timeouts remain a fail-open limitation. A
 per-scan wall-clock budget stops a maliciously slow payload from stalling a hook
 past the agent's timeout (which would otherwise fail open).
 
@@ -167,19 +169,39 @@ Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
 
 ## How it's validated
 
-- 160+ tests incl. per-event hook replays and a **zero-budget false-positive
+- 300+ tests incl. per-event hook replays and a **zero-budget false-positive
   corpus** (lockfiles, minified JS, uuids, git logs, base64 blobs).
 - A **differential CI job** runs the real gitleaks binary against the same
   payloads and requires the JS engine to find everything gitleaks finds
   (machine check on the Go→JS regex conversion).
 - A **`skills-install` CI job**: `npx skills add` → run the bundle's `install`
-  → hooks wired → a secret-bearing prompt is actually blocked (the whole
+  → adapters installed → a secret-bearing prompt is actually blocked (the whole
   no-npm distribution path).
 - A **self-scan CI job**: secretgate scans its own repo → 0 findings.
 - Verified against **real `claude -p` sessions** by inspecting the session
   transcript: a secret in a tool result never appears in what reached the
   model (only the placeholder does), and restore-on-write puts the real value
   on disk. E2E script: `tests/e2e/claude-code.sh`.
+
+## Integration verification
+
+`pnpm run test:live` launches the actual Claude Code, Codex and OpenCode binaries
+against a loopback model endpoint. It inspects outgoing requests for synthetic
+secrets and confirms restore-on-write on disk, including MCP results. No model
+account is needed. `node tests/e2e/live-agents.mjs codex` selects one agent.
+
+`bash tests/e2e/claude-code.sh` additionally uses an authenticated Claude account
+and defaults to `claude-fable-5-1` (`SECRETGATE_TEST_MODEL` overrides it). This
+service test complements the deterministic request-capture tests.
+
+Clean hooks are silent. Path exceptions lift Secretgate's read denial while
+keeping output redaction; the agent's own permissions can still deny access.
+OpenCode also scans tool history before model conversion, including restored
+write arguments and errors. Disabling protection intentionally skips this scan.
+
+Install/uninstall preserve existing rules and foreign hooks. Claude ownership
+is recorded beside settings; legacy rules without an ownership record are
+retained on uninstall. `status` checks Codex trust definitions as well as wiring.
 
 ## Development
 
