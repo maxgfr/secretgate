@@ -3,7 +3,7 @@ name: secretgate
 description: "Use to install, verify or manage the local secrets firewall for Claude Code, Codex CLI and OpenCode, or scan text/files/repos for leaked credentials. The bundled CLI runs without npm install. It masks detected secrets in supported tool output, restores placeholders on file writes, blocks secret-bearing Claude/Codex prompts and rewrites OpenCode prompts. Triggers include 'install secretgate', 'protect my secrets', 'secrets firewall', 'scan for secrets', and 'turn secretgate off for this session'."
 license: MIT
 metadata:
-  version: 1.3.1
+  version: 1.3.2
 ---
 
 # Secretgate

@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.3.2](https://github.com/maxgfr/secretgate/compare/v1.3.1...v1.3.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* harden and verify Claude Code, Codex and OpenCode integrations ([eb2367b](https://github.com/maxgfr/secretgate/commit/eb2367b2c401ca236052fc45a8642c389b390d0c))
+
 ## [1.3.1](https://github.com/maxgfr/secretgate/compare/v1.3.0...v1.3.1) (2026-08-25)
 
 
