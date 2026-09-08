@@ -4,6 +4,9 @@ Validated locally on macOS with Node 24.19.0 and the install-free bundle on
 Node 18.17.0 (the declared minimum). The CI workflow repeats the portable
 runtime checks on Linux, macOS and Windows. Real agent process tests run on
 Linux and macOS; Windows coverage is limited to the bundle and installers.
+On GitHub's Linux runners the Codex fixture keeps its filesystem sandbox but
+shares the runner network, because bwrap cannot configure a loopback interface
+there. This test-only setting does not change installed agent configuration.
 
 | Agent | Version | Checks |
 | --- | --- | --- |

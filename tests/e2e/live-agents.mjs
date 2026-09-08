@@ -263,6 +263,9 @@ for (const agent of agents) {
       execFileSync("node", [bundle, "install", "--codex"], { cwd: project, env, stdio: "pipe" });
       command = "codex";
       args = ["exec", "--skip-git-repo-check", "--json", "--ephemeral", "--sandbox", "workspace-write"];
+      // Hosted Linux runners deny bwrap's loopback setup. Keep the filesystem
+      // sandbox and share the runner's network in this isolated fixture only.
+      if (process.platform === "linux" && process.env.GITHUB_ACTIONS === "true") args.push("-c", "sandbox_workspace_write.network_access=true");
     } else {
       execFileSync("node", [bundle, "install", "--opencode"], { cwd: project, env, stdio: "pipe" });
       writeFileSync(
