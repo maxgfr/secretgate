@@ -113,7 +113,8 @@ function responses(res, model, tool) {
 }
 
 for (const agent of agents) {
-  const scratch = realpathSync(mkdtempSync(join(tmpdir(), "secretgate-live-")));
+  // Codex refuses to place its helper binaries below Linux /tmp.
+  const scratch = realpathSync(mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "secretgate-live-")));
   const project = join(scratch, "project");
   mkdirSync(project);
   const state = join(scratch, "vault");
@@ -197,7 +198,8 @@ for (const agent of agents) {
         };
       } else if (turn === 2) {
         const placeholder = raw.match(/SECRETGATE_[a-f0-9]{12,16}/)?.[0];
-        assert(placeholder, `${agent}: no redacted tool result in the next request`);
+        const toolResults = (body.input ?? []).filter((item) => /tool_call_output|function_call_output/.test(item.type ?? ""));
+        assert(placeholder, `${agent}: no redacted tool result in the next request; ${JSON.stringify(toolResults).slice(-1600)}`);
         if (agent === "codex") {
           const spec = tools.find((t) => t.name === "apply_patch");
           assert(spec, "Missing apply_patch tool");
