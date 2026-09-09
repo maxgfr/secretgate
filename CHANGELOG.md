@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.3.3](https://github.com/maxgfr/secretgate/compare/v1.3.2...v1.3.3) (2026-09-09)
+
+
+### Bug Fixes
+
+* **skills:** preserve manual invocation across agent hosts ([1d90e8a](https://github.com/maxgfr/secretgate/commit/1d90e8a59a226bb495674469f2ed340a9d61a2fe))
+
 ## [1.3.2](https://github.com/maxgfr/secretgate/compare/v1.3.1...v1.3.2) (2026-09-08)
 
 
