@@ -218,3 +218,21 @@ semantic-release) publish the install-free bundle as a release asset. The
 `OpenCode` install writes a self-contained plugin file; there is no npm-pin mode.
 
 MIT — rule definitions derived from [gitleaks](https://github.com/gitleaks/gitleaks) (MIT).
+
+## Manual skill invocation
+
+These skills run when explicitly invoked: `secretgate`. Use `$name` in Codex or `/name` in Claude Code and OpenCode (with the plugin namespace when installed as a Claude plugin).
+
+The skill bundle disables implicit selection in Codex and Claude Code. OpenCode V2 reads `metadata.opencode/autoinvoke: "false"`. For OpenCode V1, merge these entries into `permission.skill` in `~/.config/opencode/opencode.json` or the project configuration; retain unrelated permissions:
+
+```json
+{
+  "permission": {
+    "skill": {
+      "secretgate": "deny"
+    }
+  }
+}
+```
+
+On OpenCode 1.18.30, these rules hide the skills from the agent and reject skill-tool loading, while explicit `/name` commands remain available. Installation with `skills add` does not apply this OpenCode V1 configuration.
