@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.4.0](https://github.com/maxgfr/secretgate/compare/v1.3.3...v1.4.0) (2026-09-11)
+
+
+### Features
+
+* **skill:** let the agent invoke secretgate, with an explicit-only opt-out ([36ebfb0](https://github.com/maxgfr/secretgate/commit/36ebfb012fc21d79bd5bf59edd22ee2f93bcdf07))
+
 ## [1.3.3](https://github.com/maxgfr/secretgate/compare/v1.3.2...v1.3.3) (2026-09-09)
 
 
