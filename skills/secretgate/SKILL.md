@@ -4,8 +4,7 @@ description: Install, verify, and manage Secretgate protections or scan text, fi
 license: MIT
 metadata:
   version: 1.3.3
-  opencode/autoinvoke: 'false'
-disable-model-invocation: true
+  opencode/autoinvoke: 'true'
 ---
 
 # Secretgate

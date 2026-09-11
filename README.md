@@ -219,11 +219,33 @@ semantic-release) publish the install-free bundle as a release asset. The
 
 MIT — rule definitions derived from [gitleaks](https://github.com/gitleaks/gitleaks) (MIT).
 
-## Manual skill invocation
+## Automatic or manual
 
-These skills run when explicitly invoked: `secretgate`. Use `$name` in Codex or `/name` in Claude Code and OpenCode (with the plugin namespace when installed as a Claude plugin).
+`secretgate` is **automatic by default**, and that is the point of it.
+One `secretgate init` wires the hooks into Claude Code, Codex and
+OpenCode, and from then on every prompt, file read and tool result is
+scanned and redacted by the hooks — not by the model, and not on request.
+Turning the firewall off is `secretgate disable` for a run, or removing the
+hooks; nothing about it depends on a skill being invoked.
 
-The skill bundle disables implicit selection in Codex and Claude Code. OpenCode V2 reads `metadata.opencode/autoinvoke: "false"`. For OpenCode V1, merge these entries into `permission.skill` in `~/.config/opencode/opencode.json` or the project configuration; retain unrelated permissions:
+The shipped skill is also model-invocable, so the agent can reach
+`secretgate`'s own commands when a task calls for them. You keep both switches:
+
+| Host | Shipped, automatic | Explicit-only |
+| --- | --- | --- |
+| Claude Code | no `disable-model-invocation` in `SKILL.md` | add `disable-model-invocation: true` |
+| Codex | `allow_implicit_invocation: true` under `policy:` in `agents/openai.yaml` | set it to `false` |
+| OpenCode | `metadata.opencode/autoinvoke: 'true'` in `SKILL.md` | set it to `'false'` |
+
+Claude Code can do it without touching the file:
+`"skillOverrides": { "secretgate": "user-invocable-only" }` in `settings.json`
+leaves `/secretgate` working while hiding the skill from the model. Plugin installs
+ignore `skillOverrides`, so edit the frontmatter there. Updating or reinstalling
+restores the shipped default, so reapply the change afterwards.
+
+OpenCode V1 reads no `autoinvoke` metadata; `permission.skill` in
+`~/.config/opencode/opencode.json` or the project configuration is how you force
+explicit-only there. Retain unrelated permissions:
 
 ```json
 {
@@ -235,4 +257,6 @@ The skill bundle disables implicit selection in Codex and Claude Code. OpenCode 
 }
 ```
 
-On OpenCode 1.18.30, these rules hide the skills from the agent and reject skill-tool loading, while explicit `/name` commands remain available. Installation with `skills add` does not apply this OpenCode V1 configuration.
+On OpenCode 1.18.30 that rule hides the skill from the agent and rejects
+skill-tool loading, while the explicit `/secretgate` command still works.
+Installation with `skills add` does not write this OpenCode V1 configuration.
