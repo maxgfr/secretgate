@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/cli.js";
 import { disableState, recordSession } from "../src/disable.js";
 import { FAKE } from "./fixtures/fake-tokens.js";
@@ -50,6 +50,33 @@ describe("secretgate scan", () => {
     expect(code).toBe(1);
     expect(text()).toContain("aws-access-token");
     expect(text()).not.toContain(FAKE.awsKeyId);
+  });
+
+  it("says so when a file is too large to scan, instead of passing it in silence", async () => {
+    writeFileSync(join(work, "dump.sql"), `-- ${"x".repeat(2 * 1024 * 1024 + 10)}\n`);
+    const c = capture();
+    expect(await run(["scan", work, "--no-gitleaks"], c.io)).toBe(0);
+    expect(c.errText()).toMatch(/1 file\(s\) over 2 MB NOT scanned: dump\.sql/);
+  });
+
+  it("a failing gitleaks binary does not cost the JS findings", async () => {
+    const bin = mkdtempSync(join(tmpdir(), "secretgate-badgl-"));
+    writeFileSync(join(bin, "gitleaks"), "#!/bin/sh\ncat > /dev/null; echo boom >&2; exit 3\n", { mode: 0o755 });
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      vi.resetModules(); // gitleaksPath() caches the binary it found
+      const { run: fresh } = await import("../src/cli.js");
+      const file = join(work, "config.yaml");
+      writeFileSync(file, `key: ${FAKE.githubPat}\n`);
+      const c = capture();
+      expect(await fresh(["scan", file], c.io)).toBe(1);
+      expect(c.text()).toContain("github-pat");
+      expect(c.errText()).toMatch(/gitleaks failed .* JS engine only/);
+    } finally {
+      process.env.PATH = path;
+      rmSync(bin, { recursive: true, force: true });
+    }
   });
 
   it("exits 0 on a clean file", async () => {

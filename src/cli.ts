@@ -136,13 +136,17 @@ function* walkFiles(root: string): Generator<string> {
   }
 }
 
-function readTextFile(path: string): string | undefined {
+// A text file's content, or why it is not scanned. Binary and empty files are
+// skipped quietly; an oversized one is reported — a big dump is exactly where
+// credentials hide, so `scan` never passes it in silence.
+function readTextFile(path: string): { text: string } | { skipped: "empty" | "binary" | "too-large" } {
   const stats = statSync(path);
-  if (stats.size === 0 || stats.size > MAX_FILE_BYTES) return undefined;
+  if (stats.size === 0) return { skipped: "empty" };
+  if (stats.size > MAX_FILE_BYTES) return { skipped: "too-large" };
   const buf = readFileSync(path);
   const probe = buf.subarray(0, 8192);
-  if (probe.includes(0)) return undefined; // binary
-  return buf.toString("utf8");
+  if (probe.includes(0)) return { skipped: "binary" };
+  return { text: buf.toString("utf8") };
 }
 
 function hashPrefix(secret: string): string {
@@ -213,10 +217,21 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
   // The gitleaks pass spawns one process per file: queue them and run a few at
   // a time, then append what they add in file order (deterministic output).
   const extra: Array<() => Promise<ScanHit[]>> = [];
+  const tooLarge: string[] = [];
+  let gitleaksError: string | undefined;
   const scanText = (text: string, sourcePath: string | undefined, label: string): void => {
     const found = scan(text, { sourcePath, allowlist });
     for (const finding of found) hits.push({ finding, path: label });
-    if (gitleaks) extra.push(async () => (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label })));
+    if (gitleaks)
+      extra.push(async () => {
+        try {
+          return (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label }));
+        } catch (err) {
+          // A broken gitleaks must not cost the JS engine's findings.
+          gitleaksError ??= err instanceof Error ? err.message.split("\n")[0] : String(err);
+          return [];
+        }
+      });
   };
 
   if (target === "-") {
@@ -241,9 +256,12 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
         hits.push({ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel });
         continue;
       }
-      const text = readTextFile(file);
-      if (text === undefined) continue;
-      scanText(text, fromCwd.startsWith("..") ? rel : fromCwd, rel);
+      const read = readTextFile(file);
+      if ("skipped" in read) {
+        if (read.skipped === "too-large") tooLarge.push(rel);
+        continue;
+      }
+      scanText(read.text, fromCwd.startsWith("..") ? rel : fromCwd, rel);
     }
   }
   const added: ScanHit[][] = new Array(extra.length);
@@ -256,6 +274,11 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
   };
   await Promise.all(Array.from({ length: Math.min(8, extra.length) }, worker));
   hits.push(...added.flat());
+  if (gitleaksError) io.stderr(`secretgate: gitleaks failed (${gitleaksError}) — these results come from the JS engine only\n`);
+  if (tooLarge.length > 0)
+    io.stderr(
+      `secretgate: ${tooLarge.length} file(s) over ${MAX_FILE_BYTES / 1024 / 1024} MB NOT scanned: ${tooLarge.slice(0, 5).join(", ")}${tooLarge.length > 5 ? ", …" : ""} — scan each with \`secretgate scan - < FILE\` (stdin has no size limit) or exclude them explicitly\n`,
+    );
 
   if (json) {
     io.stdout(

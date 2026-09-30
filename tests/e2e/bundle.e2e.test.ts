@@ -33,6 +33,17 @@ function runBundle(args: string[], stdin?: string): Promise<{ stdout: string; st
 }
 
 describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
+  it("concurrent hook processes never drop each other's vault entries", async () => {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    const token = (n: number): string => `ghp_${Array.from({ length: 36 }, (_, k) => alphabet[(n * 7 + k * 13 + ((n * k) % 11)) % alphabet.length]).join("")}`;
+    const tokens = Array.from({ length: 12 }, (_, n) => token(n + 1));
+    const runs = await Promise.all(tokens.map((t) => runBundle(["pipe"], `TOKEN=${t}\n`)));
+    for (const r of runs) expect(r.code).toBe(0);
+    const vault = JSON.parse(readFileSync(join(home, ".secretgate", "vault.json"), "utf8"));
+    const stored = Object.values(vault.entries as Record<string, { secret: string }>).map((e) => e.secret);
+    for (const t of tokens) expect(stored).toContain(t);
+  });
+
   it("blocks a secret-bearing prompt through the real hook entrypoint, fast", async () => {
     const event = JSON.stringify({ hook_event_name: "UserPromptSubmit", cwd: home, prompt: `deploy with ${FAKE.githubPat}` });
     const r = await runBundle(["hook", "claude-code", "user-prompt-submit"], event);

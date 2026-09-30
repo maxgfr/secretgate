@@ -1639,6 +1639,8 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     }
     if (inline || shape.args[0] === "eval") {
       out.dynamic.push(`${cmd} ${inline ?? "eval"}`);
+      const edits = shape.flags.some((f) => /^-[a-zA-Z]*i/.test(f));
+      for (const w of shape.argWords.slice(1)) push(w, edits ? "write" : "read");
       return cwd;
     }
     if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
@@ -1683,12 +1685,24 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     for (const [idx, w] of targets.entries()) push(w, idx === targets.length - 1 && targets.length > 1 ? "write" : "read");
     return cwd;
   }
-  if (cmd === "sed" && !flags.some((f) => f === "-e" || f === "-f")) {
-    for (const w of targets.slice(1)) push(w, "read");
+  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*i/.test(f) || f.startsWith("--in-place"));
+  if (cmd === "sed") {
+    const files = flags.some((f) => f === "-e" || f === "-f" || f.startsWith("--expression") || f.startsWith("--file")) ? targets : targets.slice(1);
+    for (const w of files) push(w, sedInPlace ? "write" : "read");
     return cwd;
   }
-  if (cmd === "awk" && !flags.some((f) => f === "-f")) {
-    for (const w of targets.slice(1)) push(w, "read");
+  if (cmd === "dd") {
+    for (const w of sc.words) {
+      const m = /^(if|of)=(.+)$/.exec(w.text);
+      if (m) push({ ...w, text: m[2] }, m[1] === "if" ? "read" : "write", true);
+    }
+    return cwd;
+  }
+  if (cmd === "awk" || cmd === "gawk") {
+    const words2 = sc.words.map((w) => w.text);
+    const inPlace = words2.some((t, k) => (t === "-i" || t === "--include") && words2[k + 1] === "inplace");
+    const files = flags.some((f) => f === "-f") ? targets : targets.slice(1);
+    for (const w of files) if (w.text !== "inplace") push(w, inPlace ? "write" : "read");
     return cwd;
   }
   if (/^(?:curl|wget|http|https|xh)$/.test(cmd)) {
@@ -1779,7 +1793,7 @@ function secretgateInvocation(argv) {
 
 // src/vault/vault.ts
 import { randomBytes } from "crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
 
@@ -1804,6 +1818,35 @@ function writeFileAtomic(path, content, mode) {
     closeSync(fd);
   }
   renameSync(tmp, path);
+}
+var LOCK_WAIT_MS = 3e3;
+var LOCK_STALE_MS = 1e4;
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+function withLock(lockPath, fn) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let fd;
+  while (fd === void 0) {
+    try {
+      fd = openSync(lockPath, "wx", 384);
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
+      } catch {
+      }
+      if (Date.now() > deadline) throw new Error("vault is locked by another secretgate process");
+      Atomics.wait(sleeper, 0, 0, 5);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+    }
+  }
 }
 var Vault = class {
   home;
@@ -1837,10 +1880,13 @@ var Vault = class {
     }
     return { version: 1, entries: {} };
   }
-  // recordSecret is a read-merge-write cycle so concurrent hook processes
-  // (multiple tool calls in flight) don't clobber each other's entries.
+  // A read-merge-write cycle under the vault lock, so concurrent hook
+  // processes (tool calls in flight) never drop each other's entries.
   recordSecret(secret, ruleId, source) {
     this.ensureHome();
+    return withLock(`${this.vaultPath}.lock`, () => this.recordLocked(secret, ruleId, source));
+  }
+  recordLocked(secret, ruleId, source) {
     const salt = this.salt();
     const file = this.read();
     let placeholder = "";
@@ -1874,7 +1920,7 @@ var Vault = class {
   }
   clear() {
     this.ensureHome();
-    writeFileAtomic(this.vaultPath, JSON.stringify({ version: 1, entries: {} }, null, 2), 384);
+    withLock(`${this.vaultPath}.lock`, () => writeFileAtomic(this.vaultPath, JSON.stringify({ version: 1, entries: {} }, null, 2), 384));
   }
 };
 
@@ -2322,7 +2368,7 @@ function describeDisable(state) {
 import { basename as basename4, resolve as resolve5 } from "path";
 
 // src/scope.ts
-import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync } from "fs";
+import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
 import { homedir as homedir4, tmpdir } from "os";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute3, join as join6, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
 var isOutside = (rel) => rel === ".." || rel.startsWith(`..${sep2}`) || rel.startsWith("../") || isAbsolute3(rel);
@@ -2463,7 +2509,7 @@ function treeViolation(scope, dir) {
 }
 function isDirectory(abs) {
   try {
-    return statSync(abs).isDirectory();
+    return statSync2(abs).isDirectory();
   } catch {
     return false;
   }
@@ -2531,9 +2577,17 @@ var SAFE_READERS = /* @__PURE__ */ new Set([
   "cmp",
   "nl",
   "tree",
-  "fd"
+  "fd",
+  // In-place edits (`sed -i`, `awk -i inplace`) are classified as writes by
+  // the analyser, so what reaches here as a read really is one.
+  "sed",
+  "awk",
+  "gawk"
 ]);
 var GIT_READ_ONLY = /^git (?:diff|show|log|blame|annotate|status|grep|ls-files|cat-file|whatchanged|shortlog|add|commit|check-ignore)$/;
+function mayModify(ref) {
+  return ref.kind === "write" || !(SAFE_READERS.has(ref.command) || GIT_READ_ONLY.test(ref.command));
+}
 function searchAdvice(scope, refused) {
   const refusedRel = relToRoot(scope, canonical(refused));
   const targets = [...new Set((scope.allow ?? []).map((g) => staticSegments(g).join("/")).filter((p) => p.length > 0 && p !== refusedRel))];
@@ -2561,7 +2615,7 @@ function shellViolation(scope, command, cwd, workdir) {
   return void 0;
 }
 function refViolation(scope, ref, cwd) {
-  if (isControlFile(scope, ref.path, cwd) && (ref.kind === "write" || !(SAFE_READERS.has(ref.command) || GIT_READ_ONLY.test(ref.command)))) {
+  if (isControlFile(scope, ref.path, cwd) && mayModify(ref)) {
     return `'${ref.raw}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)`;
   }
   if (!ref.explicit) return void 0;
@@ -2735,14 +2789,21 @@ function filterSearchOutput(scopes, value, cwd) {
   }
   return { value, changed: false };
 }
-function promptScopeViolation(scopes, prompt, cwd) {
-  if (scopes.length === 0) return void 0;
+function promptMentions(prompt, cwd) {
+  const out = [];
   for (const m of prompt.matchAll(/(?:^|[\s(])@("[^"]+"|[^\s,;)'"`]+)/g)) {
     const raw = m[1].replace(/^"|"$/g, "").replace(/[.:]+$/, "");
     const explicit = raw.startsWith("/") || raw.startsWith("~") || raw.startsWith("./") || raw.startsWith("../");
     const abs = resolve4(cwd, expandHome(raw.replace(/#L?\d+(?:-\d+)?$/, "")));
     if (!explicit && !exists2(abs)) continue;
     if (!explicit && !raw.includes("/") && isDirectory(abs)) continue;
+    out.push({ raw, abs });
+  }
+  return out;
+}
+function promptScopeViolation(scopes, prompt, cwd) {
+  if (scopes.length === 0) return void 0;
+  for (const { raw, abs } of promptMentions(prompt, cwd)) {
     for (const scope of scopes) {
       const v = accessViolation(scope, abs, cwd, isDirectory(abs) ? "list" : "read");
       if (v) return `secretgate scope (${scope.file}): @${raw} \u2014 ${v}. Mention an in-scope file instead.`;
@@ -2768,7 +2829,8 @@ function tamperReason(call, cwd) {
       }
     }
     for (const ref of analysis.refs) {
-      if (ref.kind === "write" && isPolicyFile(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
+      if (ref.kind !== "list" && mayModify(ref) && isPolicyFile(canonical(ref.path), cwd))
+        return `this command may change '${ref.raw}', which configures secretgate or its hooks`;
     }
     return void 0;
   }
@@ -7594,7 +7656,8 @@ var SecretgatePlugin = async (ctx) => {
   const isOff = (sessionId) => offState(sessionId).disabled;
   const client = ctx?.client;
   const isSubsession = async (sessionId) => {
-    if (typeof sessionId !== "string" || typeof client?.session?.get !== "function") return false;
+    if (typeof sessionId !== "string") return false;
+    if (typeof client?.session?.get !== "function") return true;
     try {
       const res = await client.session.get({ path: { id: sessionId } });
       return typeof res?.data?.parentID === "string" && res.data.parentID.length > 0;
@@ -7634,7 +7697,7 @@ var SecretgatePlugin = async (ctx) => {
       if (said && await isSubsession(sessionID)) {
         said.text = `${said.text}
 
-[secretgate: ignored an off-switch in a subagent prompt \u2014 only the user can pause secretgate, in the main session]`;
+[secretgate: ignored an off-switch \u2014 this session could not be confirmed as your main session (a subagent prompt is written by the model). Run \`secretgate disable --session\` in a terminal instead]`;
       } else if (said) {
         const notice = applyPromptDirective(promptDirective(String(said.text)), typeof sessionID === "string" ? sessionID : void 0, cwd);
         said.text = `${said.text}
@@ -7660,6 +7723,14 @@ var SecretgatePlugin = async (ctx) => {
         }
       }
       if (isOff(sessionID)) return;
+      for (const part of parts) {
+        const path = part && typeof part === "object" && part.type === "file" ? attachedPath(part) : void 0;
+        if (path && sensitivePathMatch(path, cfg.allowlist, cwd)) {
+          for (const key of ["url", "filename", "mime", "source"]) delete part[key];
+          part.type = "text";
+          part.text = `[secretgate: an attachment was removed \u2014 '${path}' looks sensitive; reference its values as env vars instead]`;
+        }
+      }
       const typed = (p) => typeof p?.text === "string" && !p.synthetic && (p.type === void 0 || p.type === "text");
       const bypass = parts.some((p) => typed(p) && String(p.text).includes(ALLOW_TAG));
       try {

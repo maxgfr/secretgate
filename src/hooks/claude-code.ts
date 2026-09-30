@@ -3,7 +3,8 @@ import { type DisableState, describeDisable, disableState, recordSession } from 
 import { applyPromptDirective, promptDirective } from "../prompt-directive.js";
 import { redactText } from "../redact.js";
 import { restorePlaceholders } from "../redact.js";
-import { filterSearchOutput, promptScopeViolation } from "../scope.js";
+import { sensitivePathMatch } from "../paths.js";
+import { filterSearchOutput, promptMentions, promptScopeViolation } from "../scope.js";
 import { Vault } from "../vault/vault.js";
 import { preToolPolicy } from "./policy.js";
 import { eventRedactor, isBinaryField, SCAN_CAP } from "./scan-budget.js";
@@ -193,9 +194,17 @@ function handleEnabled(event: string, rawStdin: string, parsed: Record<string, a
 function userPromptSubmit(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
   const prompt = String(input.prompt ?? "");
   // @file mentions inline file content without firing a tool hook.
-  const outOfScope = promptScopeViolation(cfg.scopes, prompt, str(input.cwd) ?? process.cwd());
+  const cwd = str(input.cwd) ?? process.cwd();
+  const outOfScope = promptScopeViolation(cfg.scopes, prompt, cwd);
   if (outOfScope) return { stdout: JSON.stringify({ decision: "block", reason: outOfScope }), exit: 0 };
   if (prompt.includes(ALLOW_TAG)) return PASS;
+  // The host inlines an @-mentioned file with no tool call to deny: check the
+  // mention itself (test fixtures are exempt, as for Read).
+  const sensitive = promptMentions(prompt, cwd).find((m) => sensitivePathMatch(m.abs, cfg.allowlist, cwd));
+  if (sensitive) {
+    const reason = `secretgate blocked this prompt: @${sensitive.raw} looks sensitive, and mentioning it would send its content to the model. Reference the values as env vars instead, allow the file with \`secretgate allow --path '${sensitive.raw}'\`, or add ${ALLOW_TAG} to send it anyway.`;
+    return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
+  }
   const vault = new Vault();
   const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS });
   if (r.findings.length === 0) return PASS;
@@ -250,6 +259,8 @@ function normalizeToolName(name: string): string {
     case "multiedit":
     case "notebookedit":
     case "str_replace":
+    case "str_replace_editor":
+    case "edit_file":
     case "apply_patch":
     case "patch":
       return "Edit";

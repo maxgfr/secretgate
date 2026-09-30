@@ -1,7 +1,7 @@
 import { basename, resolve } from "node:path";
 import type { SecretgateConfig } from "../config.js";
 import { canonical, commandTouchesSensitivePath, expandHome, sensitivePathMatch } from "../paths.js";
-import { isPolicyFile, toolCallScopeViolation } from "../scope.js";
+import { isPolicyFile, mayModify, toolCallScopeViolation } from "../scope.js";
 import { analyzeShell, secretgateInvocation } from "../shell-paths.js";
 import type { NormalizedToolCall } from "./tool-call.js";
 
@@ -42,7 +42,8 @@ function tamperReason(call: NormalizedToolCall, cwd: string): string | undefined
       }
     }
     for (const ref of analysis.refs) {
-      if (ref.kind === "write" && isPolicyFile(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
+      if (ref.kind !== "list" && mayModify(ref) && isPolicyFile(canonical(ref.path), cwd))
+        return `this command may change '${ref.raw}', which configures secretgate or its hooks`;
     }
     return undefined;
   }

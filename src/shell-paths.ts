@@ -785,6 +785,10 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
     }
     if (inline || shape.args[0] === "eval") {
       out.dynamic.push(`${cmd} ${inline ?? "eval"}`);
+      // The program is opaque, the files after it are not: `perl -pi -e '…'
+      // FILE` edits FILE in place, `perl -ne '…' FILE` reads it.
+      const edits = shape.flags.some((f) => /^-[a-zA-Z]*i/.test(f));
+      for (const w of shape.argWords.slice(1)) push(w, edits ? "write" : "read");
       return cwd;
     }
     if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
@@ -853,12 +857,27 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
     for (const [idx, w] of targets.entries()) push(w, idx === targets.length - 1 && targets.length > 1 ? "write" : "read");
     return cwd;
   }
-  if (cmd === "sed" && !flags.some((f) => f === "-e" || f === "-f")) {
-    for (const w of targets.slice(1)) push(w, "read");
+  // `sed -i` / `--in-place` rewrites its files; otherwise it prints them.
+  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*i/.test(f) || f.startsWith("--in-place"));
+  if (cmd === "sed") {
+    const files = flags.some((f) => f === "-e" || f === "-f" || f.startsWith("--expression") || f.startsWith("--file")) ? targets : targets.slice(1);
+    for (const w of files) push(w, sedInPlace ? "write" : "read");
     return cwd;
   }
-  if (cmd === "awk" && !flags.some((f) => f === "-f")) {
-    for (const w of targets.slice(1)) push(w, "read");
+  // dd names its files as operands: `if=` is read, `of=` is written.
+  if (cmd === "dd") {
+    for (const w of sc.words) {
+      const m = /^(if|of)=(.+)$/.exec(w.text);
+      if (m) push({ ...w, text: m[2]! }, m[1] === "if" ? "read" : "write", true);
+    }
+    return cwd;
+  }
+  if (cmd === "awk" || cmd === "gawk") {
+    // gawk `-i inplace` rewrites its files.
+    const words = sc.words.map((w) => w.text);
+    const inPlace = words.some((t, k) => (t === "-i" || t === "--include") && words[k + 1] === "inplace");
+    const files = flags.some((f) => f === "-f") ? targets : targets.slice(1);
+    for (const w of files) if (w.text !== "inplace") push(w, inPlace ? "write" : "read");
     return cwd;
   }
   // Uploaders take files as `@file` / `name=@file` (`curl -d @.env`).

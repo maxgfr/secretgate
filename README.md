@@ -76,7 +76,9 @@ anything per-use.
 - **Project scope** (optional): a `.secretgate.json` can keep the agent inside
   some directories of the repository — see [Scope](#scope).
 - **Standalone scanner**: `secretgate scan <dir>` (exit 1 on findings) doubles
-  as a pre-commit hook; `secretgate pipe` redacts any stream.
+  as a pre-commit hook; `secretgate pipe` redacts any stream. Files over 2 MB
+  are skipped **and listed** on stderr (scan one with `secretgate scan - < FILE`);
+  if the gitleaks binary fails, the JS engine's findings are still reported.
 
 ## Coverage per agent (honest threat model)
 
@@ -85,7 +87,7 @@ anything per-use.
 | Secret pasted in a prompt | ✅ blocked + redacted copy | ✅ blocked + redacted copy | ✅ redacted in place |
 | Agent reads a sensitive file | ✅ hook deny + `permissions.deny` | ✅ hook deny | ✅ hook deny (`.env` also denied by OpenCode itself) |
 | Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
-| Placeholder written to a file | ✅ real value restored | ✅ real value restored | ✅ real value restored |
+| Placeholder written to a file | ✅ real value restored (built-in file tools; never through MCP tools, which may write remotely) | ✅ real value restored (`apply_patch`) | ✅ real value restored (built-in file tools) |
 | Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ✅ **withheld** via block-and-replace | ✅ withheld on scan failure |
 | Agent leaves the project [scope](#scope) | ✅ Read/Edit/Write/LS/Glob/Grep/Bash/MCP denied, search results filtered, `@path` blocked | ✅ shell/`apply_patch` denied | ✅ tools denied, glob/grep/list filtered, attachments removed |
 | Agent tries to switch secretgate off | ✅ **asks you** first | ✅ refused — you run it | ✅ refused — you run it |
@@ -102,7 +104,7 @@ past the agent's timeout (which would otherwise fail open).
 
 | Gap | Why | Mitigation |
 |---|---|---|
-| Claude Code `@file` mentions | inlined without firing tool hooks | `permissions.deny` rules cover real secret locations (`.env`, `.env.local`, `.envrc`, `~/.ssh`, `~/.aws`, `.netrc`, `.npmrc`, `.git-credentials`, the vault…). They cannot express exceptions, so project-wide `*.pem`/`*.key` rules are deliberately not installed — they would block test fixtures; `init` removes the ones older versions added. With a scope, an out-of-scope `@path` in the prompt text is blocked |
+| Claude Code `@file` mentions | inlined without firing tool hooks | the prompt hook checks every `@path` in the prompt: a sensitive file (`@.env`, `@server.pem`, `@credentials.json`; test fixtures exempt) blocks the prompt, and with a scope so does an out-of-scope one. `permissions.deny` rules add a native layer for real secret locations (`.env`, `.env.local`, `.envrc`, `~/.ssh`, `~/.aws`, `.netrc`, `.npmrc`, `.git-credentials`, the vault…); project-wide `*.pem`/`*.key` rules are not installed, since they cannot exempt fixtures (`init` removes the ones older versions added) |
 | Shell commands are analysed, not sandboxed | `$(…)`, variables, `eval`, `python -c` hide paths from any static check | quotes, `cd`, redirections, globs and `x/../y` are resolved; `"bash": "strict"` refuses what cannot be checked; for a hard guarantee add the agent's OS sandbox (Claude Code sandbox, Codex permission profiles) |
 | An agent running as you | it can reach anything your user can, given enough indirection | switching secretgate off from the agent needs your approval (Claude Code) or is refused (Codex, OpenCode); the OS sandbox is the hard boundary |
 | Codex failed/unsupported tool output | `PostToolUse` only fires for successful supported tools; native output rewrite remains unsupported | Bash/apply_patch and successful MCP/local-function results are block-and-replace protected; an MCP result marked as an error can still bypass the post hook |
@@ -178,7 +180,8 @@ secretgate enable                 # back on   (--all clears every pause)
 ```
 
 If the **agent** runs `secretgate disable` (or `allow`, `trust`, `uninstall`,
-or edits `~/.secretgate/`, `.secretgate.json` or its own hook settings),
+or changes `~/.secretgate/`, `.secretgate.json` or its own hook settings — with an
+editor, a redirection, `sed -i`, `perl -pi`, `dd of=`…),
 Claude Code asks you first; Codex and OpenCode cannot ask from a hook, so they
 refuse and tell you to run it yourself — or to say "désactive secretgate".
 

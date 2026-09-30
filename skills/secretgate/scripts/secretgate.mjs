@@ -2,7 +2,7 @@
 
 // src/cli.ts
 import { execFileSync } from "child_process";
-import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync3, realpathSync as realpathSync3, rmSync as rmSync4, statSync as statSync2 } from "fs";
+import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync3, realpathSync as realpathSync3, rmSync as rmSync4, statSync as statSync3 } from "fs";
 import { homedir as homedir7, tmpdir as tmpdir3 } from "os";
 import { dirname as dirname6, join as join11, relative as relative3, resolve as resolve7 } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -1643,6 +1643,8 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     }
     if (inline || shape.args[0] === "eval") {
       out.dynamic.push(`${cmd} ${inline ?? "eval"}`);
+      const edits = shape.flags.some((f) => /^-[a-zA-Z]*i/.test(f));
+      for (const w of shape.argWords.slice(1)) push(w, edits ? "write" : "read");
       return cwd;
     }
     if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
@@ -1687,12 +1689,24 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     for (const [idx, w] of targets.entries()) push(w, idx === targets.length - 1 && targets.length > 1 ? "write" : "read");
     return cwd;
   }
-  if (cmd === "sed" && !flags.some((f) => f === "-e" || f === "-f")) {
-    for (const w of targets.slice(1)) push(w, "read");
+  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*i/.test(f) || f.startsWith("--in-place"));
+  if (cmd === "sed") {
+    const files = flags.some((f) => f === "-e" || f === "-f" || f.startsWith("--expression") || f.startsWith("--file")) ? targets : targets.slice(1);
+    for (const w of files) push(w, sedInPlace ? "write" : "read");
     return cwd;
   }
-  if (cmd === "awk" && !flags.some((f) => f === "-f")) {
-    for (const w of targets.slice(1)) push(w, "read");
+  if (cmd === "dd") {
+    for (const w of sc.words) {
+      const m = /^(if|of)=(.+)$/.exec(w.text);
+      if (m) push({ ...w, text: m[2] }, m[1] === "if" ? "read" : "write", true);
+    }
+    return cwd;
+  }
+  if (cmd === "awk" || cmd === "gawk") {
+    const words2 = sc.words.map((w) => w.text);
+    const inPlace = words2.some((t, k) => (t === "-i" || t === "--include") && words2[k + 1] === "inplace");
+    const files = flags.some((f) => f === "-f") ? targets : targets.slice(1);
+    for (const w of files) if (w.text !== "inplace") push(w, inPlace ? "write" : "read");
     return cwd;
   }
   if (/^(?:curl|wget|http|https|xh)$/.test(cmd)) {
@@ -1783,7 +1797,7 @@ function secretgateInvocation(argv) {
 
 // src/vault/vault.ts
 import { randomBytes } from "crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
 
@@ -1808,6 +1822,35 @@ function writeFileAtomic(path, content, mode) {
     closeSync(fd);
   }
   renameSync(tmp, path);
+}
+var LOCK_WAIT_MS = 3e3;
+var LOCK_STALE_MS = 1e4;
+var sleeper = new Int32Array(new SharedArrayBuffer(4));
+function withLock(lockPath, fn) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  let fd;
+  while (fd === void 0) {
+    try {
+      fd = openSync(lockPath, "wx", 384);
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+      try {
+        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
+      } catch {
+      }
+      if (Date.now() > deadline) throw new Error("vault is locked by another secretgate process");
+      Atomics.wait(sleeper, 0, 0, 5);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+    }
+  }
 }
 var Vault = class {
   home;
@@ -1841,10 +1884,13 @@ var Vault = class {
     }
     return { version: 1, entries: {} };
   }
-  // recordSecret is a read-merge-write cycle so concurrent hook processes
-  // (multiple tool calls in flight) don't clobber each other's entries.
+  // A read-merge-write cycle under the vault lock, so concurrent hook
+  // processes (tool calls in flight) never drop each other's entries.
   recordSecret(secret, ruleId, source) {
     this.ensureHome();
+    return withLock(`${this.vaultPath}.lock`, () => this.recordLocked(secret, ruleId, source));
+  }
+  recordLocked(secret, ruleId, source) {
     const salt = this.salt();
     const file = this.read();
     let placeholder = "";
@@ -1878,7 +1924,7 @@ var Vault = class {
   }
   clear() {
     this.ensureHome();
-    writeFileAtomic(this.vaultPath, JSON.stringify({ version: 1, entries: {} }, null, 2), 384);
+    withLock(`${this.vaultPath}.lock`, () => writeFileAtomic(this.vaultPath, JSON.stringify({ version: 1, entries: {} }, null, 2), 384));
   }
 };
 
@@ -2196,7 +2242,7 @@ function allowlistPath() {
 }
 
 // src/scope.ts
-import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync } from "fs";
+import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
 import { homedir as homedir4, tmpdir } from "os";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute3, join as join5, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
 var isOutside = (rel) => rel === ".." || rel.startsWith(`..${sep2}`) || rel.startsWith("../") || isAbsolute3(rel);
@@ -2337,7 +2383,7 @@ function treeViolation(scope, dir) {
 }
 function isDirectory(abs) {
   try {
-    return statSync(abs).isDirectory();
+    return statSync2(abs).isDirectory();
   } catch {
     return false;
   }
@@ -2405,9 +2451,17 @@ var SAFE_READERS = /* @__PURE__ */ new Set([
   "cmp",
   "nl",
   "tree",
-  "fd"
+  "fd",
+  // In-place edits (`sed -i`, `awk -i inplace`) are classified as writes by
+  // the analyser, so what reaches here as a read really is one.
+  "sed",
+  "awk",
+  "gawk"
 ]);
 var GIT_READ_ONLY = /^git (?:diff|show|log|blame|annotate|status|grep|ls-files|cat-file|whatchanged|shortlog|add|commit|check-ignore)$/;
+function mayModify(ref) {
+  return ref.kind === "write" || !(SAFE_READERS.has(ref.command) || GIT_READ_ONLY.test(ref.command));
+}
 function searchAdvice(scope, refused) {
   const refusedRel = relToRoot(scope, canonical(refused));
   const targets = [...new Set((scope.allow ?? []).map((g) => staticSegments(g).join("/")).filter((p) => p.length > 0 && p !== refusedRel))];
@@ -2435,7 +2489,7 @@ function shellViolation(scope, command, cwd, workdir) {
   return void 0;
 }
 function refViolation(scope, ref, cwd) {
-  if (isControlFile(scope, ref.path, cwd) && (ref.kind === "write" || !(SAFE_READERS.has(ref.command) || GIT_READ_ONLY.test(ref.command)))) {
+  if (isControlFile(scope, ref.path, cwd) && mayModify(ref)) {
     return `'${ref.raw}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)`;
   }
   if (!ref.explicit) return void 0;
@@ -2609,14 +2663,21 @@ function filterSearchOutput(scopes, value, cwd) {
   }
   return { value, changed: false };
 }
-function promptScopeViolation(scopes, prompt, cwd) {
-  if (scopes.length === 0) return void 0;
+function promptMentions(prompt, cwd) {
+  const out = [];
   for (const m of prompt.matchAll(/(?:^|[\s(])@("[^"]+"|[^\s,;)'"`]+)/g)) {
     const raw = m[1].replace(/^"|"$/g, "").replace(/[.:]+$/, "");
     const explicit = raw.startsWith("/") || raw.startsWith("~") || raw.startsWith("./") || raw.startsWith("../");
     const abs = resolve4(cwd, expandHome(raw.replace(/#L?\d+(?:-\d+)?$/, "")));
     if (!explicit && !exists2(abs)) continue;
     if (!explicit && !raw.includes("/") && isDirectory(abs)) continue;
+    out.push({ raw, abs });
+  }
+  return out;
+}
+function promptScopeViolation(scopes, prompt, cwd) {
+  if (scopes.length === 0) return void 0;
+  for (const { raw, abs } of promptMentions(prompt, cwd)) {
     for (const scope of scopes) {
       const v = accessViolation(scope, abs, cwd, isDirectory(abs) ? "list" : "read");
       if (v) return `secretgate scope (${scope.file}): @${raw} \u2014 ${v}. Mention an in-scope file instead.`;
@@ -7501,7 +7562,8 @@ function tamperReason(call, cwd) {
       }
     }
     for (const ref of analysis.refs) {
-      if (ref.kind === "write" && isPolicyFile(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
+      if (ref.kind !== "list" && mayModify(ref) && isPolicyFile(canonical(ref.path), cwd))
+        return `this command may change '${ref.raw}', which configures secretgate or its hooks`;
     }
     return void 0;
   }
@@ -7858,9 +7920,15 @@ function handleEnabled(event, rawStdin, parsed, opts) {
 }
 function userPromptSubmit(input, cfg) {
   const prompt = String(input.prompt ?? "");
-  const outOfScope = promptScopeViolation(cfg.scopes, prompt, str2(input.cwd) ?? process.cwd());
+  const cwd = str2(input.cwd) ?? process.cwd();
+  const outOfScope = promptScopeViolation(cfg.scopes, prompt, cwd);
   if (outOfScope) return { stdout: JSON.stringify({ decision: "block", reason: outOfScope }), exit: 0 };
   if (prompt.includes(ALLOW_TAG)) return PASS;
+  const sensitive = promptMentions(prompt, cwd).find((m) => sensitivePathMatch(m.abs, cfg.allowlist, cwd));
+  if (sensitive) {
+    const reason2 = `secretgate blocked this prompt: @${sensitive.raw} looks sensitive, and mentioning it would send its content to the model. Reference the values as env vars instead, allow the file with \`secretgate allow --path '${sensitive.raw}'\`, or add ${ALLOW_TAG} to send it anyway.`;
+    return { stdout: JSON.stringify({ decision: "block", reason: reason2 }), exit: 0 };
+  }
   const vault = new Vault();
   const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS2 });
   if (r.findings.length === 0) return PASS;
@@ -7910,6 +7978,8 @@ function normalizeToolName(name) {
     case "multiedit":
     case "notebookedit":
     case "str_replace":
+    case "str_replace_editor":
+    case "edit_file":
     case "apply_patch":
     case "patch":
       return "Edit";
@@ -7983,7 +8053,10 @@ async function handleCodex(event, rawStdin) {
     const output = JSON.parse(r.stdout);
     const replacement = output.continue === false ? "[secretgate withheld this tool output: it could not be scanned safely]" : output.hookSpecificOutput?.updatedToolOutput;
     if (replacement === void 0) return { stdout: "", exit: r.exit };
-    const text = typeof replacement === "string" ? replacement : JSON.stringify(replacement);
+    const shell = replacement;
+    const text = typeof replacement === "string" ? replacement : shell && typeof shell === "object" && typeof shell.stdout === "string" ? `${shell.stdout}${typeof shell.stderr === "string" && shell.stderr ? `
+[stderr]
+${shell.stderr}` : ""}` : JSON.stringify(replacement);
     return {
       stdout: JSON.stringify({
         decision: "block",
@@ -8656,12 +8729,13 @@ function* walkFiles(root) {
   }
 }
 function readTextFile(path) {
-  const stats = statSync2(path);
-  if (stats.size === 0 || stats.size > MAX_FILE_BYTES) return void 0;
+  const stats = statSync3(path);
+  if (stats.size === 0) return { skipped: "empty" };
+  if (stats.size > MAX_FILE_BYTES) return { skipped: "too-large" };
   const buf = readFileSync10(path);
   const probe = buf.subarray(0, 8192);
-  if (probe.includes(0)) return void 0;
-  return buf.toString("utf8");
+  if (probe.includes(0)) return { skipped: "binary" };
+  return { text: buf.toString("utf8") };
 }
 function hashPrefix(secret) {
   return sha256(secret).slice(0, 12);
@@ -8718,16 +8792,26 @@ async function cmdScan(args, io) {
   const gitleaks = hybrid && cfg.hybrid === "auto" ? gitleaksPath() : null;
   const hits = [];
   const extra = [];
+  const tooLarge = [];
+  let gitleaksError;
   const scanText = (text, sourcePath, label) => {
     const found = scan(text, { sourcePath, allowlist });
     for (const finding of found) hits.push({ finding, path: label });
-    if (gitleaks) extra.push(async () => (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label })));
+    if (gitleaks)
+      extra.push(async () => {
+        try {
+          return (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label }));
+        } catch (err) {
+          gitleaksError ??= err instanceof Error ? err.message.split("\n")[0] : String(err);
+          return [];
+        }
+      });
   };
   if (target === "-") {
     scanText(await readIoStdin(io), void 0, "stdin");
   } else {
     const root = resolve7(target);
-    const stats = statSync2(root, { throwIfNoEntry: false });
+    const stats = statSync3(root, { throwIfNoEntry: false });
     if (!stats) {
       io.stderr(`scan: no such file or directory: ${target}
 `);
@@ -8744,9 +8828,12 @@ async function cmdScan(args, io) {
         hits.push({ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel });
         continue;
       }
-      const text = readTextFile(file);
-      if (text === void 0) continue;
-      scanText(text, fromCwd.startsWith("..") ? rel : fromCwd, rel);
+      const read = readTextFile(file);
+      if ("skipped" in read) {
+        if (read.skipped === "too-large") tooLarge.push(rel);
+        continue;
+      }
+      scanText(read.text, fromCwd.startsWith("..") ? rel : fromCwd, rel);
     }
   }
   const added = new Array(extra.length);
@@ -8759,6 +8846,13 @@ async function cmdScan(args, io) {
   };
   await Promise.all(Array.from({ length: Math.min(8, extra.length) }, worker));
   hits.push(...added.flat());
+  if (gitleaksError) io.stderr(`secretgate: gitleaks failed (${gitleaksError}) \u2014 these results come from the JS engine only
+`);
+  if (tooLarge.length > 0)
+    io.stderr(
+      `secretgate: ${tooLarge.length} file(s) over ${MAX_FILE_BYTES / 1024 / 1024} MB NOT scanned: ${tooLarge.slice(0, 5).join(", ")}${tooLarge.length > 5 ? ", \u2026" : ""} \u2014 scan each with \`secretgate scan - < FILE\` (stdin has no size limit) or exclude them explicitly
+`
+    );
   if (json) {
     io.stdout(
       `${JSON.stringify(
@@ -9524,7 +9618,7 @@ async function cmdStatus(_args, io) {
   const entries = vault.list();
   io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
   try {
-    const mode = statSync2(join11(defaultVaultHome(), "vault.json")).mode & 511;
+    const mode = statSync3(join11(defaultVaultHome(), "vault.json")).mode & 511;
     io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
 `);
   } catch {

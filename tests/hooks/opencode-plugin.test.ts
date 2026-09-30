@@ -246,7 +246,9 @@ describe("scope + conversational off switch (OpenCode)", () => {
     writeFileSync(join(proj, "src", "a.ts"), "x\n");
     writeFileSync(join(proj, "docs", "b.md"), "x\n");
     writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
-    oc = (await SecretgatePlugin({ directory: proj })) as any;
+    // A real OpenCode passes its client; every session here is top-level.
+    const client = { session: { get: async () => ({ data: {} }) } };
+    oc = (await SecretgatePlugin({ directory: proj, client })) as any;
   });
 
   afterEach(() => rmSync(proj, { recursive: true, force: true }));

@@ -8,8 +8,9 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 // files, credential files in the home directory, tool credential files. A
 // deny rule cannot express exceptions, so project-wide extension globs
 // (`**/*.pem`, `**/*.key`, `**/credentials.json`…) would also refuse the fake
-// keys in test fixtures that security work has to read; those are left to
-// the hook, which exempts fixtures and still redacts their content.
+// keys in test fixtures that security work has to read. Those are left to the
+// hooks, which exempt fixtures: the tool hooks for reads (content still
+// redacted), the prompt hook for `@server.pem`-style mentions.
 export const CC_DENY_RULES = [
   "Read(**/.env)",
   "Read(**/.env.local)",

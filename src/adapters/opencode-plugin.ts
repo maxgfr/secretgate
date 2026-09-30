@@ -5,6 +5,7 @@ import { preToolPolicy } from "../hooks/policy.js";
 import { eventRedactor, isBinaryField } from "../hooks/scan-budget.js";
 import { extractToolCall } from "../hooks/tool-call.js";
 import { applyPromptDirective, promptDirective } from "../prompt-directive.js";
+import { sensitivePathMatch } from "../paths.js";
 import { restorePlaceholders } from "../redact.js";
 import { accessViolation, filterSearchOutput, promptScopeViolation } from "../scope.js";
 import { Vault } from "../vault/vault.js";
@@ -89,9 +90,13 @@ export const SecretgatePlugin = async (ctx: unknown) => {
   const isOff = (sessionId?: unknown): boolean => offState(sessionId).disabled;
   const client = (ctx as { client?: { session?: { get?: (req: { path: { id: string } }) => Promise<{ data?: { parentID?: unknown } }> } } } | undefined)
     ?.client;
-  // Fails SAFE: a session that cannot be looked up counts as a subsession.
+  // Fails SAFE: a session that cannot be looked up — no session API, or the
+  // lookup fails — counts as a subsession, so the off switch is refused and
+  // the user falls back to `secretgate disable` in a terminal. (Without a
+  // session id nothing can be paused anyway.)
   const isSubsession = async (sessionId: unknown): Promise<boolean> => {
-    if (typeof sessionId !== "string" || typeof client?.session?.get !== "function") return false;
+    if (typeof sessionId !== "string") return false;
+    if (typeof client?.session?.get !== "function") return true;
     try {
       const res = await client.session.get({ path: { id: sessionId } });
       return typeof res?.data?.parentID === "string" && res.data.parentID.length > 0;
@@ -137,7 +142,7 @@ export const SecretgatePlugin = async (ctx: unknown) => {
       // chat.message): only the user's own, top-level session may switch
       // secretgate off.
       if (said && (await isSubsession(sessionID))) {
-        said.text = `${said.text}\n\n[secretgate: ignored an off-switch in a subagent prompt — only the user can pause secretgate, in the main session]`;
+        said.text = `${said.text}\n\n[secretgate: ignored an off-switch — this session could not be confirmed as your main session (a subagent prompt is written by the model). Run \`secretgate disable --session\` in a terminal instead]`;
       } else if (said) {
         const notice = applyPromptDirective(promptDirective(String(said.text))!, typeof sessionID === "string" ? sessionID : undefined, cwd);
         said.text = `${said.text}\n\n[${notice}]`;
@@ -163,6 +168,16 @@ export const SecretgatePlugin = async (ctx: unknown) => {
         }
       }
       if (isOff(sessionID)) return;
+      // An attached sensitive file (an @mention) is replaced by a note; test
+      // fixtures are exempt, as for the read tool.
+      for (const part of parts) {
+        const path = part && typeof part === "object" && part.type === "file" ? attachedPath(part) : undefined;
+        if (path && sensitivePathMatch(path, cfg.allowlist, cwd)) {
+          for (const key of ["url", "filename", "mime", "source"] as const) delete part[key];
+          part.type = "text";
+          part.text = `[secretgate: an attachment was removed — '${path}' looks sensitive; reference its values as env vars instead]`;
+        }
+      }
       // [allow-secret] exempts only what the user typed — never attached file
       // content, which could otherwise carry the tag itself.
       const typed = (p: PromptPart): boolean => typeof p?.text === "string" && !p.synthetic && (p.type === undefined || p.type === "text");

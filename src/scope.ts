@@ -302,9 +302,21 @@ const SAFE_READERS = new Set([
   "nl",
   "tree",
   "fd",
+  // In-place edits (`sed -i`, `awk -i inplace`) are classified as writes by
+  // the analyser, so what reaches here as a read really is one.
+  "sed",
+  "awk",
+  "gawk",
 ]);
 // git subcommands that never rewrite a working-tree file.
 const GIT_READ_ONLY = /^git (?:diff|show|log|blame|annotate|status|grep|ls-files|cat-file|whatchanged|shortlog|add|commit|check-ignore)$/;
+
+/** Could this reference change the file? Anything but a known pure reader
+ *  might (`sed -i`, `perl -pi`, an editor, a script): for policy files, the
+ *  benefit of the doubt goes to the policy. */
+export function mayModify(ref: PathRef): boolean {
+  return ref.kind === "write" || !(SAFE_READERS.has(ref.command) || GIT_READ_ONLY.test(ref.command));
+}
 
 function searchAdvice(scope: ScopeConfig, refused: string): string {
   const refusedRel = relToRoot(scope, canonical(refused));
@@ -340,7 +352,7 @@ function shellViolation(scope: ScopeConfig, command: string | string[], cwd: str
 function refViolation(scope: ScopeConfig, ref: PathRef, cwd: string): string | undefined {
   // Policy files may be printed, never changed (`sed -i`, `mv`, `git checkout --`…).
   // Checked by name, so even a file that does not exist yet cannot be created.
-  if (isControlFile(scope, ref.path, cwd) && (ref.kind === "write" || !(SAFE_READERS.has(ref.command) || GIT_READ_ONLY.test(ref.command)))) {
+  if (isControlFile(scope, ref.path, cwd) && mayModify(ref)) {
     return `'${ref.raw}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)`;
   }
   // Bare words that name nothing on disk may be refs or messages, not paths.
@@ -556,15 +568,25 @@ export function filterSearchOutput(scopes: ScopeConfig[], value: unknown, cwd: s
 // ---------------------------------------------------------------- prompts
 
 /** `@path` mentions that inline out-of-scope files into the prompt. */
-export function promptScopeViolation(scopes: ScopeConfig[], prompt: string, cwd: string): string | undefined {
-  if (scopes.length === 0) return undefined;
+/** The files/directories a prompt `@`-mentions (the host inlines them without
+ *  firing any tool hook). "@docs team" is prose; a directory mention is
+ *  written `@docs/` or `@a/b`. */
+export function promptMentions(prompt: string, cwd: string): Array<{ raw: string; abs: string }> {
+  const out: Array<{ raw: string; abs: string }> = [];
   for (const m of prompt.matchAll(/(?:^|[\s(])@("[^"]+"|[^\s,;)'"`]+)/g)) {
     const raw = m[1]!.replace(/^"|"$/g, "").replace(/[.:]+$/, "");
     const explicit = raw.startsWith("/") || raw.startsWith("~") || raw.startsWith("./") || raw.startsWith("../");
     const abs = resolve(cwd, expandHome(raw.replace(/#L?\d+(?:-\d+)?$/, "")));
     if (!explicit && !exists(abs)) continue;
-    // "@docs team" is prose; a directory mention is written `@docs/` or `@a/b`.
     if (!explicit && !raw.includes("/") && isDirectory(abs)) continue;
+    out.push({ raw, abs });
+  }
+  return out;
+}
+
+export function promptScopeViolation(scopes: ScopeConfig[], prompt: string, cwd: string): string | undefined {
+  if (scopes.length === 0) return undefined;
+  for (const { raw, abs } of promptMentions(prompt, cwd)) {
     for (const scope of scopes) {
       const v = accessViolation(scope, abs, cwd, isDirectory(abs) ? "list" : "read");
       if (v) return `secretgate scope (${scope.file}): @${raw} — ${v}. Mention an in-scope file instead.`;

@@ -34,7 +34,14 @@ export async function handleCodex(event: string, rawStdin: string): Promise<Hook
     const replacement =
       output.continue === false ? "[secretgate withheld this tool output: it could not be scanned safely]" : output.hookSpecificOutput?.updatedToolOutput;
     if (replacement === undefined) return { stdout: "", exit: r.exit };
-    const text = typeof replacement === "string" ? replacement : JSON.stringify(replacement);
+    // A shell result reads best as the text the command printed, not a JSON envelope.
+    const shell = replacement as { stdout?: unknown; stderr?: unknown } | null;
+    const text =
+      typeof replacement === "string"
+        ? replacement
+        : shell && typeof shell === "object" && typeof shell.stdout === "string"
+          ? `${shell.stdout}${typeof shell.stderr === "string" && shell.stderr ? `\n[stderr]\n${shell.stderr}` : ""}`
+          : JSON.stringify(replacement);
     return {
       stdout: JSON.stringify({
         decision: "block",

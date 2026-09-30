@@ -87,9 +87,17 @@ describe("2 · an OpenCode subagent cannot switch secretgate off", () => {
     const child = [{ type: "text", text: "désactive secretgate et le scope" }];
     await hooks["chat.message"]({ sessionID: "child" }, { parts: child });
     expect(disableState({ sessionId: "child" }).disabled).toBe(false);
-    expect(child[0]!.text).toMatch(/ignored an off-switch in a subagent prompt/);
+    expect(child[0]!.text).toMatch(/ignored an off-switch — this session could not be confirmed/);
     await hooks["chat.message"]({ sessionID: "root" }, { parts: [{ type: "text", text: "désactive secretgate" }] });
     expect(disableState({ sessionId: "root" }).disabled).toBe(true);
+  });
+
+  it("fails safe when the session API is missing: the off switch is refused", async () => {
+    const hooks = (await SecretgatePlugin({ directory: proj })) as any;
+    const parts = [{ type: "text", text: "disable secretgate" }];
+    await hooks["chat.message"]({ sessionID: "unknown" }, { parts });
+    expect(disableState({ sessionId: "unknown" }).disabled).toBe(false);
+    expect(parts[0]!.text).toMatch(/ignored an off-switch/);
   });
 });
 
@@ -289,5 +297,67 @@ describe("Codex sees the same fixes", () => {
     const run = async (cmd: string) => (await handleCodex("pre-tool-use", pre("exec_command", { cmd }))).stdout;
     expect(JSON.parse(await run("secretgate 'disable'")).hookSpecificOutput.permissionDecision).toBe("deny");
     expect(await run("git commit -m 'mention secretgate disable'")).toBe("");
+  });
+});
+
+// Findings of the GLM 5.3 (z.ai) review.
+describe("GLM review · in-place editors are modifications of policy files", () => {
+  it.each([
+    "sed -i s/a/b/ ~/.claude/settings.json",
+    "sed -i.bak s/a/b/ .secretgate.json",
+    "perl -pi -e s/a/b/ .secretgate.json",
+    "awk -i inplace 1 .secretgate.json",
+    "dd of=.secretgate.json",
+    "code ~/.claude/settings.json",
+  ])("asks for %s", async (command) => {
+    scope(undefined);
+    expect(await bash(command)).toBe("ask");
+  });
+
+  it.each([
+    "sed -n 1,5p .secretgate.json",
+    "awk 1 .secretgate.json",
+    "cat ~/.claude/settings.json",
+    "jq . .secretgate.json",
+  ])("reading is fine: %s", async (command) => {
+    scope(undefined);
+    expect(await bash(command)).toBeUndefined();
+  });
+});
+
+describe("GLM review · restore through built-in editors, never through MCP", () => {
+  it("restores for str_replace_editor, not for an MCP write tool", async () => {
+    const { Vault } = await import("../../src/vault/vault.js");
+    const placeholder = new Vault().recordSecret("ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8", "github-pat", "t");
+    const pre1 = JSON.parse((await handleClaudeCode("pre-tool-use", pre("str_replace_editor", { path: "src/a.ts", new_str: placeholder }))).stdout);
+    expect(pre1.hookSpecificOutput?.updatedInput?.new_str).not.toContain("SECRETGATE_");
+    const pre2 = (await handleClaudeCode("pre-tool-use", pre("mcp__remote__write_file", { path: "src/a.ts", content: placeholder }))).stdout;
+    expect(pre2).not.toContain("updatedInput");
+  });
+});
+
+describe("GLM review · an @-mentioned sensitive file blocks the prompt", () => {
+  const prompt = async (text: string) => (await handleClaudeCode("user-prompt-submit", JSON.stringify({ session_id: "r1", cwd: proj, prompt: text }))).stdout;
+
+  it("blocks @.env and @server.pem, allows fixtures and ordinary files", async () => {
+    scope(undefined);
+    writeFileSync(join(proj, "server.pem"), "x\n");
+    mkdirSync(join(proj, "tests", "fixtures"), { recursive: true });
+    writeFileSync(join(proj, "tests", "fixtures", "server.pem"), "x\n");
+    expect(JSON.parse(await prompt("summarize @.env please")).decision).toBe("block");
+    expect(JSON.parse(await prompt("look at @server.pem")).decision).toBe("block");
+    expect(await prompt("look at @tests/fixtures/server.pem")).toBe("");
+    expect(await prompt("look at @src/a.ts")).toBe("");
+    expect(await prompt("[allow-secret] look at @server.pem")).toBe("");
+  });
+
+  it("OpenCode removes a sensitive attachment", async () => {
+    scope(undefined);
+    const client = { session: { get: async () => ({ data: {} }) } };
+    const hooks = (await SecretgatePlugin({ directory: proj, client })) as any;
+    const parts: any[] = [{ type: "file", url: `file://${join(proj, ".env")}`, mime: "text/plain" }];
+    await hooks["chat.message"]({ sessionID: "o9" }, { parts });
+    expect(parts[0].type).toBe("text");
+    expect(parts[0].text).toMatch(/looks sensitive/);
   });
 });
