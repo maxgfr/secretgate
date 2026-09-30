@@ -8025,6 +8025,12 @@ function writeAllow(add) {
   return merged;
 }
 
+// src/install/hook-marker.ts
+var EVENT_ARGS = "(?:user-prompt-submit|pre-tool-use|post-tool-use)";
+function isSecretgateHook(command, agent) {
+  return typeof command === "string" && new RegExp(`(?:^|\\s)hook\\s+${agent}\\s+${EVENT_ARGS}(?:\\s|$)`).test(command);
+}
+
 // src/install/json-merge.ts
 import { randomBytes as randomBytes4 } from "crypto";
 import { closeSync as closeSync4, copyFileSync, existsSync as existsSync4, openSync as openSync4, readFileSync as readFileSync6, renameSync as renameSync5, writeSync as writeSync4 } from "fs";
@@ -8117,7 +8123,30 @@ var RETIRED_DENY_RULES = [
   "Read(**/*.pfx)",
   "Read(**/*.tfstate)"
 ];
-var MARKER = "hook claude-code";
+var LEGACY_DENY_RULES = [
+  "Read(**/.env)",
+  "Read(**/.env.local)",
+  "Read(**/.env.*.local)",
+  "Read(**/*.pem)",
+  "Read(**/*.key)",
+  "Read(**/id_rsa*)",
+  "Read(**/id_ed25519*)",
+  "Read(**/id_ecdsa*)",
+  "Read(~/.aws/**)",
+  "Read(**/.aws/**)",
+  "Read(~/.ssh/**)",
+  "Read(**/.ssh/**)",
+  "Read(~/.kube/config)",
+  "Read(**/.kube/config)",
+  "Read(**/.netrc)",
+  "Read(**/.npmrc)",
+  "Read(**/.docker/config.json)",
+  "Read(**/credentials.json)"
+];
+function retiredRulesToRemove(deny2, owned) {
+  const legacyInstall = LEGACY_DENY_RULES.every((r) => deny2.includes(r));
+  return RETIRED_DENY_RULES.filter((r) => deny2.includes(r) && (owned.includes(r) || legacyInstall));
+}
 var PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|NotebookEdit|NotebookRead|Bash|mcp__.*";
 var EVENTS = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
@@ -8127,11 +8156,11 @@ var EVENTS = [
 function claudeCodeMatcherCurrent(settings) {
   const groups = settings?.hooks?.PreToolUse;
   if (!Array.isArray(groups)) return false;
-  return groups.some((g) => g.matcher === PRE_TOOL_MATCHER && (g.hooks ?? []).some((h) => String(h.command ?? "").includes(MARKER)));
+  return groups.some((g) => g.matcher === PRE_TOOL_MATCHER && (g.hooks ?? []).some((h) => isSecretgateHook(h.command, "claude-code")));
 }
 function withoutOurGroups(groups) {
   if (!Array.isArray(groups)) return [];
-  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !String(h.command ?? "").includes(MARKER)) })).filter((g) => g.hooks.length > 0);
+  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !isSecretgateHook(h.command, "claude-code")) })).filter((g) => g.hooks.length > 0);
 }
 function installClaudeCode({ settingsPath, command }) {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
@@ -8146,8 +8175,10 @@ function installClaudeCode({ settingsPath, command }) {
       s.hooks[event] = [...kept, group];
     }
     s.permissions ??= {};
-    const retired = new Set((previous.deny ?? []).filter((r) => !CC_DENY_RULES.includes(r)));
-    const deny2 = (Array.isArray(s.permissions.deny) ? s.permissions.deny : []).filter((r) => !retired.has(r));
+    const current = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
+    const owned = previous.deny ?? [];
+    const retired = /* @__PURE__ */ new Set([...owned.filter((r) => !CC_DENY_RULES.includes(r)), ...retiredRulesToRemove(current, owned)]);
+    const deny2 = current.filter((r) => !retired.has(r));
     added.push(...CC_DENY_RULES.filter((r) => !deny2.includes(r)));
     s.permissions.deny = [...deny2, ...added];
   });
@@ -8339,13 +8370,12 @@ function removeHookTrust(content, keys) {
 }
 
 // src/install/codex.ts
-var MARKER2 = "hook codex";
 function codexHome() {
   return process.env.CODEX_HOME ?? join9(homedir5(), ".codex");
 }
 function withoutOurGroups2(groups) {
   if (!Array.isArray(groups)) return [];
-  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !String(h.command ?? "").includes(MARKER2)) })).filter((g) => g.hooks.length > 0);
+  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !isSecretgateHook(h.command, "codex")) })).filter((g) => g.hooks.length > 0);
 }
 var EVENTS2 = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
@@ -8390,7 +8420,7 @@ function ourHookTrustEntries(hooksPath) {
   for (const { event } of EVENTS2) {
     for (const [groupIndex, group] of (root.hooks?.[event] ?? []).entries()) {
       for (const [handlerIndex, handler] of (group.hooks ?? []).entries()) {
-        if (typeof handler.command !== "string" || !handler.command.includes(MARKER2)) continue;
+        if (typeof handler.command !== "string" || !isSecretgateHook(handler.command, "codex")) continue;
         entries.push({
           key: `${hooksPath}:${EVENT_KEY[event]}:${groupIndex}:${handlerIndex}`,
           trustedHash: hookTrustHash(event, group, handler)
@@ -9400,12 +9430,12 @@ function readJsonSafe(path) {
     return void 0;
   }
 }
-function hookWireCount(settings, marker) {
+function hookWireCount(settings, agent) {
   if (!settings?.hooks) return 0;
   let count = 0;
   for (const groups of Object.values(settings.hooks)) {
     if (!Array.isArray(groups)) continue;
-    for (const g of groups) for (const h of g.hooks ?? []) if (String(h.command ?? "").includes(marker)) count++;
+    for (const g of groups) for (const h of g.hooks ?? []) if (isSecretgateHook(h.command, agent)) count++;
   }
   return count;
 }
@@ -9439,14 +9469,15 @@ async function cmdStatus(_args, io) {
   if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
   for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
-    const wired = hookWireCount(settings, "hook claude-code");
+    const wired = hookWireCount(settings, "claude-code");
     const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d) => d.startsWith("Read(")).length : 0;
     io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}
 `);
     if (wired > 0 && !claudeCodeMatcherCurrent(settings))
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) \u2014 run \`secretgate init\` to update
 `);
-    const retired = (Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny : []).filter((r) => RETIRED_DENY_RULES.includes(r));
+    const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
+    const retired = retiredRulesToRemove(Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny : [], Array.isArray(owned) ? owned : []);
     if (retired.length > 0)
       io.stdout(
         `claude-code ${label}  ${retired.length} old deny rule(s) (${retired.slice(0, 2).join(", ")}\u2026) block test fixtures \u2014 run \`secretgate init\` to remove them
@@ -9465,7 +9496,7 @@ async function cmdStatus(_args, io) {
   for (const f of cfg.untrusted) io.stdout(`project   allowlist in ${f} is NOT trusted \u2014 the hooks ignore it until you run \`secretgate trust\`
 `);
   const codexHooks = readJsonSafe(join11(codexHome(), "hooks.json"));
-  const codexWired = hookWireCount(codexHooks, "hook codex");
+  const codexWired = hookWireCount(codexHooks, "codex");
   const codexState = codexWiringStatus(codexHome());
   const codexFeature = codexState.feature;
   io.stdout(

@@ -1,11 +1,10 @@
+import { isSecretgateHook } from "./hook-marker.js";
 import { createHash, randomBytes } from "node:crypto";
 import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { type EditReport, editJsonFile } from "./json-merge.js";
 import { disableHooksFeature, enableHooksFeature, removeHookTrust, upsertHookTrust, type HookTrustEntry } from "./toml-touch.js";
-
-const MARKER = "hook codex";
 
 export function codexHome(): string {
   return process.env.CODEX_HOME ?? join(homedir(), ".codex");
@@ -18,7 +17,7 @@ interface HookGroup {
 
 function withoutOurGroups(groups: HookGroup[] | undefined): HookGroup[] {
   if (!Array.isArray(groups)) return [];
-  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !String(h.command ?? "").includes(MARKER)) })).filter((g) => g.hooks.length > 0);
+  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !isSecretgateHook(h.command, "codex")) })).filter((g) => g.hooks.length > 0);
 }
 
 // Codex does not apply PostToolUse output-rewrite fields, but decision:block
@@ -76,7 +75,7 @@ function ourHookTrustEntries(hooksPath: string): HookTrustEntry[] {
   for (const { event } of EVENTS) {
     for (const [groupIndex, group] of (root.hooks?.[event] ?? []).entries()) {
       for (const [handlerIndex, handler] of (group.hooks ?? []).entries()) {
-        if (typeof handler.command !== "string" || !handler.command.includes(MARKER)) continue;
+        if (typeof handler.command !== "string" || !isSecretgateHook(handler.command, "codex")) continue;
         entries.push({
           key: `${hooksPath}:${EVENT_KEY[event]}:${groupIndex}:${handlerIndex}`,
           trustedHash: hookTrustHash(event, group, handler),

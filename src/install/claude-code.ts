@@ -1,3 +1,4 @@
+import { isSecretgateHook } from "./hook-marker.js";
 import { type EditReport, editJsonFile } from "./json-merge.js";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 
@@ -43,9 +44,40 @@ export const RETIRED_DENY_RULES = [
   "Read(**/*.tfstate)",
 ];
 
+// Everything secretgate <= 1.4 installed, before it recorded ownership.
+const LEGACY_DENY_RULES = [
+  "Read(**/.env)",
+  "Read(**/.env.local)",
+  "Read(**/.env.*.local)",
+  "Read(**/*.pem)",
+  "Read(**/*.key)",
+  "Read(**/id_rsa*)",
+  "Read(**/id_ed25519*)",
+  "Read(**/id_ecdsa*)",
+  "Read(~/.aws/**)",
+  "Read(**/.aws/**)",
+  "Read(~/.ssh/**)",
+  "Read(**/.ssh/**)",
+  "Read(~/.kube/config)",
+  "Read(**/.kube/config)",
+  "Read(**/.netrc)",
+  "Read(**/.npmrc)",
+  "Read(**/.docker/config.json)",
+  "Read(**/credentials.json)",
+];
+
+/**
+ * Retired rules that are secretgate's to remove: recorded as installed by it,
+ * or part of a complete pre-ownership (<= 1.4) rule set — all 18 of those
+ * together can only come from secretgate. A lone rule the user wrote stays.
+ */
+export function retiredRulesToRemove(deny: string[], owned: string[]): string[] {
+  const legacyInstall = LEGACY_DENY_RULES.every((r) => deny.includes(r));
+  return RETIRED_DENY_RULES.filter((r) => deny.includes(r) && (owned.includes(r) || legacyInstall));
+}
+
 // Identifies OUR hook entries regardless of how the CLI is invoked
 // (`secretgate hook claude-code …`, `node …/secretgate.mjs hook claude-code …`).
-const MARKER = "hook claude-code";
 
 // PostToolUse redaction is the linchpin control, so it fires on EVERY tool
 // (matcher "*") — an allow-list would silently miss MCP tools, custom tools and
@@ -66,7 +98,7 @@ const EVENTS: Array<{ event: string; arg: string; matcher?: string }> = [
 export function claudeCodeMatcherCurrent(settings: Record<string, any> | undefined): boolean {
   const groups = settings?.hooks?.PreToolUse;
   if (!Array.isArray(groups)) return false;
-  return groups.some((g: HookGroup) => g.matcher === PRE_TOOL_MATCHER && (g.hooks ?? []).some((h) => String(h.command ?? "").includes(MARKER)));
+  return groups.some((g: HookGroup) => g.matcher === PRE_TOOL_MATCHER && (g.hooks ?? []).some((h) => isSecretgateHook(h.command, "claude-code")));
 }
 
 interface HookGroup {
@@ -76,7 +108,7 @@ interface HookGroup {
 
 function withoutOurGroups(groups: HookGroup[] | undefined): HookGroup[] {
   if (!Array.isArray(groups)) return [];
-  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !String(h.command ?? "").includes(MARKER)) })).filter((g) => g.hooks.length > 0);
+  return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !isSecretgateHook(h.command, "claude-code")) })).filter((g) => g.hooks.length > 0);
 }
 
 export interface InstallOptions {
@@ -101,8 +133,10 @@ export function installClaudeCode({ settingsPath, command }: InstallOptions): Ed
     s.permissions ??= {};
     // Rules an older secretgate added and no longer ships (e.g. `**/*.pem`,
     // which blocked test fixtures) are removed — only the ones it owns.
-    const retired = new Set(((previous.deny ?? []) as string[]).filter((r) => !CC_DENY_RULES.includes(r)));
-    const deny: string[] = (Array.isArray(s.permissions.deny) ? s.permissions.deny : []).filter((r: string) => !retired.has(r));
+    const current: string[] = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
+    const owned: string[] = previous.deny ?? [];
+    const retired = new Set([...owned.filter((r) => !CC_DENY_RULES.includes(r)), ...retiredRulesToRemove(current, owned)]);
+    const deny = current.filter((r) => !retired.has(r));
     added.push(...CC_DENY_RULES.filter((r) => !deny.includes(r)));
     s.permissions.deny = [...deny, ...added];
   });

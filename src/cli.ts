@@ -25,9 +25,10 @@ import { isNonSecret, scan, sensitiveFileNameRule } from "./engine/scanner.js";
 import { failClosed, type HookResult, handleClaudeCode } from "./hooks/claude-code.js";
 import { handleCodex } from "./hooks/codex.js";
 import { writeAllow } from "./install/allow-store.js";
-import { claudeCodeMatcherCurrent, installClaudeCode, RETIRED_DENY_RULES, uninstallClaudeCode } from "./install/claude-code.js";
+import { claudeCodeMatcherCurrent, installClaudeCode, retiredRulesToRemove, uninstallClaudeCode } from "./install/claude-code.js";
 import { CODEX_HOOK_COUNT, codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
 import { SettingsParseError } from "./install/json-merge.js";
+import { isSecretgateHook } from "./install/hook-marker.js";
 import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
 import { Vault, defaultVaultHome } from "./vault/vault.js";
@@ -1015,12 +1016,12 @@ function readJsonSafe(path: string): Record<string, any> | undefined {
   }
 }
 
-function hookWireCount(settings: Record<string, any> | undefined, marker: string): number {
+function hookWireCount(settings: Record<string, any> | undefined, agent: "claude-code" | "codex"): number {
   if (!settings?.hooks) return 0;
   let count = 0;
   for (const groups of Object.values(settings.hooks as Record<string, Array<{ hooks?: Array<{ command?: string }> }>>)) {
     if (!Array.isArray(groups)) continue;
-    for (const g of groups) for (const h of g.hooks ?? []) if (String(h.command ?? "").includes(marker)) count++;
+    for (const g of groups) for (const h of g.hooks ?? []) if (isSecretgateHook(h.command, agent)) count++;
   }
   return count;
 }
@@ -1056,12 +1057,13 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
   for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
-    const wired = hookWireCount(settings, "hook claude-code");
+    const wired = hookWireCount(settings, "claude-code");
     const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d: string) => d.startsWith("Read(")).length : 0;
     io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}\n`);
     if (wired > 0 && !claudeCodeMatcherCurrent(settings))
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) — run \`secretgate init\` to update\n`);
-    const retired = (Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny : []).filter((r: string) => RETIRED_DENY_RULES.includes(r));
+    const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
+    const retired = retiredRulesToRemove(Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny : [], Array.isArray(owned) ? owned : []);
     if (retired.length > 0)
       io.stdout(
         `claude-code ${label}  ${retired.length} old deny rule(s) (${retired.slice(0, 2).join(", ")}…) block test fixtures — run \`secretgate init\` to remove them\n`,
@@ -1080,7 +1082,7 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
 
   // codex
   const codexHooks = readJsonSafe(join(codexHome(), "hooks.json"));
-  const codexWired = hookWireCount(codexHooks, "hook codex");
+  const codexWired = hookWireCount(codexHooks, "codex");
   const codexState = codexWiringStatus(codexHome());
   const codexFeature = codexState.feature;
   io.stdout(

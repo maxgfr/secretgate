@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleClaudeCode } from "../../src/hooks/claude-code.js";
 import { CC_DENY_RULES, installClaudeCode } from "../../src/install/claude-code.js";
+import { installCodex } from "../../src/install/codex.js";
+import { isSecretgateHook } from "../../src/install/hook-marker.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
 // Fixing security bugs means reading the fake keys and .env files that test
@@ -90,5 +92,65 @@ describe("Claude Code deny rules stay out of the fixtures' way", () => {
     expect(deny).toContain("Read(**/.env)");
     const owned: string[] = JSON.parse(readFileSync(`${settingsPath}.secretgate-ownership.json`, "utf8")).deny;
     expect(owned.every((r) => CC_DENY_RULES.includes(r))).toBe(true);
+  });
+
+  it("a pre-ownership (<= 1.4) install loses its retired rules too — seen on a real machine", () => {
+    const legacy = [
+      "Read(**/.env)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/id_rsa*)",
+      "Read(**/id_ed25519*)",
+      "Read(**/id_ecdsa*)",
+      "Read(~/.aws/**)",
+      "Read(**/.aws/**)",
+      "Read(~/.ssh/**)",
+      "Read(**/.ssh/**)",
+      "Read(~/.kube/config)",
+      "Read(**/.kube/config)",
+      "Read(**/.netrc)",
+      "Read(**/.npmrc)",
+      "Read(**/.docker/config.json)",
+      "Read(**/credentials.json)",
+    ];
+    const settingsPath = join(base, "legacy.json");
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { deny: legacy } }));
+    installClaudeCode({ settingsPath, command: "node x.mjs" });
+    const deny: string[] = JSON.parse(readFileSync(settingsPath, "utf8")).permissions.deny;
+    for (const r of ["Read(**/*.pem)", "Read(**/*.key)", "Read(**/id_rsa*)", "Read(**/credentials.json)"]) expect(deny).not.toContain(r);
+    expect(deny).toContain("Read(**/.env)");
+  });
+
+  it("a lone rule the user wrote themselves is never removed", () => {
+    const settingsPath = join(base, "mine.json");
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { deny: ["Read(**/*.pem)"] } }));
+    installClaudeCode({ settingsPath, command: "node x.mjs" });
+    expect(JSON.parse(readFileSync(settingsPath, "utf8")).permissions.deny).toContain("Read(**/*.pem)");
+  });
+});
+
+describe("another tool's hooks are never taken for secretgate's", () => {
+  it("recognises only `hook <agent> <secretgate event>`", () => {
+    expect(isSecretgateHook('node "/x/secretgate.mjs" hook codex pre-tool-use', "codex")).toBe(true);
+    expect(isSecretgateHook("secretgate hook claude-code user-prompt-submit", "claude-code")).toBe(true);
+    expect(isSecretgateHook("SCOPELET_CONFIG_DIR=/x /x/scopelet hook codex", "codex")).toBe(false);
+    expect(isSecretgateHook("/x/scopelet hook claude-code", "claude-code")).toBe(false);
+  });
+
+  it("install keeps a foreign `hook codex` handler on the same event", () => {
+    const codexDir = join(base, "codex");
+    mkdirSync(codexDir, { recursive: true });
+    writeFileSync(
+      join(codexDir, "hooks.json"),
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: ".*", hooks: [{ type: "command", command: "/x/scopelet hook codex" }] }] } }),
+    );
+    installCodex({ codexDir, command: "node x.mjs" });
+    const hooks = JSON.parse(readFileSync(join(codexDir, "hooks.json"), "utf8")).hooks.PreToolUse.flatMap((g: { hooks: Array<{ command: string }> }) =>
+      g.hooks.map((h) => h.command),
+    );
+    expect(hooks).toContain("/x/scopelet hook codex");
+    expect(hooks).toContain("node x.mjs hook codex pre-tool-use");
   });
 });
