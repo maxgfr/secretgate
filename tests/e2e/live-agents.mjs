@@ -359,8 +359,19 @@ for (const agent of agents) {
       throw failure;
     }
     assert(turn >= 1, `${agent}: scope scenario never reached a tool call; ${scoped.stdout.slice(-900)}`);
-    assert(scopeDenials.some(Boolean), `${agent}: the denial reason never reached the model`);
-    console.log(`PASS ${agent} scope: out-of-scope read denied, content never sent, ${requests.filter((r) => r.phase === "scope").length} requests inspected`);
+    // The invariant is the marker check above: the file never reached a
+    // request. After the refused call, a host either reports the refusal to
+    // the model in a follow-up request, or ends the turn (seen on OpenCode in
+    // CI). Both are fail-closed; a follow-up WITHOUT the refusal is not.
+    const lastScoped = JSON.stringify(requests.filter((r) => r.phase === "scope").at(-1)?.body ?? {});
+    assert(
+      scopeDenials.length === 0 || scopeDenials.some(Boolean),
+      `${agent}: a follow-up request did not carry the scope refusal; last request tail: ${lastScoped.slice(-1500)}`,
+    );
+    const surfaced = scopeDenials.length === 0 ? "host ended the turn after the refusal" : "refusal reported to the model";
+    console.log(
+      `PASS ${agent} scope: out-of-scope read denied, content never sent, ${surfaced}, ${requests.filter((r) => r.phase === "scope").length} requests inspected`,
+    );
 
     // Skill: invoking the installed skill by name with `disable` pauses THIS
     // session through the prompt hook — nothing for the agent to run.

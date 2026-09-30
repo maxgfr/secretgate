@@ -214,6 +214,45 @@ describe("loadConfig — project file lookup and validation", () => {
     expect(loadConfig(join(root, "src")).allowlist.rules).not.toContain("y");
   });
 
+  it("treats a git worktree (`.git` is a file) as a repository root", () => {
+    const outer = realpathSync(mkdtempSync(join(tmpdir(), "secretgate-wt-")));
+    try {
+      writeFileSync(join(outer, ".secretgate.json"), JSON.stringify({ scope: { allow: ["nothing/**"] } }));
+      mkdirSync(join(outer, "wt", "src"), { recursive: true });
+      writeFileSync(join(outer, "wt", ".git"), "gitdir: /elsewhere/.git/worktrees/wt\n");
+      writeFileSync(join(outer, "wt", ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
+      const cfg = loadConfig(join(outer, "wt", "src"));
+      expect(cfg.scopes.map((s) => s.root)).toEqual([join(outer, "wt")]);
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
+  });
+
+  it("monorepo: a package scope and the root scope both apply (intersection)", () => {
+    mkdirSync(join(root, "src", "app", "lib"), { recursive: true });
+    writeFileSync(join(root, "src", "app", "lib", "x.ts"), "x\n");
+    writeFileSync(join(root, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
+    writeFileSync(join(root, "src", "app", ".secretgate.json"), JSON.stringify({ scope: { allow: ["lib/**"] } }));
+    const cwd = join(root, "src", "app");
+    const cfg = loadConfig(cwd);
+    expect(cfg.scopes).toHaveLength(2);
+    const read = (p: string) => toolCallScopeViolation(cfg.scopes, extractToolCall("Read", { file_path: p }), cwd);
+    expect(read("lib/x.ts")).toBeUndefined();
+    expect(read("main.ts")).toMatch(/not in scope\.allow/); // allowed by the root, not by the package
+    expect(read("../../tests/a.test.ts")).toBeDefined(); // allowed by neither
+  });
+
+  it("relative paths resolve from the agent's cwd, globs from each scope's root", () => {
+    writeFileSync(join(root, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
+    const cwd = join(root, "src", "app");
+    const cfg = loadConfig(cwd);
+    const bash = (command: string) => toolCallScopeViolation(cfg.scopes, extractToolCall("Bash", { command }), cwd);
+    expect(bash("cat main.ts")).toBeUndefined();
+    expect(bash("cat ../legacy/old.ts")).toBeUndefined();
+    expect(bash("cat ../../docs/guide.md")).toBeDefined();
+    expect(bash("cd ../.. && cat package.json")).toBeDefined();
+  });
+
   it("stops at the repository root", () => {
     const outer = realpathSync(mkdtempSync(join(tmpdir(), "secretgate-outer-")));
     try {

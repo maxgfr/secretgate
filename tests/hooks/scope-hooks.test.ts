@@ -125,6 +125,35 @@ describe("turning secretgate off by saying so", () => {
     expect(disableState({ sessionId: "s1" }).disabled).toBe(true);
   });
 
+  it("`/secretgate disable` then `/secretgate enable` (the skill by name) round-trip on Claude Code", async () => {
+    const off = JSON.parse((await handleClaudeCode("user-prompt-submit", prompt("/secretgate disable"))).stdout);
+    expect(off.systemMessage).toMatch(/DISABLED for this session only/);
+    expect(disableState({ sessionId: "s1" }).disabled).toBe(true);
+    // The skill then runs `status` — read-only, and not guarded.
+    expect((await handleClaudeCode("pre-tool-use", pre("Bash", { command: "node scripts/secretgate.mjs status" }))).stdout).toBe("{}");
+    const on = JSON.parse((await handleClaudeCode("user-prompt-submit", prompt("/secretgate enable"))).stdout);
+    expect(on.systemMessage).toMatch(/re-enabled/);
+    expect(disableState({ sessionId: "s1" }).disabled).toBe(false);
+    expect(JSON.parse((await handleClaudeCode("user-prompt-submit", prompt(`key ${FAKE.githubPat}`))).stdout).decision).toBe("block");
+  });
+
+  it("`$secretgate disable` / `$secretgate enable` round-trip on Codex", async () => {
+    await handleCodex("user-prompt-submit", prompt("$secretgate disable"));
+    expect(disableState({ sessionId: "s1" }).disabled).toBe(true);
+    await handleCodex("user-prompt-submit", prompt("$secretgate enable"));
+    expect(disableState({ sessionId: "s1" }).disabled).toBe(false);
+  });
+
+  it("`/secretgate disable scope` lifts the scope for that session only", async () => {
+    await handleClaudeCode("user-prompt-submit", prompt("/secretgate disable scope"));
+    expect((await handleClaudeCode("pre-tool-use", pre("Read", { file_path: "docs/guide.md" }))).stdout).toBe("{}");
+    const other = await handleClaudeCode(
+      "pre-tool-use",
+      JSON.stringify({ session_id: "s2", cwd: proj, tool_name: "Read", tool_input: { file_path: "docs/guide.md" } }),
+    );
+    expect(decision(other.stdout)).toBe("deny");
+  });
+
   it("a discussion about the feature does not trigger it", async () => {
     await handleClaudeCode("user-prompt-submit", prompt("pourquoi désactiver secretgate casse les tests ?"));
     expect(disableState({ sessionId: "s1" }).disabled).toBe(false);
