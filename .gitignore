@@ -3,3 +3,5 @@ coverage/
 *.tgz
 *.log
 .DS_Store
+dist/
+build/

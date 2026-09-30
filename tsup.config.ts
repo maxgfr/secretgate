@@ -11,7 +11,7 @@ import { defineConfig } from "tsup";
 // stays as low as the syntax we use allows.
 export default defineConfig({
   entry: {
-    secretgate: "src/cli.ts",
+    secretgate: "src/main.ts",
     "secretgate-opencode": "src/adapters/opencode-plugin.ts",
   },
   outDir: "scripts",
