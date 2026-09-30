@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.4.1](https://github.com/maxgfr/secretgate/compare/v1.4.0...v1.4.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **disable:** target the host's session id, not the newest indexed run ([4ec5c82](https://github.com/maxgfr/secretgate/commit/4ec5c82855a745ea69d53dade3b871fe6ff113f1))
+
 # [1.4.0](https://github.com/maxgfr/secretgate/compare/v1.3.3...v1.4.0) (2026-09-11)
 
 
