@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig, projectConfigFiles, setTrust } from "./config.js";
 import { describeScope, pathOutOfScope } from "./scope.js";
@@ -31,6 +31,7 @@ import { SettingsParseError } from "./install/json-merge.js";
 import { isSecretgateHook } from "./install/hook-marker.js";
 import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
+import { commandLine, hookProgram, pinSelf, pinnedBinaryPath, pinnedBundlePath, selfInvocation } from "./self.js";
 import { Vault, defaultVaultHome } from "./vault/vault.js";
 import { VERSION } from "./version.js";
 
@@ -630,17 +631,17 @@ async function cmdHook(args: string[], io: Io): Promise<number> {
   return 2;
 }
 
-// The settings entry must keep working after npx caches are evicted and
-// across package updates, so install pins a copy of the running bundle under
-// the secretgate home and references that absolute path.
+// The command prefix the hooks run: a pinned copy of this program (see pinSelf).
 function installedCliCommand(): string {
-  const self = fileURLToPath(import.meta.url);
-  if (!self.endsWith(".mjs")) return `node "${self}"`; // dev checkout
-  const target = join(defaultVaultHome(), "bin", "secretgate.mjs");
-  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  copyFileSync(self, target);
-  chmodSync(target, 0o755);
-  return `node "${target}"`;
+  return commandLine(pinSelf());
+}
+
+// The standalone binary has no secretgate-opencode.mjs beside it: its entry
+// embeds the plugin text and hands it over here before running a command.
+let embeddedOpencodePlugin: string | undefined;
+
+export function setEmbeddedOpencodePlugin(text: string): void {
+  embeddedOpencodePlugin = text;
 }
 
 interface AgentFlags {
@@ -670,12 +671,13 @@ function parseAgentFlags(args: string[], io: Io): AgentFlags | undefined {
   return flags;
 }
 
-function opencodePluginSource(): string {
+function opencodePlugin(): { pluginContent: string } | { pluginSource: string } {
+  if (embeddedOpencodePlugin !== undefined) return { pluginContent: embeddedOpencodePlugin };
   const selfDir = dirname(fileURLToPath(import.meta.url));
   const candidates = [join(selfDir, "secretgate-opencode.mjs"), join(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
   const found = candidates.find((c) => existsSync(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle — reinstall the package");
-  return found;
+  return { pluginSource: found };
 }
 
 function claudeSettingsPath(project: boolean): string {
@@ -734,7 +736,7 @@ function installForAgents(flags: AgentFlags, io: Io): InstallOutcome {
   }
   if (flags.opencode) {
     outcome.installed.opencode = attempt("opencode", () => {
-      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
+      const r = installOpencode({ configDir: opencodeConfigDir(), ...opencodePlugin() });
       io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
       io.stdout("opencode: restart OpenCode so the plugin loads.\n");
     });
@@ -772,13 +774,16 @@ function detectAgents(): AgentFlags {
   };
 }
 
-// End-to-end self-test: spawn the EXACT wired bundle with a synthetic event and
+// Run the wired program (binary or bundle) as a hook, exactly as the agent will.
+function spawnHook(agent: "claude-code" | "codex", event: string, payload: unknown, env: NodeJS.ProcessEnv): string {
+  const self = selfInvocation();
+  return execFileSync(self.file, [...self.args, "hook", agent, event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+}
+
+// End-to-end self-test: spawn the EXACT wired program with a synthetic event and
 // confirm it (1) blocks a secret-bearing prompt and (2) redacts a secret in
 // tool output. Runs against a throwaway vault so the real one stays clean.
 function verifyClaudeCodeWiring(io: Io): boolean {
-  const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
-  const self = fileURLToPath(import.meta.url);
-  const bundle = existsSync(pinned) ? pinned : self;
   // high-entropy fake token, built by concatenation (never a literal in-repo)
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
   const tmpHome = mkdtempSync(join(tmpdir(), "secretgate-verify-"));
@@ -789,7 +794,7 @@ function verifyClaudeCodeWiring(io: Io): boolean {
   const env: NodeJS.ProcessEnv = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event: string, payload: unknown): any => {
-    const out = execFileSync("node", [bundle, "hook", "claude-code", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+    const out = spawnHook("claude-code", event, payload, env);
     return out.trim() ? JSON.parse(out) : {};
   };
   let ok = true;
@@ -815,11 +820,12 @@ function verifyClaudeCodeWiring(io: Io): boolean {
       io.stdout("  ✗ tool-output redaction FAILED — a secret would reach the model\n");
       ok = false;
     }
-    const cleanRaw = execFileSync("node", [bundle, "hook", "claude-code", "pre-tool-use"], {
-      input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: tmpHome, tool_name: "Bash", tool_input: { command: "ls" } }),
+    const cleanRaw = spawnHook(
+      "claude-code",
+      "pre-tool-use",
+      { hook_event_name: "PreToolUse", cwd: tmpHome, tool_name: "Bash", tool_input: { command: "ls" } },
       env,
-      encoding: "utf8",
-    }).trim();
+    ).trim();
     let cleanOk = false;
     try {
       cleanOk = cleanRaw.startsWith("{") && !("permissionDecision" in (JSON.parse(cleanRaw).hookSpecificOutput ?? {}));
@@ -866,15 +872,12 @@ function verifyCodexWiring(io: Io): boolean {
     );
     return false;
   }
-  const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
-  const self = fileURLToPath(import.meta.url);
-  const bundle = existsSync(pinned) ? pinned : self;
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
   const tmpHome = mkdtempSync(join(tmpdir(), "secretgate-verify-codex-"));
   const env: NodeJS.ProcessEnv = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event: string, payload: unknown): { decision?: string; reason?: unknown } => {
-    const out = execFileSync("node", [bundle, "hook", "codex", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+    const out = spawnHook("codex", event, payload, env);
     return out.trim() ? (JSON.parse(out) as { decision?: string; reason?: unknown }) : {};
   };
   let ok = true;
@@ -922,30 +925,47 @@ function verifyCodexWiring(io: Io): boolean {
   return ok;
 }
 
+// Internal (`secretgate __verify-opencode <plugin.mjs>`): load an installed
+// OpenCode plugin in-process and drive its prompt, MCP and patch-restore hooks.
+// A subcommand rather than `node -e` so the Node-free binary can run it too —
+// under Bun, which is the runtime OpenCode itself loads the plugin with.
+async function cmdVerifyOpencode(args: string[], io: Io): Promise<number> {
+  const [file] = args;
+  if (!file) {
+    io.stderr("usage: secretgate __verify-opencode <plugin file>\n");
+    return 2;
+  }
+  try {
+    const { SecretgatePlugin } = await import(pathToFileURL(resolve(file)).href);
+    const hooks = await SecretgatePlugin({ directory: process.cwd() });
+    const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
+    const prompt = { parts: [{ text: fake }] };
+    await hooks["chat.message"]({}, prompt);
+    const token = prompt.parts[0]!.text;
+    if (!token.startsWith("SECRETGATE_")) throw new Error("prompt redaction failed");
+    const result = { content: [{ type: "text", text: fake }] };
+    await hooks["tool.execute.after"]({ tool: "mcp_verify" }, result);
+    if (JSON.stringify(result).includes(fake)) throw new Error("MCP redaction failed");
+    const patch = { patchText: token };
+    await hooks["tool.execute.before"]({ tool: "apply_patch" }, { args: patch });
+    if (patch.patchText !== fake) throw new Error("patch restore failed");
+  } catch (err) {
+    io.stderr(`opencode verification failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 1;
+  }
+  return 0;
+}
+
 function verifyOpencodeBundle(io: Io): boolean {
   const scratch = mkdtempSync(join(tmpdir(), "secretgate-verify-opencode-"));
   const plugin = join(opencodeConfigDir(), "plugin", "secretgate.js");
   // OpenCode loads ESM .js through Bun; Node 18 needs an explicit .mjs suffix.
   const verificationModule = join(scratch, "secretgate.mjs");
-  const script = `
-    const { SecretgatePlugin } = await import(${JSON.stringify(pathToFileURL(verificationModule).href)});
-    const hooks = await SecretgatePlugin({ directory: process.cwd() });
-    const fake = 'ghp_' + ['aB3dE6','gH9jK2','mN5pQ8','sT1vW4','yZ7bC0','dF6hJ9'].join('');
-    const prompt = { parts: [{ text: fake }] };
-    await hooks['chat.message']({}, prompt);
-    const token = prompt.parts[0].text;
-    if (!token.startsWith('SECRETGATE_')) throw new Error('prompt redaction failed');
-    const result = { content: [{ type: 'text', text: fake }] };
-    await hooks['tool.execute.after']({ tool: 'mcp_verify' }, result);
-    if (JSON.stringify(result).includes(fake)) throw new Error('MCP redaction failed');
-    const args = { patchText: token };
-    await hooks['tool.execute.before']({ tool: 'apply_patch' }, { args });
-    if (args.patchText !== fake) throw new Error('patch restore failed');
-  `;
   try {
     copyFileSync(plugin, verificationModule);
     const env = { ...process.env, SECRETGATE_HOME: scratch, SECRETGATE_DISABLE: "0" };
-    execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: scratch, env, stdio: "pipe", timeout: 15000 });
+    const self = selfInvocation();
+    execFileSync(self.file, [...self.args, "__verify-opencode", verificationModule], { cwd: scratch, env, stdio: "pipe", timeout: 15000 });
     io.stdout("  ✓ opencode: installed plugin passes prompt, MCP and patch-restore checks.\n");
     return true;
   } catch {
@@ -1039,14 +1059,44 @@ function readJsonSafe(path: string): Record<string, any> | undefined {
   }
 }
 
-function hookWireCount(settings: Record<string, any> | undefined, agent: "claude-code" | "codex"): number {
-  if (!settings?.hooks) return 0;
-  let count = 0;
+function hookCommands(settings: Record<string, any> | undefined, agent: "claude-code" | "codex"): string[] {
+  if (!settings?.hooks) return [];
+  const commands: string[] = [];
   for (const groups of Object.values(settings.hooks as Record<string, Array<{ hooks?: Array<{ command?: string }> }>>)) {
     if (!Array.isArray(groups)) continue;
-    for (const g of groups) for (const h of g.hooks ?? []) if (isSecretgateHook(h.command, agent)) count++;
+    for (const g of groups) for (const h of g.hooks ?? []) if (isSecretgateHook(h.command, agent)) commands.push(h.command as string);
   }
-  return count;
+  return commands;
+}
+
+// The pinned programs the hooks can run: the binary (version asked, bounded by
+// a timeout) and the Node bundle (version read from its text).
+function reportPinned(io: Io): void {
+  const home = defaultVaultHome();
+  const refresh = (v: string): string => (v !== VERSION ? ` — CLI is v${VERSION}, re-run \`secretgate init\` to refresh` : "");
+  const binary = pinnedBinaryPath(home);
+  const bundle = pinnedBundlePath(home);
+  if (existsSync(binary)) {
+    let v = "unknown";
+    try {
+      v = execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim() || v;
+    } catch {
+      v = "unknown — it did not run";
+    }
+    io.stdout(`binary    pinned at ${binary} (v${v}${refresh(v)})\n`);
+  }
+  if (existsSync(bundle)) {
+    const v = /VERSION = "([^"]+)"/.exec(readFileSync(bundle, "utf8"))?.[1] ?? "unknown";
+    io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v)})\n`);
+  }
+  if (!existsSync(binary) && !existsSync(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
+}
+
+// A hook whose program is gone fails on every event — for most hosts that is
+// fail-open. Only absolute paths are checked; a bare `secretgate` goes by PATH.
+function reportMissingPrograms(commands: string[], label: string, io: Io): void {
+  const missing = new Set(commands.map(hookProgram).filter((p): p is string => !!p && isAbsolute(p) && !existsSync(p)));
+  for (const p of missing) io.stdout(`${label}!! hooks run ${p}, which is MISSING — run \`secretgate init\` to re-pin it\n`);
 }
 
 async function cmdStatus(_args: string[], io: Io): Promise<number> {
@@ -1066,23 +1116,18 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   }
   if (here.disabled || pauses.length > 0) io.stdout("\n");
 
-  // pinned bundle
-  const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
-  if (existsSync(pinned)) {
-    const pinnedVersion = /VERSION = "([^"]+)"/.exec(readFileSync(pinned, "utf8"))?.[1] ?? "unknown";
-    io.stdout(`bundle    pinned at ${pinned} (v${pinnedVersion}${pinnedVersion !== VERSION ? ` — CLI is v${VERSION}, re-run install to refresh` : ""})\n`);
-  } else {
-    io.stdout("bundle    not pinned yet (run `secretgate install …`)\n");
-  }
+  reportPinned(io);
 
   // claude code — from the home directory the "project" path aliases the global file: report it once
   const ccScopes: Array<[string, string]> = [["global ", claudeSettingsPath(false)]];
   if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
   for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
-    const wired = hookWireCount(settings, "claude-code");
+    const ccCommands = hookCommands(settings, "claude-code");
+    const wired = ccCommands.length;
     const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d: string) => d.startsWith("Read(")).length : 0;
     io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}\n`);
+    reportMissingPrograms(ccCommands, `claude-code ${label}  `, io);
     if (wired > 0 && !claudeCodeMatcherCurrent(settings))
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) — run \`secretgate init\` to update\n`);
     const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
@@ -1107,7 +1152,8 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
 
   // codex
   const codexHooks = readJsonSafe(join(codexHome(), "hooks.json"));
-  const codexWired = hookWireCount(codexHooks, "codex");
+  const codexCommands = hookCommands(codexHooks, "codex");
+  const codexWired = codexCommands.length;
   const codexState = codexWiringStatus(codexHome());
   const codexFeature = codexState.feature;
   io.stdout(
@@ -1118,6 +1164,7 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
       `codex     trusted and enabled: ${codexState.trusted}/${codexState.expected}; ${codexWiringComplete(codexState) ? "definitions match" : "re-run install --codex"}\n`,
     );
   if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
+  reportMissingPrograms(codexCommands, "codex     ", io);
 
   // opencode
   const ocPlugin = join(opencodeConfigDir(), "plugin", "secretgate.js");
@@ -1161,6 +1208,7 @@ const commands: Record<string, Command> = {
   uninstall: cmdUninstall,
   status: cmdStatus,
   hook: cmdHook,
+  "__verify-opencode": cmdVerifyOpencode,
 };
 
 export async function run(argv: string[], io: Io): Promise<number> {
@@ -1183,31 +1231,4 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return 2;
   }
   return command(rest, io);
-}
-
-// Are we the process entrypoint? Compare REAL paths: the installed hook
-// invokes the pinned bundle under ~/.secretgate, and on macOS common homes
-// (/tmp, /var, and some corporate setups) resolve through symlinks — so
-// `import.meta.url` (real) and `process.argv[1]` (as-typed) diverge. Without
-// realpath the guard would silently fail and the hook would emit nothing
-// (fail-open). Resolve both sides before comparing.
-function isProcessEntrypoint(): boolean {
-  const argv1 = process.argv[1];
-  if (!argv1) return false;
-  const selfPath = fileURLToPath(import.meta.url);
-  try {
-    return realpathSync(selfPath) === realpathSync(argv1);
-  } catch {
-    return import.meta.url === pathToFileURL(argv1).href;
-  }
-}
-
-/* node:coverage ignore next -- process entrypoint, exercised via the bundle smoke */
-if (isProcessEntrypoint()) {
-  run(process.argv.slice(2), {
-    stdout: (s) => process.stdout.write(s),
-    stderr: (s) => process.stderr.write(s),
-  }).then((code) => {
-    process.exitCode = code;
-  });
 }

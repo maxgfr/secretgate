@@ -7,6 +7,8 @@ name: Release
 #   - computes the next version and syncs it across package.json / src/version.ts /
 #     SKILL.md / CHANGELOG.md and rebuilds the bundles (scripts/sync-version.mjs),
 #   - publishes the standalone skill bundles to GitHub (no npm package),
+#   - compiles the Node-free binaries (Bun) the Homebrew tap installs, and
+#     attaches them with their SHA256SUMS to the release,
 #   - commits the bump back to `main` as `chore(release): <v> [skip ci]`,
 #   - tags `v<version>` and creates the GitHub release with auto notes + tarball.
 on:
@@ -27,7 +29,8 @@ permissions:
 jobs:
   release:
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
-    runs-on: ubuntu-latest
+    # macOS: the release binaries include macOS ones, re-signed with codesign.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,6 +50,11 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+
+      # semantic-release's prepare step compiles the standalone binaries.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

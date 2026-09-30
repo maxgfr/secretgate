@@ -84,6 +84,31 @@ jobs:
       - name: skills add for Claude Code, Codex and OpenCode
         run: node tests/e2e/skills-install.mjs
 
+  # The Homebrew distribution: a Bun-compiled binary with no Node behind it.
+  # Build it for this runner and prove init wires every agent to the pinned
+  # binary and that its hooks really answer — an empty answer is fail-open.
+  binary-smoke:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
+      - run: pnpm run build:binaries --native
+      - name: Smoke-run the binary (no node on PATH)
+        shell: bash
+        run: pnpm run smoke:binary dist/secretgate-*-*
+
   # Self-scan dogfood: the repo must not contain anything the engine flags.
   # Forces test fixtures to build fake tokens by concatenation and keeps
   # GitHub push protection quiet.

@@ -9,8 +9,11 @@ metadata:
 
 # Secretgate
 
-Run commands from this skill's directory, or use the absolute path to its
-`scripts/secretgate.mjs`. No npm installation or API key is required.
+When `secretgate` is on `PATH` (the Homebrew binary), run `secretgate <command>`,
+e.g. `secretgate status`, `secretgate init`. Otherwise run the bundle shown below,
+`node scripts/secretgate.mjs <command>`, from this skill's directory or by its
+absolute path. Both take the same arguments. No npm installation or API key is
+required.
 
 ## Install or update
 
@@ -29,8 +32,10 @@ When asked to install or protect the user's agent:
 For an audit, start with `status` and read-only checks. Installation is only
 needed when requested or included in the task.
 
-Install pins the CLI under `~/.secretgate/bin/` and copies a standalone plugin
-into OpenCode's config directory. These survive eviction of the skill cache.
+Install pins the program that ran it under `~/.secretgate/bin/`: `secretgate`
+(binary) or `secretgate.mjs` (bundle). The hooks run that copy, so the last
+`init` decides which one. It also copies a standalone plugin into OpenCode's
+config directory. These survive `brew upgrade` and eviction of the skill cache.
 `--project` scopes only Claude Code settings to the current project.
 
 ## Everyday behavior

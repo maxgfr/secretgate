@@ -437,6 +437,35 @@ describe("secretgate status", () => {
     expect(text()).toContain("claude-code global");
     expect(text()).not.toContain("claude-code project");
   });
+
+  it("reports a pinned binary with the version it answers", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    const bin = join(home, "bin", "secretgate");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    writeFileSync(bin, "#!/bin/sh\necho 0.0.1\n", { mode: 0o755 });
+    const { io, text } = capture();
+    await run(["status"], io);
+    expect(text()).toContain(`binary    pinned at ${bin} (v0.0.1 — CLI is v`);
+    expect(text()).not.toContain("not pinned yet");
+  });
+
+  it("shouts when the wired hooks run a program that is gone", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    const gone = join(home, "bin", "secretgate");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const hook = (event: string) => [{ hooks: [{ type: "command", command: `"${gone}" hook claude-code ${event}` }] }];
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { UserPromptSubmit: hook("user-prompt-submit"), PreToolUse: hook("pre-tool-use") } }),
+    );
+    const { io, text } = capture();
+    await run(["status"], io);
+    expect(text()).toContain("claude-code global   wired (2 hooks");
+    expect(text().match(/MISSING/g)).toHaveLength(1);
+    expect(text()).toContain(`hooks run ${gone}, which is MISSING`);
+  });
 });
 
 describe("secretgate scope / trust / disable --scope", () => {
@@ -521,5 +550,29 @@ describe("secretgate scope / trust / disable --scope", () => {
     writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ allowlist: { paths: ["tests/**"] } }));
     expect(await run(["scan", "tests/fx.ts", "--no-gitleaks"], capture().io)).toBe(0);
     expect(await run(["scan", "tests", "--no-gitleaks"], capture().io)).toBe(0);
+  });
+});
+
+// init's OpenCode check, run by the binary and the bundle alike as a subcommand.
+describe("secretgate __verify-opencode", () => {
+  it("passes the built plugin bundle through its prompt, MCP and patch-restore hooks", async () => {
+    const plugin = join(__dirname, "..", "scripts", "secretgate-opencode.mjs");
+    const c = capture();
+    expect(await run(["__verify-opencode", plugin], c.io)).toBe(0);
+    expect(c.errText()).toBe("");
+  });
+
+  it("fails on a plugin that does not redact", async () => {
+    const plugin = join(work, "noop.mjs");
+    writeFileSync(plugin, "export const SecretgatePlugin = async () => ({ 'chat.message': async () => {} });\n");
+    const c = capture();
+    expect(await run(["__verify-opencode", plugin], c.io)).toBe(1);
+    expect(c.errText()).toContain("prompt redaction failed");
+  });
+
+  it("stays out of --help", async () => {
+    const c = capture();
+    await run(["--help"], c.io);
+    expect(c.text()).not.toContain("__verify-opencode");
   });
 });

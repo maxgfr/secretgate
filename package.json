@@ -2,7 +2,7 @@
   "name": "secretgate",
   "version": "1.5.2",
   "private": true,
-  "description": "Local secrets firewall for coding agents: detects credentials in prompts, file reads and tool output BEFORE they are sent to the LLM API — redacts them to stable placeholders and restores the real values locally. Zero-dependency engine with gitleaks-derived rules; installers for Claude Code, OpenAI Codex CLI and OpenCode. Distributed as an agent skill (npx skills add maxgfr/secretgate) — no npm package.",
+  "description": "Local secrets firewall for coding agents: detects credentials in prompts, file reads and tool output BEFORE they are sent to the LLM API — redacts them to stable placeholders and restores the real values locally. Zero-dependency engine with gitleaks-derived rules; installers for Claude Code, OpenAI Codex CLI and OpenCode. Distributed as an agent skill (npx skills add maxgfr/secretgate) and a Homebrew binary (brew install maxgfr/tap/secretgate) — no npm package.",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "engines": {
@@ -10,6 +10,8 @@
   },
   "scripts": {
     "build": "tsup && node scripts/copy-bundle.mjs",
+    "build:binaries": "node scripts/build-binaries.mjs",
+    "smoke:binary": "node scripts/smoke-binary.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

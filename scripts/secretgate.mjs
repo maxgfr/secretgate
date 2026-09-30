@@ -2,10 +2,10 @@
 
 // src/cli.ts
 import { execFileSync } from "child_process";
-import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync3, realpathSync as realpathSync3, rmSync as rmSync4, statSync as statSync3 } from "fs";
+import { copyFileSync as copyFileSync4, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync3, realpathSync as realpathSync4, rmSync as rmSync5, statSync as statSync3 } from "fs";
 import { homedir as homedir7, tmpdir as tmpdir3 } from "os";
-import { dirname as dirname6, join as join11, relative as relative3, resolve as resolve7 } from "path";
-import { fileURLToPath, pathToFileURL } from "url";
+import { dirname as dirname7, isAbsolute as isAbsolute4, join as join12, relative as relative3, resolve as resolve7 } from "path";
+import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config.ts
 import { createHash as createHash2 } from "crypto";
@@ -8607,9 +8607,10 @@ function opencodeConfigDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
   return join10(xdg && xdg !== "" ? xdg : join10(homedir6(), ".config"), "opencode");
 }
-function installOpencode({ configDir, pluginSource }) {
+function installOpencode(options) {
+  const { configDir } = options;
   const target = join10(configDir, "plugin", "secretgate.js");
-  const content = readFileSync9(pluginSource, "utf8");
+  const content = "pluginContent" in options ? options.pluginContent : readFileSync9(options.pluginSource, "utf8");
   if (existsSync7(target)) {
     const existing = readFileSync9(target, "utf8");
     if (!existing.includes(OWNERSHIP_MARKER)) {
@@ -8639,6 +8640,72 @@ function uninstallOpencode({ configDir }) {
     changed = changed || r.changed;
   }
   return { path: target, changed };
+}
+
+// src/self.ts
+import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync7, rmSync as rmSync4 } from "fs";
+import { basename as basename5, dirname as dirname6, join as join11 } from "path";
+import { fileURLToPath } from "url";
+function currentContext() {
+  return { modulePath: fileURLToPath(import.meta.url), execPath: process.execPath, home: defaultVaultHome() };
+}
+function selfForm(modulePath) {
+  if (modulePath.startsWith("/$bunfs/") || /^[A-Za-z]:[\\/]~BUN[\\/]/.test(modulePath)) return "binary";
+  return modulePath.endsWith(".mjs") ? "bundle" : "dev";
+}
+function pinnedBinaryPath(home) {
+  return join11(home, "bin", "secretgate");
+}
+function pinnedBundlePath(home) {
+  return join11(home, "bin", "secretgate.mjs");
+}
+function commandLine(inv) {
+  return [inv.file === "node" ? "node" : `"${inv.file}"`, ...inv.args.map((a) => `"${a}"`)].join(" ");
+}
+function selfInvocation(ctx = currentContext()) {
+  const form = selfForm(ctx.modulePath);
+  if (form === "binary") {
+    const pinned = pinnedBinaryPath(ctx.home);
+    return { file: existsSync8(pinned) ? pinned : ctx.execPath, args: [] };
+  }
+  if (form === "bundle") {
+    const pinned = pinnedBundlePath(ctx.home);
+    return { file: "node", args: [existsSync8(pinned) ? pinned : ctx.modulePath] };
+  }
+  return { file: "node", args: [join11(dirname6(ctx.modulePath), "main.ts")] };
+}
+function samePath(a, b) {
+  try {
+    return realpathSync3(a) === realpathSync3(b);
+  } catch {
+    return false;
+  }
+}
+function atomicCopy(source, target) {
+  const tmp = `${target}.${process.pid}.tmp`;
+  try {
+    copyFileSync3(source, tmp);
+    chmodSync(tmp, 493);
+    renameSync7(tmp, target);
+  } catch (err) {
+    rmSync4(tmp, { force: true });
+    throw err;
+  }
+}
+function pinSelf(ctx = currentContext()) {
+  const form = selfForm(ctx.modulePath);
+  if (form === "dev") return selfInvocation(ctx);
+  const [source, target] = form === "binary" ? [ctx.execPath, pinnedBinaryPath(ctx.home)] : [ctx.modulePath, pinnedBundlePath(ctx.home)];
+  mkdirSync8(dirname6(target), { recursive: true, mode: 448 });
+  if (!samePath(source, target)) atomicCopy(source, target);
+  return form === "binary" ? { file: target, args: [] } : { file: "node", args: [target] };
+}
+function hookProgram(command) {
+  const quoted = /^\s*(?:(?:node|nodejs|bun)\s+)?"([^"]+)"/.exec(command)?.[1];
+  if (quoted) return quoted;
+  const words = command.trim().split(/\s+/);
+  const first = words[0] && /^(?:node|nodejs|bun)$/.test(basename5(words[0])) ? words[1] : words[0];
+  return first && first !== "hook" ? first : void 0;
 }
 
 // src/version.ts
@@ -8720,7 +8787,7 @@ var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
   for (const entry of readdirSync3(root, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
-    const full = join11(root, entry.name);
+    const full = join12(root, entry.name);
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkFiles(full);
     } else if (entry.isFile()) {
@@ -9157,14 +9224,9 @@ async function cmdHook(args, io) {
   return 2;
 }
 function installedCliCommand() {
-  const self = fileURLToPath(import.meta.url);
-  if (!self.endsWith(".mjs")) return `node "${self}"`;
-  const target = join11(defaultVaultHome(), "bin", "secretgate.mjs");
-  mkdirSync8(dirname6(target), { recursive: true, mode: 448 });
-  copyFileSync3(self, target);
-  chmodSync(target, 493);
-  return `node "${target}"`;
+  return commandLine(pinSelf());
 }
+var embeddedOpencodePlugin;
 function parseAgentFlags(args, io) {
   const flags = { claudeCode: false, codex: false, opencode: false, project: false };
   for (const a of args) {
@@ -9185,20 +9247,21 @@ function parseAgentFlags(args, io) {
   }
   return flags;
 }
-function opencodePluginSource() {
-  const selfDir = dirname6(fileURLToPath(import.meta.url));
-  const candidates = [join11(selfDir, "secretgate-opencode.mjs"), join11(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
-  const found = candidates.find((c) => existsSync8(c));
+function opencodePlugin() {
+  if (embeddedOpencodePlugin !== void 0) return { pluginContent: embeddedOpencodePlugin };
+  const selfDir = dirname7(fileURLToPath2(import.meta.url));
+  const candidates = [join12(selfDir, "secretgate-opencode.mjs"), join12(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const found = candidates.find((c) => existsSync9(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
-  return found;
+  return { pluginSource: found };
 }
 function claudeSettingsPath(project) {
-  return project ? join11(process.cwd(), ".claude", "settings.json") : join11(homedir7(), ".claude", "settings.json");
+  return project ? join12(process.cwd(), ".claude", "settings.json") : join12(homedir7(), ".claude", "settings.json");
 }
 function projectSettingsAliasesGlobal() {
   const canon = (p) => {
     try {
-      return realpathSync3(p);
+      return realpathSync4(p);
     } catch {
       return resolve7(p);
     }
@@ -9225,7 +9288,7 @@ function installForAgents(flags, io) {
       if (flags.project && projectSettingsAliasesGlobal()) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
-      mkdirSync8(dirname6(settingsPath), { recursive: true });
+      mkdirSync9(dirname7(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
@@ -9237,7 +9300,7 @@ function installForAgents(flags, io) {
   }
   if (flags.opencode) {
     outcome.installed.opencode = attempt("opencode", () => {
-      const r = installOpencode({ configDir: opencodeConfigDir(), pluginSource: opencodePluginSource() });
+      const r = installOpencode({ configDir: opencodeConfigDir(), ...opencodePlugin() });
       io.stdout(`opencode: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
       io.stdout("opencode: restart OpenCode so the plugin loads.\n");
@@ -9246,7 +9309,7 @@ function installForAgents(flags, io) {
   if (flags.codex) {
     outcome.installed.codex = attempt("codex", () => {
       const dir = codexHome();
-      mkdirSync8(dir, { recursive: true });
+      mkdirSync9(dir, { recursive: true });
       const r = installCodex({ codexDir: dir, command: installedCliCommand() });
       io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
 `);
@@ -9268,22 +9331,23 @@ async function cmdInstall(args, io) {
 }
 function detectAgents() {
   return {
-    claudeCode: existsSync8(join11(homedir7(), ".claude")),
-    codex: existsSync8(codexHome()),
-    opencode: existsSync8(opencodeConfigDir()),
+    claudeCode: existsSync9(join12(homedir7(), ".claude")),
+    codex: existsSync9(codexHome()),
+    opencode: existsSync9(opencodeConfigDir()),
     project: false
   };
 }
+function spawnHook(agent, event, payload, env) {
+  const self = selfInvocation();
+  return execFileSync(self.file, [...self.args, "hook", agent, event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+}
 function verifyClaudeCodeWiring(io) {
-  const pinned = join11(defaultVaultHome(), "bin", "secretgate.mjs");
-  const self = fileURLToPath(import.meta.url);
-  const bundle = existsSync8(pinned) ? pinned : self;
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join11(tmpdir3(), "secretgate-verify-"));
+  const tmpHome = mkdtempSync2(join12(tmpdir3(), "secretgate-verify-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
-    const out = execFileSync("node", [bundle, "hook", "claude-code", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+    const out = spawnHook("claude-code", event, payload, env);
     return out.trim() ? JSON.parse(out) : {};
   };
   let ok = true;
@@ -9311,11 +9375,12 @@ TOKEN=${fake}
       io.stdout("  \u2717 tool-output redaction FAILED \u2014 a secret would reach the model\n");
       ok = false;
     }
-    const cleanRaw = execFileSync("node", [bundle, "hook", "claude-code", "pre-tool-use"], {
-      input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: tmpHome, tool_name: "Bash", tool_input: { command: "ls" } }),
-      env,
-      encoding: "utf8"
-    }).trim();
+    const cleanRaw = spawnHook(
+      "claude-code",
+      "pre-tool-use",
+      { hook_event_name: "PreToolUse", cwd: tmpHome, tool_name: "Bash", tool_input: { command: "ls" } },
+      env
+    ).trim();
     let cleanOk = false;
     try {
       cleanOk = cleanRaw.startsWith("{") && !("permissionDecision" in (JSON.parse(cleanRaw).hookSpecificOutput ?? {}));
@@ -9340,7 +9405,7 @@ TOKEN=${fake}
 `);
     ok = false;
   } finally {
-    rmSync4(tmpHome, { recursive: true, force: true });
+    rmSync5(tmpHome, { recursive: true, force: true });
   }
   return ok;
 }
@@ -9356,15 +9421,12 @@ function verifyCodexWiring(io) {
     );
     return false;
   }
-  const pinned = join11(defaultVaultHome(), "bin", "secretgate.mjs");
-  const self = fileURLToPath(import.meta.url);
-  const bundle = existsSync8(pinned) ? pinned : self;
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join11(tmpdir3(), "secretgate-verify-codex-"));
+  const tmpHome = mkdtempSync2(join12(tmpdir3(), "secretgate-verify-codex-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
-    const out = execFileSync("node", [bundle, "hook", "codex", event], { input: JSON.stringify(payload), env, encoding: "utf8" });
+    const out = spawnHook("codex", event, payload, env);
     return out.trim() ? JSON.parse(out) : {};
   };
   let ok = true;
@@ -9408,40 +9470,53 @@ TOKEN=${fake}
 `);
     ok = false;
   } finally {
-    rmSync4(tmpHome, { recursive: true, force: true });
+    rmSync5(tmpHome, { recursive: true, force: true });
   }
   return ok;
 }
-function verifyOpencodeBundle(io) {
-  const scratch = mkdtempSync2(join11(tmpdir3(), "secretgate-verify-opencode-"));
-  const plugin = join11(opencodeConfigDir(), "plugin", "secretgate.js");
-  const verificationModule = join11(scratch, "secretgate.mjs");
-  const script = `
-    const { SecretgatePlugin } = await import(${JSON.stringify(pathToFileURL(verificationModule).href)});
-    const hooks = await SecretgatePlugin({ directory: process.cwd() });
-    const fake = 'ghp_' + ['aB3dE6','gH9jK2','mN5pQ8','sT1vW4','yZ7bC0','dF6hJ9'].join('');
-    const prompt = { parts: [{ text: fake }] };
-    await hooks['chat.message']({}, prompt);
-    const token = prompt.parts[0].text;
-    if (!token.startsWith('SECRETGATE_')) throw new Error('prompt redaction failed');
-    const result = { content: [{ type: 'text', text: fake }] };
-    await hooks['tool.execute.after']({ tool: 'mcp_verify' }, result);
-    if (JSON.stringify(result).includes(fake)) throw new Error('MCP redaction failed');
-    const args = { patchText: token };
-    await hooks['tool.execute.before']({ tool: 'apply_patch' }, { args });
-    if (args.patchText !== fake) throw new Error('patch restore failed');
-  `;
+async function cmdVerifyOpencode(args, io) {
+  const [file] = args;
+  if (!file) {
+    io.stderr("usage: secretgate __verify-opencode <plugin file>\n");
+    return 2;
+  }
   try {
-    copyFileSync3(plugin, verificationModule);
+    const { SecretgatePlugin } = await import(pathToFileURL(resolve7(file)).href);
+    const hooks = await SecretgatePlugin({ directory: process.cwd() });
+    const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
+    const prompt = { parts: [{ text: fake }] };
+    await hooks["chat.message"]({}, prompt);
+    const token = prompt.parts[0].text;
+    if (!token.startsWith("SECRETGATE_")) throw new Error("prompt redaction failed");
+    const result = { content: [{ type: "text", text: fake }] };
+    await hooks["tool.execute.after"]({ tool: "mcp_verify" }, result);
+    if (JSON.stringify(result).includes(fake)) throw new Error("MCP redaction failed");
+    const patch = { patchText: token };
+    await hooks["tool.execute.before"]({ tool: "apply_patch" }, { args: patch });
+    if (patch.patchText !== fake) throw new Error("patch restore failed");
+  } catch (err) {
+    io.stderr(`opencode verification failed: ${err instanceof Error ? err.message : String(err)}
+`);
+    return 1;
+  }
+  return 0;
+}
+function verifyOpencodeBundle(io) {
+  const scratch = mkdtempSync2(join12(tmpdir3(), "secretgate-verify-opencode-"));
+  const plugin = join12(opencodeConfigDir(), "plugin", "secretgate.js");
+  const verificationModule = join12(scratch, "secretgate.mjs");
+  try {
+    copyFileSync4(plugin, verificationModule);
     const env = { ...process.env, SECRETGATE_HOME: scratch, SECRETGATE_DISABLE: "0" };
-    execFileSync(process.execPath, ["--input-type=module", "-e", script], { cwd: scratch, env, stdio: "pipe", timeout: 15e3 });
+    const self = selfInvocation();
+    execFileSync(self.file, [...self.args, "__verify-opencode", verificationModule], { cwd: scratch, env, stdio: "pipe", timeout: 15e3 });
     io.stdout("  \u2713 opencode: installed plugin passes prompt, MCP and patch-restore checks.\n");
     return true;
   } catch {
     io.stdout("  \u2717 opencode: installed plugin verification failed; reinstall and retry.\n");
     return false;
   } finally {
-    rmSync4(scratch, { recursive: true, force: true });
+    rmSync5(scratch, { recursive: true, force: true });
   }
 }
 async function cmdInit(args, io) {
@@ -9524,14 +9599,41 @@ function readJsonSafe(path) {
     return void 0;
   }
 }
-function hookWireCount(settings, agent) {
-  if (!settings?.hooks) return 0;
-  let count = 0;
+function hookCommands(settings, agent) {
+  if (!settings?.hooks) return [];
+  const commands2 = [];
   for (const groups of Object.values(settings.hooks)) {
     if (!Array.isArray(groups)) continue;
-    for (const g of groups) for (const h of g.hooks ?? []) if (isSecretgateHook(h.command, agent)) count++;
+    for (const g of groups) for (const h of g.hooks ?? []) if (isSecretgateHook(h.command, agent)) commands2.push(h.command);
   }
-  return count;
+  return commands2;
+}
+function reportPinned(io) {
+  const home = defaultVaultHome();
+  const refresh = (v) => v !== VERSION ? ` \u2014 CLI is v${VERSION}, re-run \`secretgate init\` to refresh` : "";
+  const binary = pinnedBinaryPath(home);
+  const bundle = pinnedBundlePath(home);
+  if (existsSync9(binary)) {
+    let v = "unknown";
+    try {
+      v = execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"] }).trim() || v;
+    } catch {
+      v = "unknown \u2014 it did not run";
+    }
+    io.stdout(`binary    pinned at ${binary} (v${v}${refresh(v)})
+`);
+  }
+  if (existsSync9(bundle)) {
+    const v = /VERSION = "([^"]+)"/.exec(readFileSync10(bundle, "utf8"))?.[1] ?? "unknown";
+    io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v)})
+`);
+  }
+  if (!existsSync9(binary) && !existsSync9(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
+}
+function reportMissingPrograms(commands2, label, io) {
+  const missing = new Set(commands2.map(hookProgram).filter((p) => !!p && isAbsolute4(p) && !existsSync9(p)));
+  for (const p of missing) io.stdout(`${label}!! hooks run ${p}, which is MISSING \u2014 run \`secretgate init\` to re-pin it
+`);
 }
 async function cmdStatus(_args, io) {
   io.stdout(`secretgate ${VERSION}
@@ -9551,22 +9653,17 @@ async function cmdStatus(_args, io) {
 `);
   }
   if (here.disabled || pauses.length > 0) io.stdout("\n");
-  const pinned = join11(defaultVaultHome(), "bin", "secretgate.mjs");
-  if (existsSync8(pinned)) {
-    const pinnedVersion = /VERSION = "([^"]+)"/.exec(readFileSync10(pinned, "utf8"))?.[1] ?? "unknown";
-    io.stdout(`bundle    pinned at ${pinned} (v${pinnedVersion}${pinnedVersion !== VERSION ? ` \u2014 CLI is v${VERSION}, re-run install to refresh` : ""})
-`);
-  } else {
-    io.stdout("bundle    not pinned yet (run `secretgate install \u2026`)\n");
-  }
+  reportPinned(io);
   const ccScopes = [["global ", claudeSettingsPath(false)]];
   if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
   for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
-    const wired = hookWireCount(settings, "claude-code");
+    const ccCommands = hookCommands(settings, "claude-code");
+    const wired = ccCommands.length;
     const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d) => d.startsWith("Read(")).length : 0;
     io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}
 `);
+    reportMissingPrograms(ccCommands, `claude-code ${label}  `, io);
     if (wired > 0 && !claudeCodeMatcherCurrent(settings))
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) \u2014 run \`secretgate init\` to update
 `);
@@ -9591,8 +9688,9 @@ async function cmdStatus(_args, io) {
     );
   for (const f of cfg.untrusted) io.stdout(`project   allowlist in ${f} is NOT trusted \u2014 the hooks ignore it until you run \`secretgate trust\`
 `);
-  const codexHooks = readJsonSafe(join11(codexHome(), "hooks.json"));
-  const codexWired = hookWireCount(codexHooks, "codex");
+  const codexHooks = readJsonSafe(join12(codexHome(), "hooks.json"));
+  const codexCommands = hookCommands(codexHooks, "codex");
+  const codexWired = codexCommands.length;
   const codexState = codexWiringStatus(codexHome());
   const codexFeature = codexState.feature;
   io.stdout(
@@ -9605,10 +9703,11 @@ async function cmdStatus(_args, io) {
 `
     );
   if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
-  const ocPlugin = join11(opencodeConfigDir(), "plugin", "secretgate.js");
-  const ocConfig = readJsonSafe(join11(opencodeConfigDir(), "opencode.json"));
+  reportMissingPrograms(codexCommands, "codex     ", io);
+  const ocPlugin = join12(opencodeConfigDir(), "plugin", "secretgate.js");
+  const ocConfig = readJsonSafe(join12(opencodeConfigDir(), "opencode.json"));
   const ocPinned = Array.isArray(ocConfig?.plugin) && ocConfig.plugin.some((p) => /^secretgate@/.test(p));
-  io.stdout(`opencode  ${existsSync8(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}
+  io.stdout(`opencode  ${existsSync9(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}
 `);
   const gl = gitleaksPath();
   const hybridOff = loadConfig(process.cwd()).hybrid === "off";
@@ -9620,7 +9719,7 @@ async function cmdStatus(_args, io) {
   const entries = vault.list();
   io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
   try {
-    const mode = statSync3(join11(defaultVaultHome(), "vault.json")).mode & 511;
+    const mode = statSync3(join12(defaultVaultHome(), "vault.json")).mode & 511;
     io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
 `);
   } catch {
@@ -9641,7 +9740,8 @@ var commands = {
   install: cmdInstall,
   uninstall: cmdUninstall,
   status: cmdStatus,
-  hook: cmdHook
+  hook: cmdHook,
+  "__verify-opencode": cmdVerifyOpencode
 };
 async function run(argv, io) {
   const [first, ...rest] = argv;
@@ -9667,24 +9767,11 @@ ${USAGE}`);
   }
   return command(rest, io);
 }
-function isProcessEntrypoint() {
-  const argv1 = process.argv[1];
-  if (!argv1) return false;
-  const selfPath = fileURLToPath(import.meta.url);
-  try {
-    return realpathSync3(selfPath) === realpathSync3(argv1);
-  } catch {
-    return import.meta.url === pathToFileURL(argv1).href;
-  }
-}
-if (isProcessEntrypoint()) {
-  run(process.argv.slice(2), {
-    stdout: (s) => process.stdout.write(s),
-    stderr: (s) => process.stderr.write(s)
-  }).then((code) => {
-    process.exitCode = code;
-  });
-}
-export {
-  run
-};
+
+// src/main.ts
+run(process.argv.slice(2), {
+  stdout: (s) => process.stdout.write(s),
+  stderr: (s) => process.stderr.write(s)
+}).then((code) => {
+  process.exitCode = code;
+});

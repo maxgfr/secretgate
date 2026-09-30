@@ -13,15 +13,17 @@ export function opencodeConfigDir(): string {
   return join(xdg && xdg !== "" ? xdg : join(homedir(), ".config"), "opencode");
 }
 
-export interface OpencodeInstallOptions {
-  configDir: string;
-  /** path to the built scripts/secretgate-opencode.mjs to copy */
-  pluginSource: string;
-}
+export type OpencodeInstallOptions = { configDir: string } & (
+  | /** path to the built scripts/secretgate-opencode.mjs to copy */
+  { pluginSource: string }
+  /** the plugin text itself (the standalone binary embeds it) */
+  | { pluginContent: string }
+);
 
-export function installOpencode({ configDir, pluginSource }: OpencodeInstallOptions): EditReport {
+export function installOpencode(options: OpencodeInstallOptions): EditReport {
+  const { configDir } = options;
   const target = join(configDir, "plugin", "secretgate.js");
-  const content = readFileSync(pluginSource, "utf8");
+  const content = "pluginContent" in options ? options.pluginContent : readFileSync(options.pluginSource, "utf8");
   if (existsSync(target)) {
     const existing = readFileSync(target, "utf8");
     if (!existing.includes(OWNERSHIP_MARKER)) {

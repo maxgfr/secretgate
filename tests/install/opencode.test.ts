@@ -27,6 +27,14 @@ describe("installOpencode (self-contained plugin file)", () => {
     expect(readFileSync(join(configDir(), "plugin", "secretgate.js"), "utf8")).toBe(bundleContent);
   });
 
+  it("writes plugin text handed over directly (the standalone binary embeds it)", () => {
+    const r = installOpencode({ configDir: configDir(), pluginContent: bundleContent });
+    expect(r.changed).toBe(true);
+    expect(readFileSync(join(configDir(), "plugin", "secretgate.js"), "utf8")).toBe(bundleContent);
+    // same content as the file-based install: nothing to change
+    expect(installOpencode({ configDir: configDir(), pluginSource: bundle }).changed).toBe(false);
+  });
+
   it("is idempotent and overwrites only our own file", () => {
     installOpencode({ configDir: configDir(), pluginSource: bundle });
     const r2 = installOpencode({ configDir: configDir(), pluginSource: bundle });

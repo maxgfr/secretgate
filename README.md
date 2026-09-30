@@ -18,23 +18,38 @@ and it reads docs/private.md         -> DENIED (out of scope, never sent)
 
 ## Install
 
-secretgate ships as an **agent skill** — there is no npm package to publish or
-trust. Install the skill, then run `init` once:
+There is no npm package to publish or trust. Pick one of two ways in, then run
+`init` once.
+
+**CLI (Homebrew, macOS and Linux)**: a standalone binary, no Node needed:
+
+```bash
+brew install maxgfr/tap/secretgate
+secretgate init
+```
+
+**Agent skill**: install the skill and let the agent run `init`:
 
 ```bash
 npx skills add maxgfr/secretgate -g          # installs the skill globally
 # then just tell your agent:  "install secretgate"
 ```
 
-The skill activates on that ask and runs `secretgate init` for you — which
-**auto-detects** Claude Code / Codex / OpenCode on this machine, wires each, and
-then checks the installed adapters with synthetic secrets. These local checks
-cover prompt masking/blocking, tool output and OpenCode MCP/patch handling; they
-do not certify that an already-running agent has loaded the hooks. Restart the agent session afterwards so the hooks load.
+`secretgate init` **auto-detects** Claude Code / Codex / OpenCode on this
+machine, wires each, and then checks the installed adapters with synthetic
+secrets. These local checks cover prompt masking/blocking, tool output and
+OpenCode MCP/patch handling; they do not certify that an already-running agent
+has loaded the hooks. Restart the agent session afterwards so the hooks load.
 
-Prefer to run it yourself? The bundle lands next to the installed `SKILL.md`
-(e.g. `~/.claude/skills/secretgate/scripts/secretgate.mjs`, or
-`./.claude/skills/secretgate/…` for a project install):
+`init` pins a copy of the program that ran it under `~/.secretgate/bin/`
+(`secretgate` for the binary, `secretgate.mjs` for the skill's Node bundle)
+and the hooks run that copy, so they survive `brew upgrade`/`brew cleanup` and
+evicted npx caches. Re-run `secretgate init` after an update to refresh it.
+Both installs can coexist; the last `init` decides which one the hooks run.
+
+With the skill and no Homebrew, run the bundle yourself. It lands next to the
+installed `SKILL.md` (e.g. `~/.claude/skills/secretgate/scripts/secretgate.mjs`,
+or `./.claude/skills/secretgate/…` for a project install):
 
 ```bash
 node <skill-dir>/scripts/secretgate.mjs init
@@ -316,6 +331,9 @@ Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
 - A **`skills-install` CI job**: `npx skills add` → run the bundle's `install`
   → adapters installed → a secret-bearing prompt is actually blocked (the whole
   no-npm distribution path).
+- A **`binary-smoke` CI job** (Linux and macOS): compile the standalone binary,
+  `init --all` in a throwaway home, and require every hook to run the pinned
+  binary and block a secret with no `node` on `PATH`.
 - A **self-scan CI job**: secretgate scans its own repo → 0 findings.
 - Verified against **real `claude -p` sessions** by inspecting the session
   transcript: a secret in a tool result never appears in what reached the
@@ -350,11 +368,16 @@ pnpm test                 # vitest
 pnpm run rules:sync       # refresh rules/gitleaks.toml from upstream + regenerate
 pnpm run check:build      # reproducible-bundle + fresh-rules gate
 SECRETGATE_DIFFERENTIAL=1 pnpm exec vitest run tests/engine/differential.test.ts  # needs gitleaks
+pnpm run build && pnpm run build:binaries --native   # needs Bun; dist/secretgate-<platform>-<arch>
+pnpm run smoke:binary dist/secretgate-macos-arm64    # init + hooks through the binary, no node on PATH
 ```
 
-Distributed as a skill only — no npm package. Releases (GitHub, via
-semantic-release) publish the install-free bundle as a release asset. The
-`OpenCode` install writes a self-contained plugin file; there is no npm-pin mode.
+Distributed as a skill and a Homebrew binary — no npm package. Releases
+(GitHub, via semantic-release) publish the install-free bundle plus the
+Bun-compiled binaries for macOS and Linux (arm64, x64) with their
+`SHA256SUMS`; the [tap](https://github.com/maxgfr/homebrew-tap) installs those.
+The `OpenCode` install writes a self-contained plugin file (embedded in the
+binary); there is no npm-pin mode.
 
 MIT — rule definitions derived from [gitleaks](https://github.com/gitleaks/gitleaks) (MIT).
 

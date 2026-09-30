@@ -13,7 +13,7 @@
     [
       "@semantic-release/exec",
       {
-        "prepareCmd": "node scripts/sync-version.mjs ${nextRelease.version} && pnpm run build"
+        "prepareCmd": "node scripts/sync-version.mjs ${nextRelease.version} && pnpm run build && pnpm run build:binaries"
       }
     ],
     [
@@ -35,7 +35,11 @@
     [
       "@semantic-release/github",
       {
-        "assets": [{ "path": "scripts/secretgate.mjs", "label": "secretgate.mjs (install-free bundle)" }]
+        "assets": [
+          { "path": "scripts/secretgate.mjs", "label": "secretgate.mjs (install-free bundle)" },
+          { "path": "dist/secretgate-*" },
+          { "path": "dist/SHA256SUMS" }
+        ]
       }
     ]
   ]
