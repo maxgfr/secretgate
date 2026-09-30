@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.5.1](https://github.com/maxgfr/secretgate/compare/v1.5.0...v1.5.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* act on the GLM 5.3 review — in-place edits, @-mentions, vault lock, scan reporting ([8daff63](https://github.com/maxgfr/secretgate/commit/8daff636666b3d3d0abda9873b828454a6102d8d))
+* **install:** remove retired deny rules from pre-ownership installs, and never take another tool's hook for secretgate's ([11bd9af](https://github.com/maxgfr/secretgate/commit/11bd9af91dd8ff61a079a525e7f1dd348838558e))
+
 # [1.5.0](https://github.com/maxgfr/secretgate/compare/v1.4.1...v1.5.0) (2026-09-30)
 
 
