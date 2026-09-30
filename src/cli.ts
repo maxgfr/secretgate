@@ -1092,7 +1092,9 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
         `claude-code ${label}  ${retired.length} old deny rule(s) (${retired.slice(0, 2).join(", ")}…) block test fixtures — run \`secretgate init\` to remove them\n`,
       );
   }
-  io.stdout("claude-code limitation: @file mentions bypass tool hooks; deny rules cover sensitive files, the scope check covers @path in the prompt text.\n");
+  io.stdout(
+    "claude-code note: @file mentions bypass tool hooks; the prompt hook checks every @path instead (sensitive files and scope), backed by the Read deny rules.\n",
+  );
 
   // project policy
   const cfg = loadConfig(process.cwd());

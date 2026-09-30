@@ -9578,7 +9578,9 @@ async function cmdStatus(_args, io) {
 `
       );
   }
-  io.stdout("claude-code limitation: @file mentions bypass tool hooks; deny rules cover sensitive files, the scope check covers @path in the prompt text.\n");
+  io.stdout(
+    "claude-code note: @file mentions bypass tool hooks; the prompt hook checks every @path instead (sensitive files and scope), backed by the Read deny rules.\n"
+  );
   const cfg = loadConfig(process.cwd());
   if (cfg.error) io.stdout(`project   !! ${cfg.error.file} is invalid (${cfg.error.message}) \u2014 tool calls are refused until it is fixed
 `);
