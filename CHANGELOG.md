@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.5.2](https://github.com/maxgfr/secretgate/compare/v1.5.1...v1.5.2) (2026-09-30)
+
+
+### Bug Fixes
+
+* **status:** say that [@file](https://github.com/file) mentions are checked by the prompt hook ([52748d8](https://github.com/maxgfr/secretgate/commit/52748d8bf8eb0a97c64318b5e0a8b10812339256))
+
 ## [1.5.1](https://github.com/maxgfr/secretgate/compare/v1.5.0...v1.5.1) (2026-09-30)
 
 
