@@ -8,6 +8,8 @@ import { FAKE } from "./fixtures/fake-tokens.js";
 
 let home: string;
 let work: string;
+// These tests run inside Claude Code too, which exports its own session id.
+const hostSession = process.env.CLAUDE_CODE_SESSION_ID;
 
 function capture(stdin = "") {
   const out: string[] = [];
@@ -27,11 +29,14 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "secretgate-home-"));
   work = mkdtempSync(join(tmpdir(), "secretgate-work-"));
   process.env.SECRETGATE_HOME = home;
+  delete process.env.CLAUDE_CODE_SESSION_ID;
 });
 
 afterEach(() => {
   delete process.env.SECRETGATE_HOME;
   delete process.env.SECRETGATE_DISABLE;
+  if (hostSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+  else process.env.CLAUDE_CODE_SESSION_ID = hostSession;
   rmSync(home, { recursive: true, force: true });
   rmSync(work, { recursive: true, force: true });
 });
@@ -221,6 +226,26 @@ describe("secretgate disable + enable", () => {
     expect(st.until).toBeUndefined();
     // a new conversation (new session id) is protected without waiting on a timer
     expect(disableState({ cwd: work, sessionId: "fresh" }).disabled).toBe(false);
+  });
+
+  it("--session targets the host's own session id, even before its first prompt hook indexed it", async () => {
+    process.chdir(work);
+    // the previous conversation in this directory is the newest indexed run…
+    recordSession("before-clear", work);
+    // …but the agent running this command says it is a fresh one
+    process.env.CLAUDE_CODE_SESSION_ID = "after-clear";
+    const { io, text } = capture();
+    expect(await run(["disable", "--session"], io)).toBe(0);
+    expect(text()).toContain("DISABLED for session after-clear until this session ends");
+    expect(disableState({ cwd: work, sessionId: "after-clear" }).disabled).toBe(true);
+    expect(disableState({ cwd: work, sessionId: "before-clear" }).disabled).toBe(false);
+
+    const status = capture();
+    await run(["status"], status.io);
+    expect(status.text()).toContain("DISABLED here — session after-clear");
+
+    expect(await run(["enable", "--session"], capture().io)).toBe(0);
+    expect(disableState({ cwd: work, sessionId: "after-clear" }).disabled).toBe(false);
   });
 
   it("--session with no run seen here refuses rather than silently pausing the directory", async () => {

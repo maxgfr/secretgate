@@ -10,11 +10,11 @@ import {
   activePauses,
   addPause,
   clearPauses,
+  currentSession,
   describeDisable,
   disableState,
   envDisabled,
   removePause,
-  sessionForCwd,
 } from "./disable.js";
 import { pathMatchesGlob, sha256 } from "./engine/allowlist.js";
 import type { Finding } from "./engine/scanner.js";
@@ -357,7 +357,7 @@ async function cmdDisable(args: string[], io: Io): Promise<number> {
   // security tool, so ask for an explicit scope instead.
   let lifetime = false;
   if (flags.sessionCurrent) {
-    const session = sessionForCwd(cwd);
+    const session = currentSession(cwd);
     if (!session) {
       io.stderr("disable: no agent run has been seen in this directory yet — run this from inside your agent (once a prompt has fired), or use --project.\n");
       return 2;
@@ -372,7 +372,7 @@ async function cmdDisable(args: string[], io: Io): Promise<number> {
     // No --session: pause the agent run that is live in this directory. Falls
     // back to the directory itself when no session has been seen here — which is
     // what happens when `disable` is typed in a plain shell before any agent ran.
-    const session = flags.session ?? sessionForCwd(cwd);
+    const session = flags.session ?? currentSession(cwd);
     scope = session ? "session" : "path";
     target = session ?? cwd;
   }
@@ -406,12 +406,12 @@ async function cmdEnable(args: string[], io: Io): Promise<number> {
     targets.push(["session", flags.session]);
   } else if (flags.sessionCurrent) {
     // `enable --session` mirrors `disable --session`: re-protect THIS run.
-    const session = sessionForCwd(cwd);
+    const session = currentSession(cwd);
     if (session) targets.push(["session", session]);
   } else {
     // Mirror `disable` with no flag: clear the session live here AND the
     // directory pause, so one `enable` undoes one `disable` either way.
-    const session = sessionForCwd(cwd);
+    const session = currentSession(cwd);
     if (session) targets.push(["session", session]);
     targets.push(["path", cwd]);
   }
@@ -875,7 +875,7 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
 
   // First thing on the page, before any "wired" line: a firewall that is wired
   // AND off must never read as protected.
-  const here = disableState({ cwd: process.cwd(), sessionId: sessionForCwd(process.cwd()) });
+  const here = disableState({ cwd: process.cwd(), sessionId: currentSession(process.cwd()) });
   if (here.disabled) {
     io.stdout(`!! DISABLED here — ${describeDisable(here)}\n`);
     io.stdout(`!! nothing is being scanned here. Re-enable: ${here.scope === "env" ? "unset SECRETGATE_DISABLE" : "`secretgate enable`"}\n`);

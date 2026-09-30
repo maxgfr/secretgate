@@ -376,6 +376,9 @@ function recordSession(sessionId, cwd) {
 function sessionForCwd(cwd) {
   return Object.entries(readSessionIndex()).filter(([, e]) => typeof e?.cwd === "string" && covers(e.cwd, cwd)).sort(bySeqDesc)[0]?.[0];
 }
+function currentSession(cwd) {
+  return process.env.CLAUDE_CODE_SESSION_ID?.trim() || sessionForCwd(cwd);
+}
 function describeDisable(state) {
   if (!state.disabled) return "";
   const where = state.scope === "env" ? "SECRETGATE_DISABLE is set for this process" : state.scope === "session" ? `session ${state.target} is paused` : `directory ${state.target} is paused`;
@@ -6188,7 +6191,7 @@ async function cmdDisable(args, io) {
   let target;
   let lifetime = false;
   if (flags.sessionCurrent) {
-    const session = sessionForCwd(cwd);
+    const session = currentSession(cwd);
     if (!session) {
       io.stderr("disable: no agent run has been seen in this directory yet \u2014 run this from inside your agent (once a prompt has fired), or use --project.\n");
       return 2;
@@ -6200,7 +6203,7 @@ async function cmdDisable(args, io) {
     scope = "path";
     target = cwd;
   } else {
-    const session = flags.session ?? sessionForCwd(cwd);
+    const session = flags.session ?? currentSession(cwd);
     scope = session ? "session" : "path";
     target = session ?? cwd;
   }
@@ -6233,10 +6236,10 @@ async function cmdEnable(args, io) {
   } else if (flags.session) {
     targets.push(["session", flags.session]);
   } else if (flags.sessionCurrent) {
-    const session = sessionForCwd(cwd);
+    const session = currentSession(cwd);
     if (session) targets.push(["session", session]);
   } else {
-    const session = sessionForCwd(cwd);
+    const session = currentSession(cwd);
     if (session) targets.push(["session", session]);
     targets.push(["path", cwd]);
   }
@@ -6646,7 +6649,7 @@ async function cmdStatus(_args, io) {
   io.stdout(`secretgate ${VERSION}
 
 `);
-  const here = disableState({ cwd: process.cwd(), sessionId: sessionForCwd(process.cwd()) });
+  const here = disableState({ cwd: process.cwd(), sessionId: currentSession(process.cwd()) });
   if (here.disabled) {
     io.stdout(`!! DISABLED here \u2014 ${describeDisable(here)}
 `);

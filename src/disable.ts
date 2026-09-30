@@ -306,6 +306,16 @@ export function sessionForCwd(cwd: string): string | undefined {
     .sort(bySeqDesc)[0]?.[0];
 }
 
+/**
+ * The agent run this process belongs to. Claude Code exports its session id to
+ * every command it runs — the same id its hooks receive — so trust it over the
+ * index: right after a context clear (e.g. leaving plan mode) the new run has not
+ * fired a prompt hook yet, and the index still names the previous one.
+ */
+export function currentSession(cwd: string): string | undefined {
+  return process.env.CLAUDE_CODE_SESSION_ID?.trim() || sessionForCwd(cwd);
+}
+
 /** One-line summary used by hook system messages and by `status`. */
 export function describeDisable(state: DisableState): string {
   if (!state.disabled) return "";
