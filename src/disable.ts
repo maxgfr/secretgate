@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { join } from "node:path";
+import { covers } from "./paths.js";
 import { defaultVaultHome } from "./vault/vault.js";
 
 // The off switch. secretgate is a fail-closed firewall, so "off" is deliberately
@@ -34,6 +35,10 @@ export interface DisableState {
   /** True when a session pause is bounded by the session's lifetime rather than a
    *  clock — it ends when the run ends, not at a timestamp. */
   lifetime?: boolean;
+  /** The pause also lifts the project scope (`disable --scope`). By default a
+   *  pause switches off secret scanning only: the boundary a repository
+   *  declared stays in force. */
+  includesScope?: boolean;
 }
 
 const NOT_DISABLED: DisableState = { disabled: false };
@@ -48,6 +53,12 @@ interface PauseEntry {
    *  ended — so a new session is protected again with no timer to wait on and no
    *  stale entry left behind. Absent on every other pause (back-compat). */
   lifetime?: true;
+  /** Lifetime pauses only: a hard ceiling. The session index only drops a run
+   *  once 20 newer ones exist, and a resumed session keeps its id, so "until
+   *  the session ends" alone could mean forever. */
+  ceiling?: string;
+  /** `disable --scope`: lift the project scope too. */
+  liftScope?: true;
 }
 
 interface DisableFile {
@@ -130,6 +141,10 @@ function isRecord(v: unknown): v is Record<string, PauseEntry> {
 
 function isLive(entry: PauseEntry | undefined, now: number): boolean {
   if (!entry) return false;
+  if (entry.ceiling !== undefined) {
+    const ceiling = Date.parse(String(entry.ceiling));
+    if (!Number.isFinite(ceiling) || ceiling <= now) return false;
+  }
   if (entry.until === null) return true;
   const until = Date.parse(String(entry.until));
   return Number.isFinite(until) && until > now;
@@ -165,34 +180,8 @@ export function envDisabled(): boolean {
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
-// macOS symlinks /tmp and /var under /private, and homes are symlinked on plenty
-// of setups, so resolve() alone makes ONE directory look like two: a pause
-// recorded as /var/… would silently miss an agent reporting /private/var/…. The
-// CLI already realpaths for this reason (isProcessEntrypoint,
-// projectSettingsAliasesGlobal). Canonicalize the deepest ancestor that exists
-// and re-append the rest, so a pause still covers directories created later.
-function canonical(p: string): string {
-  let head = resolve(p);
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      return join(realpathSync(head), ...[...tail].reverse());
-    } catch {
-      const parent = dirname(head);
-      if (parent === head) return resolve(p);
-      tail.push(basename(head));
-      head = parent;
-    }
-  }
-}
-
-// `dir` covers `cwd` when it IS cwd or an ancestor of it. The `sep` guard keeps
-// a sibling like `/proj-old` from matching a pause on `/proj`.
-function covers(dir: string, cwd: string): boolean {
-  const a = canonical(dir);
-  const b = canonical(cwd);
-  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
-}
+// A pause recorded as /var/… must still cover an agent reporting /private/var/…:
+// `covers` compares canonical (realpath'd) paths — see paths.ts.
 
 /** The single question every hook asks: is secretgate off for this event? */
 export function disableState(ctx: { cwd?: string; sessionId?: string } = {}): DisableState {
@@ -203,11 +192,19 @@ export function disableState(ctx: { cwd?: string; sessionId?: string } = {}): Di
   if (ctx.sessionId) {
     const entry = file.sessions[ctx.sessionId];
     if (isLive(entry, now))
-      return { disabled: true, scope: "session", until: entry?.until ?? undefined, target: ctx.sessionId, ...(entry?.lifetime ? { lifetime: true } : {}) };
+      return {
+        disabled: true,
+        scope: "session",
+        until: entry?.until ?? undefined,
+        target: ctx.sessionId,
+        ...(entry?.lifetime ? { lifetime: true } : {}),
+        ...(entry?.liftScope ? { includesScope: true } : {}),
+      };
   }
   if (ctx.cwd) {
     for (const [dir, entry] of Object.entries(file.paths)) {
-      if (isLive(entry, now) && covers(dir, ctx.cwd)) return { disabled: true, scope: "path", until: entry.until ?? undefined, target: dir };
+      if (isLive(entry, now) && covers(dir, ctx.cwd))
+        return { disabled: true, scope: "path", until: entry.until ?? undefined, target: dir, ...(entry.liftScope ? { includesScope: true } : {}) };
     }
   }
   return NOT_DISABLED;
@@ -232,6 +229,8 @@ export interface PauseRequest {
    *  `PauseEntry.lifetime`). Forces an indefinite `until` and lets the pause be
    *  collected once the session ends. Ignored for the path scope. */
   lifetime?: boolean;
+  /** Also lift the project scope for the duration of the pause. */
+  liftScope?: boolean;
 }
 
 /** Write a pause. Returns the ISO expiry, or null for an indefinite one. */
@@ -243,7 +242,11 @@ export function addPause(req: PauseRequest): string | null {
   // a wall-clock expiry regardless of what minutes were passed.
   const until = lifetime || req.minutes === null ? null : new Date(now + Math.min(req.minutes, MAX_DISABLE_MINUTES) * 60_000).toISOString();
   const entry: PauseEntry = req.scope === "session" && req.cwd ? { until, cwd: req.cwd } : { until };
-  if (lifetime) entry.lifetime = true;
+  if (req.liftScope) entry.liftScope = true;
+  if (lifetime) {
+    entry.lifetime = true;
+    entry.ceiling = new Date(now + MAX_DISABLE_MINUTES * 60_000).toISOString();
+  }
   file[req.scope === "session" ? "sessions" : "paths"][req.target] = entry;
   writeFileAtomic(disablePath(), JSON.stringify(file, null, 2), 0o600);
   return until;
@@ -289,8 +292,12 @@ export function recordSession(sessionId: string | undefined, cwd: string | undef
   if (!sessionId || !cwd) return;
   try {
     const sessions = readSessionIndex();
-    if (sessions[sessionId]?.cwd === cwd) return;
-    const nextSeq = Math.max(0, ...Object.values(sessions).map((e) => e?.seq ?? 0)) + 1;
+    const maxSeq = Math.max(0, ...Object.values(sessions).map((e) => e?.seq ?? 0));
+    // "Most recent" must mean most recently PROMPTED, not most recently started:
+    // otherwise A prompts, B starts, A runs `disable --session` — and pauses B.
+    // Skip the write only when this session is already the latest, same cwd.
+    if (sessions[sessionId]?.cwd === cwd && sessions[sessionId]?.seq === maxSeq) return;
+    const nextSeq = maxSeq + 1;
     sessions[sessionId] = { cwd, lastSeen: new Date().toISOString(), seq: nextSeq };
     const trimmed = Object.entries(sessions).sort(bySeqDesc).slice(0, SESSION_INDEX_MAX);
     writeFileAtomic(sessionIndexPath(), JSON.stringify({ version: 1, sessions: Object.fromEntries(trimmed) } satisfies SessionFile, null, 2), 0o600);
@@ -325,6 +332,13 @@ export function describeDisable(state: DisableState): string {
       : state.scope === "session"
         ? `session ${state.target} is paused`
         : `directory ${state.target} is paused`;
-  const when = state.until ? ` until ${state.until}` : state.lifetime ? " until the session ends" : state.scope === "env" ? "" : " until re-enabled";
-  return `${where}${when}`;
+  const alsoScope = state.includesScope ? " (project scope lifted too)" : "";
+  const when = state.until
+    ? ` until ${state.until}`
+    : state.lifetime
+      ? " until the session ends (24 h at most)"
+      : state.scope === "env"
+        ? ""
+        : " until re-enabled";
+  return `${where}${when}${alsoScope}`;
 }

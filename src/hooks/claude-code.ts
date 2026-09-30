@@ -1,12 +1,15 @@
-import { loadConfig } from "../config.js";
+import { loadConfig, type SecretgateConfig } from "../config.js";
 import { type DisableState, describeDisable, disableState, recordSession } from "../disable.js";
-import { commandTouchesSensitivePath, sensitivePathMatch } from "../paths.js";
+import { applyPromptDirective, promptDirective } from "../prompt-directive.js";
 import { redactText } from "../redact.js";
 import { restorePlaceholders } from "../redact.js";
+import { filterSearchOutput, promptScopeViolation } from "../scope.js";
 import { Vault } from "../vault/vault.js";
-import { mapStrings } from "./walk.js";
+import { preToolPolicy } from "./policy.js";
 import { eventRedactor, isBinaryField, SCAN_CAP } from "./scan-budget.js";
 import { isStoppedSession, stopSession } from "./stopped-session.js";
+import { extractToolCall } from "./tool-call.js";
+import { mapStrings } from "./walk.js";
 
 export interface HookResult {
   stdout: string;
@@ -44,7 +47,12 @@ function withholdOutput(reason: string, input?: Record<string, any>, blockFallba
   // Unknown/malformed envelopes cannot safely be replaced with a string:
   // Claude silently ignores schema-invalid replacements. Stop this turn.
   if (replacement === undefined) {
-    stopSession(input?.session_id);
+    try {
+      stopSession(input?.session_id);
+    } catch {
+      // Unwritable state dir: still stop THIS turn. Throwing here would crash
+      // the hook with empty stdout, which the host treats as a pass.
+    }
     return {
       stdout: JSON.stringify({
         continue: false,
@@ -65,7 +73,8 @@ function withholdOutput(reason: string, input?: Record<string, any>, blockFallba
 // Best-effort parse used to resolve the disable state before the guarded block.
 function parseOrUndefined(raw: string): Record<string, any> | undefined {
   try {
-    return JSON.parse(raw) as Record<string, any>;
+    const v = JSON.parse(raw);
+    return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, any>) : undefined;
   } catch {
     return undefined;
   }
@@ -73,20 +82,40 @@ function parseOrUndefined(raw: string): Record<string, any> | undefined {
 
 const str = (v: unknown): string | undefined => (typeof v === "string" && v.length > 0 ? v : undefined);
 
-// What each event does while secretgate is off. Restore is the one thing that
-// keeps running: a disabled run must never leave dead SECRETGATE_ placeholders
-// behind in files the agent writes.
+/** The fail-closed answer for an event, when the hook itself cannot decide. */
+export function failClosed(event: string, input?: Record<string, any>, blockFallback = false): HookResult {
+  const reason = "secretgate could not scan this safely (invalid input, scan budget or local storage error)";
+  if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
+  if (event === "pre-tool-use") return deny(reason);
+  return withholdOutput(reason, input, blockFallback);
+}
+
+// What each event does while secretgate is off. Restore keeps running (a
+// disabled run must never leave dead SECRETGATE_ placeholders behind in files
+// the agent writes), and so does the project scope: a pause switches off
+// secret scanning, not the boundary the repository declared.
 function disabledResult(event: string, input: Record<string, any> | undefined, state: DisableState, notices: boolean): HookResult {
+  // `disable --scope` lifts the project scope as well.
+  const load = (cwd: string | undefined): SecretgateConfig => {
+    const cfg = loadConfig(cwd);
+    return state.includesScope ? { ...cfg, scopes: [], error: undefined } : cfg;
+  };
   if (event === "pre-tool-use") {
-    if (input === null || typeof input !== "object") return DEFER;
+    if (input === undefined) return DEFER;
+    const cfg = load(str(input.cwd));
+    const decision = preToolPolicy(extractToolCall(String(input.tool_name ?? ""), input.tool_input), cfg, str(input.cwd) ?? process.cwd(), { disabled: true });
+    if (decision) return deny(decision.reason);
     try {
-      return restoreOnly(input);
+      return restoreOnly(input, cfg);
     } catch {
       // A disabled hook must never crash the tool call it is not policing.
       return DEFER;
     }
   }
   if (event === "user-prompt-submit") {
+    const cfg = input ? load(str(input.cwd)) : undefined;
+    const outOfScope = cfg && input ? promptScopeViolation(cfg.scopes, String(input.prompt ?? ""), str(input.cwd) ?? process.cwd()) : undefined;
+    if (outOfScope) return { stdout: JSON.stringify({ decision: "block", reason: outOfScope }), exit: 0 };
     if (!notices) return PASS;
     // Announced on every prompt, not on every tool call: once per turn is loud
     // enough to be impossible to forget, quiet enough to stay usable.
@@ -97,7 +126,12 @@ function disabledResult(event: string, input: Record<string, any> | undefined, s
       exit: 0,
     };
   }
-  if (event === "post-tool-use") return PASS;
+  if (event === "post-tool-use") {
+    if (input === undefined || !("tool_response" in input)) return PASS;
+    const cfg = load(str(input.cwd));
+    const filtered = scopeFilter(input, cfg);
+    return filtered.changed ? updatedOutput(filtered.value) : PASS;
+  }
   return { stdout: "", exit: 2 };
 }
 
@@ -105,50 +139,63 @@ export async function handleClaudeCode(event: string, rawStdin: string, opts: { 
   // Parse best-effort so explicit pauses also apply to malformed events.
   const parsed = parseOrUndefined(rawStdin);
   try {
-    if (event === "user-prompt-submit") recordSession(str(parsed?.session_id), str(parsed?.cwd));
+    // "désactive secretgate" typed by the user pauses this session, and it
+    // takes effect for this very prompt.
+    let notice: string | undefined;
+    if (event === "user-prompt-submit") {
+      recordSession(str(parsed?.session_id), str(parsed?.cwd));
+      const directive = typeof parsed?.prompt === "string" ? promptDirective(parsed.prompt) : undefined;
+      if (directive) notice = applyPromptDirective(directive, str(parsed?.session_id), str(parsed?.cwd));
+    }
+    const withNotice = (r: HookResult): HookResult => (notice && opts.notices !== false ? addSystemMessage(r, notice) : r);
     const state = disableState({ cwd: str(parsed?.cwd), sessionId: str(parsed?.session_id) });
-    if (state.disabled) return disabledResult(event, parsed, state, opts.notices !== false);
-    if (!opts.blockFallback && isStoppedSession(parsed?.session_id)) {
-      const reason = "secretgate stopped this session after an unscannable tool result. Start a fresh session; resuming may expose the old result.";
-      if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
-      if (event === "pre-tool-use") return deny(reason);
-      return { stdout: JSON.stringify({ continue: false, stopReason: reason }), exit: 0 };
-    }
-    // Re-parse only on the failure path; the catch never exposes parser text.
-    const input = parsed ?? (JSON.parse(rawStdin) as Record<string, any>);
-    if ((event !== "post-tool-use" && rawStdin.length > SCAN_CAP) || input.__secretgate_unscannable) throw new Error("input exceeds scan budget");
-    switch (event) {
-      case "user-prompt-submit":
-        return userPromptSubmit(input);
-      case "pre-tool-use":
-        return preToolUse(input);
-      case "post-tool-use":
-        return postToolUse(input);
-      default:
-        return { stdout: "", exit: 2 };
-    }
+    if (state.disabled) return withNotice(disabledResult(event, parsed, state, opts.notices !== false && !notice));
+    if (notice) return withNotice(handleEnabled(event, rawStdin, parsed, opts));
+    return handleEnabled(event, rawStdin, parsed, opts);
   } catch {
     // Parser/vault error messages can contain raw input. Never echo them.
-    const reason = "secretgate could not scan this safely (invalid input, scan budget or local storage error)";
-    if (event === "user-prompt-submit") {
-      return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
-    }
-    if (event === "pre-tool-use") {
-      return {
-        stdout: JSON.stringify({
-          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
-        }),
-        exit: 0,
-      };
-    }
-    return withholdOutput(reason, parsed, opts.blockFallback);
+    return failClosed(event, parsed, opts.blockFallback);
   }
 }
 
-function userPromptSubmit(input: Record<string, any>): HookResult {
+// Show `message` to the user alongside whatever the hook decided.
+function addSystemMessage(r: HookResult, message: string): HookResult {
+  const out = r.stdout.trim() ? (JSON.parse(r.stdout) as Record<string, unknown>) : {};
+  out.systemMessage = typeof out.systemMessage === "string" ? `${message}\n${out.systemMessage}` : message;
+  return { stdout: JSON.stringify(out), exit: r.exit };
+}
+
+function handleEnabled(event: string, rawStdin: string, parsed: Record<string, any> | undefined, opts: { blockFallback?: boolean }): HookResult {
+  if (!opts.blockFallback && isStoppedSession(parsed?.session_id)) {
+    const reason = "secretgate stopped this session after an unscannable tool result. Start a fresh session; resuming may expose the old result.";
+    if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
+    if (event === "pre-tool-use") return deny(reason);
+    return { stdout: JSON.stringify({ continue: false, stopReason: reason }), exit: 0 };
+  }
+  // Re-parse only on the failure path; the catch never exposes parser text.
+  const input = parsed ?? (JSON.parse(rawStdin) as Record<string, any>);
+  if (input === null || typeof input !== "object") throw new Error("event is not an object");
+  if ((event !== "post-tool-use" && rawStdin.length > SCAN_CAP) || input.__secretgate_unscannable) throw new Error("input exceeds scan budget");
+  // One config read per event (it walks up to the project root).
+  const cfg = loadConfig(str(input.cwd));
+  switch (event) {
+    case "user-prompt-submit":
+      return userPromptSubmit(input, cfg);
+    case "pre-tool-use":
+      return preToolUse(input, cfg);
+    case "post-tool-use":
+      return postToolUse(input, cfg);
+    default:
+      return { stdout: "", exit: 2 };
+  }
+}
+
+function userPromptSubmit(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
   const prompt = String(input.prompt ?? "");
+  // @file mentions inline file content without firing a tool hook.
+  const outOfScope = promptScopeViolation(cfg.scopes, prompt, str(input.cwd) ?? process.cwd());
+  if (outOfScope) return { stdout: JSON.stringify({ decision: "block", reason: outOfScope }), exit: 0 };
   if (prompt.includes(ALLOW_TAG)) return PASS;
-  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : undefined);
   const vault = new Vault();
   const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS });
   if (r.findings.length === 0) return PASS;
@@ -174,25 +221,27 @@ function deny(reason: string): HookResult {
   };
 }
 
-// Tool names vary across agents (Claude Code: Read/Write/Bash…; Codex:
-// shell/apply_patch/read_file…). Normalize before classifying.
+function ask(reason: string): HookResult {
+  return {
+    stdout: JSON.stringify({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason },
+    }),
+    exit: 0,
+  };
+}
+
+// Tool names vary across agents (Claude Code: Write/Edit…; Codex:
+// apply_patch…). Only restore needs this; policies use extractToolCall.
 function normalizeToolName(name: string): string {
   switch (name.toLowerCase()) {
     case "bash":
     case "shell":
     case "exec":
+    case "exec_command":
     case "local_shell":
     case "localshell":
     case "run_command":
       return "Bash";
-    case "read":
-    case "read_file":
-    case "view":
-    case "open_file":
-      return "Read";
-    case "grep":
-    case "search":
-      return "Grep";
     case "write":
     case "write_file":
     case "create_file":
@@ -211,43 +260,22 @@ function normalizeToolName(name: string): string {
 
 // Tools whose input may legitimately carry placeholders back to disk.
 const RESTORE_TOOLS = new Set(["Write", "Edit"]);
-// Tools that read file content — denied on sensitive paths.
-const READ_TOOLS = new Set(["Read", "Grep"]);
 
-function preToolUse(input: Record<string, any>): HookResult {
-  const toolName = normalizeToolName(String(input.tool_name ?? ""));
-  const toolInput = (input.tool_input ?? {}) as Record<string, any>;
-  const cfg = loadConfig(str(input.cwd));
-
-  // 1) Sensitive-path deny (reads only — writing INTO .env is the restore flow).
-  if (READ_TOOLS.has(toolName)) {
-    const target = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.path === "string" ? toolInput.path : undefined;
-    const hit = target ? sensitivePathMatch(target, cfg.allowlist, str(input.cwd)) : undefined;
-    if (hit) {
-      return deny(
-        `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. If the agent needs a value from it, reference it as an env var instead — or allow the file with \`secretgate allow --path '${target}'\`.`,
-      );
-    }
-  }
-  if (toolName === "Bash" && typeof toolInput.command === "string") {
-    const touched = commandTouchesSensitivePath(toolInput.command, cfg.allowlist, str(input.cwd));
-    if (touched) {
-      return deny(`secretgate: this command touches '${touched}', which looks sensitive. Its content must not enter the model.`);
-    }
-  }
-
-  // 2) Placeholder restore on the way back to disk.
-  return restoreOnly(input);
+function preToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
+  const cwd = str(input.cwd) ?? process.cwd();
+  const decision = preToolPolicy(extractToolCall(String(input.tool_name ?? ""), input.tool_input), cfg, cwd, { disabled: false });
+  if (decision?.action === "deny") return deny(decision.reason);
+  if (decision?.action === "ask") return ask(decision.reason);
+  return restoreOnly(input, cfg);
 }
 
 // Placeholder restore, in isolation. Split out because it runs on BOTH paths:
-// with the firewall on it is step 2 of preToolUse, and with the firewall off it
-// is the only thing that still runs — otherwise a disabled run would write dead
-// SECRETGATE_ placeholders into the user's files.
-function restoreOnly(input: Record<string, any>): HookResult {
+// with the firewall on it is the last step of preToolUse, and with the firewall
+// off it still runs — otherwise a disabled run would write dead SECRETGATE_
+// placeholders into the user's files.
+function restoreOnly(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
   const toolName = normalizeToolName(String(input.tool_name ?? ""));
-  const toolInput = (input.tool_input ?? {}) as Record<string, any>;
-  const cfg = loadConfig(str(input.cwd));
+  const toolInput = input.tool_input ?? {};
   if (!RESTORE_TOOLS.has(toolName) && !(toolName === "Bash" && cfg.restoreBash)) return DEFER;
   const vault = new Vault();
   const { value, changed } = mapStrings(toolInput, (s) => restorePlaceholders(s, vault).text);
@@ -260,17 +288,29 @@ function restoreOnly(input: Record<string, any>): HookResult {
   };
 }
 
-function postToolUse(input: Record<string, any>): HookResult {
-  if (!("tool_response" in input)) return PASS;
-  const toolName = String(input.tool_name ?? "");
-  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : undefined);
-  const vault = new Vault();
-  const { value, changed } = mapStrings(input.tool_response, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), isBinaryField);
-  if (!changed) return PASS;
+// Glob/Grep/LS over a partly in-scope tree: drop the out-of-scope entries.
+function scopeFilter(input: Record<string, any>, cfg: SecretgateConfig): { value: unknown; changed: boolean } {
+  if (cfg.scopes.length === 0) return { value: input.tool_response, changed: false };
+  const call = extractToolCall(String(input.tool_name ?? ""), input.tool_input);
+  if (call.kind !== "search" && call.kind !== "list") return { value: input.tool_response, changed: false };
+  return filterSearchOutput(cfg.scopes, input.tool_response, str(input.cwd) ?? process.cwd());
+}
+
+function updatedOutput(value: unknown): HookResult {
   return {
     stdout: JSON.stringify({
       hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: value },
     }),
     exit: 0,
   };
+}
+
+function postToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
+  if (!("tool_response" in input)) return PASS;
+  const toolName = String(input.tool_name ?? "");
+  const filtered = scopeFilter(input, cfg);
+  const vault = new Vault();
+  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), isBinaryField);
+  if (!changed && !filtered.changed) return PASS;
+  return updatedOutput(value);
 }

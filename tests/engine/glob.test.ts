@@ -75,3 +75,19 @@ describe("commandTouchesSensitivePath — read commands only", () => {
     expect(commandTouchesSensitivePath("npm run build")).toBeUndefined();
   });
 });
+
+describe("pathMatchesGlob — braces and linear time", () => {
+  it("supports {a,b} alternations, nested, and keeps comma-less braces literal", () => {
+    expect(pathMatchesGlob("src/a.ts", "{src,lib}/**")).toBe(true);
+    expect(pathMatchesGlob("lib/x/y.js", "{src,lib}/**/*.{ts,js}")).toBe(true);
+    expect(pathMatchesGlob("docs/a.md", "{src,lib}/**")).toBe(false);
+    expect(pathMatchesGlob("a{b}c", "a{b}c")).toBe(true);
+  });
+
+  it("does not backtrack on crafted globs (a repo's scope must not stall a hook)", () => {
+    const t = performance.now();
+    expect(pathMatchesGlob("a".repeat(4000), "**a**a**a**a**a**a**a**b")).toBe(false);
+    expect(pathMatchesGlob(`${"x/".repeat(500)}y`, "**/**/**/**/**/z")).toBe(false);
+    expect(performance.now() - t).toBeLessThan(500);
+  });
+});

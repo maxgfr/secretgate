@@ -3,7 +3,8 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadConfig } from "./config.js";
+import { loadConfig, projectConfigFiles, setTrust } from "./config.js";
+import { describeScope, pathOutOfScope } from "./scope.js";
 import {
   DEFAULT_DISABLE_MINUTES,
   MAX_DISABLE_MINUTES,
@@ -16,14 +17,16 @@ import {
   envDisabled,
   removePause,
 } from "./disable.js";
-import { pathMatchesGlob, sha256 } from "./engine/allowlist.js";
+import { isAllowedValue, isDisabledRule, pathMatchesGlob, sha256, type UserAllowlist } from "./engine/allowlist.js";
+import { shannonEntropy } from "./engine/entropy.js";
+import { gitleaksPath, scanWithGitleaks } from "./engine/gitleaks-bin.js";
 import type { Finding } from "./engine/scanner.js";
-import { scan, sensitiveFileNameRule } from "./engine/scanner.js";
-import { handleClaudeCode } from "./hooks/claude-code.js";
+import { isNonSecret, scan, sensitiveFileNameRule } from "./engine/scanner.js";
+import { failClosed, type HookResult, handleClaudeCode } from "./hooks/claude-code.js";
 import { handleCodex } from "./hooks/codex.js";
 import { writeAllow } from "./install/allow-store.js";
-import { installClaudeCode, uninstallClaudeCode } from "./install/claude-code.js";
-import { codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
+import { claudeCodeMatcherCurrent, installClaudeCode, uninstallClaudeCode } from "./install/claude-code.js";
+import { CODEX_HOOK_COUNT, codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
 import { SettingsParseError } from "./install/json-merge.js";
 import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
@@ -45,11 +48,13 @@ Commands:
   install     Wire secretgate into an agent (--claude-code | --codex | --opencode | --all)
   uninstall   Remove exactly what install added
   status      Doctor: what is wired, versions, vault health, known limitations
-  scan        Scan a file, directory or stdin (-) for secrets; exit 1 on findings
+  scan        Scan a file, directory or stdin (-) for secrets; exit 1 on findings (--no-gitleaks: JS engine only)
   pipe        Read stdin, write it back with secrets redacted to placeholders
   allow       Allowlist a value (hashed), a rule id (--rule) or a path glob (--path)
+  trust       Let the hooks honor this repo's .secretgate.json allowlist (--revoke to undo)
+  scope       Show the project scope; \`scope check <path…>\` exits 1 if a path is outside it
   vault       Manage the placeholder vault (list | clear) — never prints secrets
-  disable     Turn the firewall off for this run (--minutes N | --forever | --session, --project, --session <id>)
+  disable     Turn the firewall off for this run (--minutes N | --forever | --session, --project, --session <id>; --scope also lifts the project scope)
   enable      Turn it back on (--project, --session [id], --all)
   hook        Internal: agent hook entrypoint (secretgate hook <agent> <event>)
 
@@ -61,7 +66,12 @@ Disabling: \`secretgate disable\` pauses the current agent run for ${DEFAULT_DIS
 expires on its own. \`secretgate disable --session\` pauses it for the session's
 LIFETIME instead — off until this run ends, then a new session is protected with
 no timer to wait on. \`SECRETGATE_DISABLE=1 <agent>\` disables one process without
-touching any state. None stop placeholder restore, and \`scan\`/\`pipe\` always run.
+touching any state. None stop placeholder restore or the project scope, and
+\`scan\`/\`pipe\` always run.
+
+Scope: a "scope" in .secretgate.json keeps the agent inside some directories of
+the project (reads, edits, searches, shell commands, @mentions). The nearest
+.secretgate.json from the working directory up to the repository root is used.
 `;
 
 // Read stdin, but STOP once we exceed `cap` bytes — an unbounded read would OOM
@@ -143,13 +153,38 @@ interface ScanHit {
   path: string;
 }
 
+// Hybrid pass: findings the gitleaks binary adds on top of the JS engine
+// (same secret already found → skipped; the user allowlist still applies).
+async function gitleaksExtra(bin: string, text: string, found: Finding[], allowlist: UserAllowlist): Promise<Finding[]> {
+  const known = new Set(found.map((f) => f.secret));
+  const extra: Finding[] = [];
+  for (const g of await scanWithGitleaks(text, { bin })) {
+    if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
+    known.add(g.secret);
+    const start = Math.max(0, text.indexOf(g.secret));
+    const line = text.slice(0, start).split("\n").length - 1;
+    extra.push({
+      ruleId: `gitleaks:${g.ruleId}`,
+      match: g.secret,
+      secret: g.secret,
+      start,
+      end: start + g.secret.length,
+      entropy: shannonEntropy(g.secret),
+      line,
+    });
+  }
+  return extra;
+}
+
 async function cmdScan(args: string[], io: Io): Promise<number> {
   let json = false;
+  let hybrid = true;
   const excludes: string[] = [];
   let target: string | undefined;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--json") json = true;
+    else if (a === "--no-gitleaks") hybrid = false;
     else if (a === "--exclude") {
       const g = args[++i];
       if (!g) {
@@ -169,11 +204,22 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
   }
 
   const cfg = loadConfig(process.cwd());
+  // `scan` is the repository scanning itself (pre-commit): the repo's own
+  // allowlist applies here, trusted or not.
+  const allowlist = cfg.scanAllowlist;
+  const gitleaks = hybrid && cfg.hybrid === "auto" ? gitleaksPath() : null;
   const hits: ScanHit[] = [];
+  // The gitleaks pass spawns one process per file: queue them and run a few at
+  // a time, then append what they add in file order (deterministic output).
+  const extra: Array<() => Promise<ScanHit[]>> = [];
+  const scanText = (text: string, sourcePath: string | undefined, label: string): void => {
+    const found = scan(text, { sourcePath, allowlist });
+    for (const finding of found) hits.push({ finding, path: label });
+    if (gitleaks) extra.push(async () => (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label })));
+  };
 
   if (target === "-") {
-    const text = await readIoStdin(io);
-    for (const finding of scan(text, { allowlist: cfg.allowlist })) hits.push({ finding, path: "stdin" });
+    scanText(await readIoStdin(io), undefined, "stdin");
   } else {
     const root = resolve(target);
     const stats = statSync(root, { throwIfNoEntry: false });
@@ -184,8 +230,11 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
     const files = stats.isDirectory() ? [...walkFiles(root)] : [root];
     for (const file of files) {
       const rel = stats.isDirectory() ? relative(root, file) : file;
-      if (excludes.some((g) => pathMatchesGlob(rel, g))) continue;
-      if (cfg.allowlist.paths?.some((g) => pathMatchesGlob(rel, g))) continue;
+      // Path allowlists are written relative to the project (cwd), whatever
+      // was passed to scan — `scan tests/x.ts` must honor `tests/**`.
+      const fromCwd = relative(process.cwd(), file);
+      if (excludes.some((g) => pathMatchesGlob(rel, g) || pathMatchesGlob(fromCwd, g))) continue;
+      if (allowlist.paths?.some((g) => pathMatchesGlob(rel, g) || pathMatchesGlob(fromCwd, g))) continue;
       const nameRule = sensitiveFileNameRule(rel);
       if (nameRule) {
         hits.push({ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel });
@@ -193,9 +242,19 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
       }
       const text = readTextFile(file);
       if (text === undefined) continue;
-      for (const finding of scan(text, { sourcePath: rel, allowlist: cfg.allowlist })) hits.push({ finding, path: rel });
+      scanText(text, fromCwd.startsWith("..") ? rel : fromCwd, rel);
     }
   }
+  const added: ScanHit[][] = new Array(extra.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < extra.length) {
+      const i = next++;
+      added[i] = await extra[i]!();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, extra.length) }, worker));
+  hits.push(...added.flat());
 
   if (json) {
     io.stdout(
@@ -260,6 +319,66 @@ async function cmdAllow(args: string[], io: Io): Promise<number> {
   return 0;
 }
 
+// `secretgate trust` — let the hooks honor this repository's allowlist. Scoped
+// to the file's exact content: any later edit needs a new `trust`.
+async function cmdTrust(args: string[], io: Io): Promise<number> {
+  const revoke = args.includes("--revoke");
+  const unknown = args.find((a) => a !== "--revoke");
+  if (unknown) {
+    io.stderr(`trust: unknown option ${unknown}\n`);
+    return 2;
+  }
+  const files = projectConfigFiles(process.cwd());
+  if (files.length === 0) {
+    io.stderr("trust: no .secretgate.json found from here up to the repository root\n");
+    return 2;
+  }
+  setTrust(files, revoke);
+  for (const f of files) io.stdout(`secretgate: ${revoke ? "no longer trusting" : "trusting the current content of"} ${f}\n`);
+  if (!revoke) io.stdout("secretgate: its allowlist now applies to the hooks. Any edit to the file needs `secretgate trust` again.\n");
+  return 0;
+}
+
+// `secretgate scope` — the effective project scope; `scope check <path…>`
+// tells whether paths are inside it (exit 1 when any is not).
+async function cmdScope(args: string[], io: Io): Promise<number> {
+  const cwd = process.cwd();
+  const cfg = loadConfig(cwd);
+  if (cfg.error) {
+    io.stderr(`secretgate: ${cfg.error.file} is invalid: ${cfg.error.message}\n`);
+    return 2;
+  }
+  if (args[0] === "check") {
+    const paths = args.slice(1);
+    if (paths.length === 0) {
+      io.stderr("scope check: expected one or more paths\n");
+      return 2;
+    }
+    let out = 0;
+    for (const p of paths) {
+      const why = cfg.scopes.map((s) => pathOutOfScope(s, p, cwd)).find(Boolean);
+      io.stdout(why ? `out  ${p} — ${why}\n` : `in   ${p}\n`);
+      if (why) out++;
+    }
+    return out > 0 ? 1 : 0;
+  }
+  if (args.length > 0) {
+    io.stderr(`scope: unknown argument ${args[0]} (try \`secretgate scope check <path…>\`)\n`);
+    return 2;
+  }
+  if (cfg.scopes.length === 0) {
+    io.stdout("secretgate: no scope — the agent may read any file here (sensitive files excepted).\n");
+    io.stdout('Declare one in .secretgate.json: { "scope": { "allow": ["src/**"], "deny": [], "bash": "paths" } }\n');
+    return 0;
+  }
+  for (const s of cfg.scopes) {
+    io.stdout(`scope from ${s.file}\n`);
+    for (const line of describeScope(s)) io.stdout(`  ${line}\n`);
+  }
+  if (cfg.scopes.length > 1) io.stdout("Every scope above applies: a path must be inside all of them.\n");
+  return 0;
+}
+
 async function cmdVault(args: string[], io: Io): Promise<number> {
   const vault = new Vault();
   if (args[0] === "list") {
@@ -294,14 +413,17 @@ interface DisableFlags {
    *  explicit timer. */
   minutesExplicit: boolean;
   all: boolean;
+  /** `disable --scope`: also lift the project scope. */
+  liftScope: boolean;
 }
 
 function parseDisableFlags(args: string[], io: Io, verb: string): DisableFlags | undefined {
-  const flags: DisableFlags = { project: false, sessionCurrent: false, minutes: DEFAULT_DISABLE_MINUTES, minutesExplicit: false, all: false };
+  const flags: DisableFlags = { project: false, sessionCurrent: false, minutes: DEFAULT_DISABLE_MINUTES, minutesExplicit: false, all: false, liftScope: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--project") flags.project = true;
     else if (a === "--all") flags.all = true;
+    else if (a === "--scope" && verb === "disable") flags.liftScope = true;
     else if (a === "--forever") {
       flags.minutes = null;
       flags.minutesExplicit = true;
@@ -377,11 +499,13 @@ async function cmdDisable(args: string[], io: Io): Promise<number> {
     target = session ?? cwd;
   }
 
-  const until = addPause({ scope, target, minutes: flags.minutes, cwd, lifetime });
+  const until = addPause({ scope, target, minutes: flags.minutes, cwd, lifetime, liftScope: flags.liftScope });
   const what = scope === "session" ? `session ${target}` : `directory ${target}`;
   const bound = until ? `until ${until}` : lifetime ? "until this session ends" : "until you re-enable it";
   io.stdout(`secretgate: DISABLED for ${what} ${bound}\n`);
   io.stdout("secretgate: prompts, tool input and tool output are no longer scanned. Placeholder restore still runs, and `scan`/`pipe` still work.\n");
+  if (flags.liftScope) io.stdout("secretgate: the project scope (.secretgate.json) is lifted too for this pause.\n");
+  else if (loadConfig(cwd).scopes.length > 0) io.stdout("secretgate: the project scope stays enforced — add --scope to lift it too.\n");
   io.stdout(`secretgate: re-enable with \`secretgate enable${scope === "path" ? " --project" : flags.session ? ` --session ${target}` : " --session"}\`\n`);
   if (lifetime) io.stdout("secretgate: this pause covers ONLY this run — a new session (a new conversation) is protected automatically.\n");
   else if (scope === "session" && !flags.session)
@@ -465,7 +589,16 @@ async function cmdHook(args: string[], io: Io): Promise<number> {
     raw = "__SECRETGATE_STDIN_ERROR__";
   }
   if (agent === "claude-code" || agent === "codex") {
-    const r = agent === "codex" ? await handleCodex(event, raw) : await handleClaudeCode(event, raw);
+    let r: HookResult;
+    try {
+      r = agent === "codex" ? await handleCodex(event, raw) : await handleClaudeCode(event, raw);
+    } catch {
+      // Last line of defence: a crash with empty stdout reads as "no objection"
+      // to the host, i.e. fail OPEN. Emit the event's fail-closed answer.
+      r = failClosed(event, undefined, agent === "codex");
+      if (agent === "codex" && event === "post-tool-use")
+        r = { stdout: JSON.stringify({ decision: "block", reason: "[secretgate withheld this tool output: it could not be scanned safely]" }), exit: 0 };
+    }
     if (r.stdout) io.stdout(r.stdout);
     return r.exit;
   }
@@ -695,10 +828,18 @@ function verifyClaudeCodeWiring(io: Io): boolean {
 // decision:block with the redacted result in reason. Codex then replaces the
 // original model-visible result with that feedback. Verify the exact bundled
 // adapter shape rather than assuming the shared scanner is enough.
+// Every hook secretgate wires is trusted and enabled. More than one handler per
+// event (a project + a global install) is fine as long as all are trusted.
+function codexWiringComplete(state: { trusted: number; expected: number; feature: boolean }): boolean {
+  return state.feature && state.expected >= CODEX_HOOK_COUNT && state.trusted === state.expected;
+}
+
 function verifyCodexWiring(io: Io): boolean {
   const state = codexWiringStatus(codexHome());
-  if (state.expected !== 3 || state.trusted !== 3 || !state.feature) {
-    io.stdout("  ✗ codex: expected three enabled, trusted hooks; run install --codex to repair wiring.\n");
+  if (!codexWiringComplete(state)) {
+    io.stdout(
+      `  ✗ codex: expected ${CODEX_HOOK_COUNT} enabled, trusted hooks (found ${state.trusted}/${state.expected}); run install --codex to repair wiring.\n`,
+    );
     return false;
   }
   const pinned = join(defaultVaultHome(), "bin", "secretgate.mjs");
@@ -732,6 +873,20 @@ function verifyCodexWiring(io: Io): boolean {
       io.stdout("  ✓ codex: a secret in tool output is replaced with a redacted result before model context\n");
     } else {
       io.stdout("  ✗ codex tool-output replacement FAILED — a secret would reach the model\n");
+      ok = false;
+    }
+    const denied = runHook("pre-tool-use", {
+      hook_event_name: "PreToolUse",
+      cwd: tmpHome,
+      tool_name: "Bash",
+      tool_input: { command: "cat ~/.ssh/id_rsa" },
+    }) as {
+      hookSpecificOutput?: { permissionDecision?: string };
+    };
+    if (denied.hookSpecificOutput?.permissionDecision === "deny") {
+      io.stdout("  ✓ codex: a shell command reading a sensitive path (~/.ssh/id_rsa) is denied\n");
+    } else {
+      io.stdout("  ✗ codex sensitive-path deny FAILED — a key file could reach the model\n");
       ok = false;
     }
   } catch (err) {
@@ -904,8 +1059,19 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
     const wired = hookWireCount(settings, "hook claude-code");
     const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d: string) => d.startsWith("Read(")).length : 0;
     io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}\n`);
+    if (wired > 0 && !claudeCodeMatcherCurrent(settings))
+      io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) — run \`secretgate init\` to update\n`);
   }
-  io.stdout("claude-code limitation: @file mentions bypass tool hooks (deny rules are the only cover there).\n");
+  io.stdout("claude-code limitation: @file mentions bypass tool hooks; deny rules cover sensitive files, the scope check covers @path in the prompt text.\n");
+
+  // project policy
+  const cfg = loadConfig(process.cwd());
+  if (cfg.error) io.stdout(`project   !! ${cfg.error.file} is invalid (${cfg.error.message}) — tool calls are refused until it is fixed\n`);
+  for (const s of cfg.scopes)
+    io.stdout(
+      `scope     active from ${s.file}: allow ${s.allow ? s.allow.join(", ") : "(all)"}${s.deny?.length ? `; deny ${s.deny.join(", ")}` : ""}; bash ${s.bash}${here.disabled && !here.includesScope ? " (still enforced while disabled)" : here.includesScope ? " — LIFTED by the current pause" : ""}\n`,
+    );
+  for (const f of cfg.untrusted) io.stdout(`project   allowlist in ${f} is NOT trusted — the hooks ignore it until you run \`secretgate trust\`\n`);
 
   // codex
   const codexHooks = readJsonSafe(join(codexHome(), "hooks.json"));
@@ -917,7 +1083,7 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   );
   if (codexWired > 0)
     io.stdout(
-      `codex     trusted and enabled: ${codexState.trusted}/${codexState.expected}; ${codexState.trusted === 3 && codexState.expected === 3 ? "definitions match" : "re-run install --codex"}\n`,
+      `codex     trusted and enabled: ${codexState.trusted}/${codexState.expected}; ${codexWiringComplete(codexState) ? "definitions match" : "re-run install --codex"}\n`,
     );
   if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
 
@@ -928,9 +1094,11 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   io.stdout(`opencode  ${existsSync(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}\n`);
 
   // engines
-  const { gitleaksPath } = await import("./engine/gitleaks-bin.js");
   const gl = gitleaksPath();
-  io.stdout(`engines   built-in JS rules${gl ? ` + gitleaks binary (${gl})` : " (gitleaks binary not found — `scan` runs JS engine only)"}\n`);
+  const hybridOff = loadConfig(process.cwd()).hybrid === "off";
+  io.stdout(
+    `engines   built-in JS rules${gl ? (hybridOff ? ` (gitleaks at ${gl} is switched off: config hybrid = "off")` : ` + gitleaks binary in \`scan\` (${gl})`) : " (gitleaks binary not found — `scan` runs the JS engine only)"}\n`,
+  );
 
   // vault
   const vault = new Vault();
@@ -953,6 +1121,8 @@ const commands: Record<string, Command> = {
   pipe: cmdPipe,
   allow: cmdAllow,
   vault: cmdVault,
+  trust: cmdTrust,
+  scope: cmdScope,
   disable: cmdDisable,
   enable: cmdEnable,
   install: cmdInstall,

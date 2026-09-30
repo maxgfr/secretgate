@@ -1,104 +1,763 @@
 #!/usr/bin/env node
-var __defProp = Object.defineProperty;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __esm = (fn, res, err) => function __init() {
-  if (err) throw err[0];
-  try {
-    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
-  } catch (e) {
-    throw err = [e], e;
-  }
-};
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-
-// src/engine/gitleaks-bin.ts
-var gitleaks_bin_exports = {};
-__export(gitleaks_bin_exports, {
-  gitleaksPath: () => gitleaksPath,
-  scanWithGitleaks: () => scanWithGitleaks
-});
-import { spawn } from "child_process";
-import { existsSync as existsSync6, mkdtempSync, readFileSync as readFileSync9, rmSync as rmSync3 } from "fs";
-import { tmpdir } from "os";
-import { delimiter, join as join7 } from "path";
-function gitleaksPath() {
-  if (cachedPath !== void 0) return cachedPath;
-  const exe = process.platform === "win32" ? "gitleaks.exe" : "gitleaks";
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-    if (dir && existsSync6(join7(dir, exe))) {
-      cachedPath = join7(dir, exe);
-      return cachedPath;
-    }
-  }
-  cachedPath = null;
-  return null;
-}
-function scanWithGitleaks(text, opts = {}) {
-  const bin = opts.bin ?? gitleaksPath();
-  if (!bin) return Promise.resolve([]);
-  const dir = mkdtempSync(join7(tmpdir(), "secretgate-gl-"));
-  const report = join7(dir, "report.json");
-  return new Promise((resolve5, reject) => {
-    const child = spawn(bin, ["stdin", "--no-banner", "--exit-code", String(LEAK_EXIT), "--report-format", "json", "--report-path", report], {
-      stdio: ["pipe", "ignore", "pipe"],
-      timeout: opts.timeoutMs ?? 1e4
-    });
-    let stderr = "";
-    child.stderr.on("data", (d) => {
-      stderr += d;
-    });
-    child.on("error", (err) => {
-      rmSync3(dir, { recursive: true, force: true });
-      reject(err);
-    });
-    child.on("close", (code) => {
-      try {
-        if (code === 0) {
-          resolve5([]);
-          return;
-        }
-        if (code !== LEAK_EXIT) {
-          reject(new Error(`gitleaks exited ${code}: ${stderr.slice(0, 500)}`));
-          return;
-        }
-        const raw = JSON.parse(readFileSync9(report, "utf8"));
-        resolve5(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
-      } catch (err) {
-        reject(err);
-      } finally {
-        rmSync3(dir, { recursive: true, force: true });
-      }
-    });
-    child.stdin.end(text);
-  });
-}
-var cachedPath, LEAK_EXIT;
-var init_gitleaks_bin = __esm({
-  "src/engine/gitleaks-bin.ts"() {
-    "use strict";
-    LEAK_EXIT = 99;
-  }
-});
 
 // src/cli.ts
 import { execFileSync } from "child_process";
-import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync7, mkdirSync as mkdirSync7, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync, realpathSync as realpathSync3, rmSync as rmSync4, statSync } from "fs";
-import { homedir as homedir5, tmpdir as tmpdir2 } from "os";
-import { dirname as dirname3, join as join8, relative as relative2, resolve as resolve4 } from "path";
+import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync2, realpathSync as realpathSync3, rmSync as rmSync4, statSync as statSync2 } from "fs";
+import { homedir as homedir8, tmpdir as tmpdir2 } from "os";
+import { dirname as dirname7, join as join12, relative as relative3, resolve as resolve7 } from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 
 // src/config.ts
-import { readFileSync as readFileSync2 } from "fs";
-import { join as join2 } from "path";
+import { createHash as createHash2 } from "crypto";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync } from "fs";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
+
+// src/paths.ts
+import { realpathSync } from "fs";
+import { basename as basename2, dirname as dirname2, join as join3, relative, resolve as resolve2, sep } from "path";
+
+// src/engine/allowlist.ts
+import { createHash } from "crypto";
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+function isAllowedValue(secret, allowlist) {
+  if (!allowlist?.sha256?.length) return false;
+  const h = sha256(secret);
+  return allowlist.sha256.includes(h);
+}
+function isDisabledRule(ruleId, allowlist) {
+  return allowlist?.rules?.includes(ruleId) ?? false;
+}
+function expandGlobBraces(glob, limit = 64) {
+  const open = glob.indexOf("{");
+  if (open === -1) return [glob];
+  let depth = 0;
+  const commas = [];
+  let close = -1;
+  for (let i = open; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) {
+      close = i;
+      break;
+    } else if (c === "," && depth === 1) commas.push(i);
+  }
+  if (close === -1) return [glob];
+  if (commas.length === 0) return expandGlobBraces(glob.slice(close + 1), limit).map((t) => glob.slice(0, close + 1) + t);
+  const bounds = [open, ...commas, close];
+  const out = [];
+  for (let k = 0; k + 1 < bounds.length && out.length < limit; k++) {
+    out.push(...expandGlobBraces(glob.slice(0, open) + glob.slice(bounds[k] + 1, bounds[k + 1]) + glob.slice(close + 1), limit));
+  }
+  return out.slice(0, limit);
+}
+function tokenizeGlob(glob) {
+  const tokens = [];
+  for (let i = 0; i < glob.length; ) {
+    const c = glob[i];
+    if (c === "*" && glob[i + 1] === "*") {
+      if (glob[i + 2] === "/") {
+        tokens.push({ t: "segments" });
+        i += 3;
+      } else {
+        tokens.push({ t: "any" });
+        i += 2;
+      }
+    } else if (c === "*") {
+      tokens.push({ t: "star" });
+      i++;
+    } else if (c === "?") {
+      tokens.push({ t: "one" });
+      i++;
+    } else {
+      tokens.push({ t: "lit", c });
+      i++;
+    }
+  }
+  return tokens;
+}
+function matchTokens(tokens, path) {
+  const n = path.length;
+  let next = new Uint8Array(n + 2);
+  let cur = new Uint8Array(n + 2);
+  next[n] = 1;
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const tok = tokens[i];
+    cur.fill(0);
+    let slashAhead = 0;
+    for (let j = n; j >= 0; j--) {
+      const ch = path[j];
+      switch (tok.t) {
+        case "lit":
+          cur[j] = j < n && ch === tok.c ? next[j + 1] : 0;
+          break;
+        case "one":
+          cur[j] = j < n && ch !== "/" ? next[j + 1] : 0;
+          break;
+        case "star":
+          cur[j] = next[j] || (j < n && ch !== "/" ? cur[j + 1] : 0);
+          break;
+        case "any":
+          cur[j] = next[j] || (j < n ? cur[j + 1] : 0);
+          break;
+        case "segments":
+          if (j < n && ch === "/" && next[j + 1]) slashAhead = 1;
+          cur[j] = next[j] || slashAhead;
+          break;
+      }
+    }
+    [next, cur] = [cur, next];
+  }
+  return next[0] === 1;
+}
+var GLOB_CACHE = /* @__PURE__ */ new Map();
+function pathMatchesGlob(path, glob, caseInsensitive = false) {
+  const key = `${caseInsensitive ? "i" : "s"}${glob}`;
+  let alternatives = GLOB_CACHE.get(key);
+  if (!alternatives) {
+    alternatives = expandGlobBraces(caseInsensitive ? glob.toLowerCase() : glob).map(tokenizeGlob);
+    if (GLOB_CACHE.size > 512) GLOB_CACHE.clear();
+    GLOB_CACHE.set(key, alternatives);
+  }
+  const subject = caseInsensitive ? path.toLowerCase() : path;
+  return alternatives.some((tokens) => matchTokens(tokens, subject));
+}
+function isAllowedPath(path, allowlist) {
+  if (!path || !allowlist?.paths?.length) return false;
+  return allowlist.paths.some((g) => pathMatchesGlob(path, g));
+}
+
+// src/shell-paths.ts
+import { lstatSync, readdirSync } from "fs";
+import { homedir } from "os";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
+var DYN = "\0";
+var SEP_CHARS = /* @__PURE__ */ new Set([";", "&", "|", "(", ")", "\n"]);
+function matchParen(s, start) {
+  let depth = 1;
+  let i = start;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "\\") i += 2;
+    else if (c === "'") {
+      const end = s.indexOf("'", i + 1);
+      i = end === -1 ? s.length : end + 1;
+    } else if (c === '"') {
+      i++;
+      while (i < s.length && s[i] !== '"') i += s[i] === "\\" ? 2 : 1;
+      i++;
+    } else if (c === "(") {
+      depth++;
+      i++;
+    } else if (c === ")") {
+      if (--depth === 0) return i + 1;
+      i++;
+    } else i++;
+  }
+  return s.length;
+}
+function matchBacktick(s, start) {
+  let i = start;
+  while (i < s.length && s[i] !== "`") i += s[i] === "\\" ? 2 : 1;
+  return Math.min(i + 1, s.length);
+}
+var VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*/;
+function tokenize(command, cwd) {
+  const st = { commands: [], substitutions: [], dynamic: [], structure: [] };
+  let cur = { words: [], redirects: [], stdinLiteral: false };
+  let word = "";
+  let inWord = false;
+  let glob = false;
+  let brace = false;
+  let pendingRedirect;
+  const heredocs = [];
+  let i = 0;
+  const endWord = () => {
+    if (!inWord) return;
+    const w = { text: word, glob, brace };
+    if (pendingRedirect) {
+      cur.redirects.push({ op: pendingRedirect, target: w });
+      if (pendingRedirect === "<<" || pendingRedirect === "<<-") {
+        heredocs.push({ delim: word.replaceAll(DYN, ""), strip: pendingRedirect === "<<-" });
+        cur.stdinLiteral = true;
+      }
+      if (pendingRedirect === "<<<") cur.stdinLiteral = true;
+      pendingRedirect = void 0;
+    } else cur.words.push(w);
+    word = "";
+    inWord = false;
+    glob = false;
+    brace = false;
+  };
+  const endCommand = () => {
+    endWord();
+    if (cur.words.length > 0 || cur.redirects.length > 0) {
+      st.structure.push({ type: "cmd", index: st.commands.length });
+      st.commands.push(cur);
+    }
+    cur = { words: [], redirects: [], stdinLiteral: false };
+  };
+  const expandVar = (name) => {
+    if (name === "HOME") return homedir();
+    if (name === "PWD") return cwd;
+    st.dynamic.push(`$${name}`);
+    return DYN;
+  };
+  while (i < command.length) {
+    const c = command[i];
+    if (c === "\n" && heredocs.length > 0) {
+      endCommand();
+      i++;
+      for (const { delim, strip } of heredocs.splice(0)) {
+        for (; ; ) {
+          const nl = command.indexOf("\n", i);
+          const line = command.slice(i, nl === -1 ? command.length : nl);
+          i = nl === -1 ? command.length : nl + 1;
+          if ((strip ? line.replace(/^\t+/, "") : line) === delim || nl === -1) break;
+          for (const m of line.matchAll(/\$\(/g)) st.substitutions.push(line.slice(m.index + 2, matchParen(line, m.index + 2) - 1));
+        }
+      }
+      continue;
+    }
+    if (c === " " || c === "	") {
+      endWord();
+      i++;
+    } else if (c === "#" && !inWord) {
+      const nl = command.indexOf("\n", i);
+      i = nl === -1 ? command.length : nl;
+    } else if (c === "\\") {
+      if (command[i + 1] === "\n") {
+        i += 2;
+      } else {
+        word += command[i + 1] ?? "";
+        inWord = true;
+        i += 2;
+      }
+    } else if (c === "'") {
+      const end = command.indexOf("'", i + 1);
+      word += command.slice(i + 1, end === -1 ? command.length : end);
+      inWord = true;
+      i = end === -1 ? command.length : end + 1;
+    } else if (c === '"') {
+      inWord = true;
+      i++;
+      while (i < command.length && command[i] !== '"') {
+        const d = command[i];
+        if (d === "\\" && i + 1 < command.length && '"\\$`\n'.includes(command[i + 1])) {
+          if (command[i + 1] !== "\n") word += command[i + 1];
+          i += 2;
+        } else if (d === "$" && command[i + 1] === "(") {
+          const end = matchParen(command, i + 2);
+          st.substitutions.push(command.slice(i + 2, end - 1));
+          st.dynamic.push("$(\u2026)");
+          word += DYN;
+          i = end;
+        } else if (d === "`") {
+          const end = matchBacktick(command, i + 1);
+          st.substitutions.push(command.slice(i + 1, end - 1));
+          st.dynamic.push("`\u2026`");
+          word += DYN;
+          i = end;
+        } else if (d === "$" && command[i + 1] === "{") {
+          const end = command.indexOf("}", i);
+          word += expandVar(command.slice(i + 2, end === -1 ? command.length : end));
+          i = end === -1 ? command.length : end + 1;
+        } else if (d === "$" && VAR_RE.test(command.slice(i + 1))) {
+          const name = VAR_RE.exec(command.slice(i + 1))[0];
+          word += expandVar(name);
+          i += 1 + name.length;
+        } else {
+          word += d;
+          i++;
+        }
+      }
+      i++;
+    } else if (c === "$" && command[i + 1] === "(") {
+      const arithmetic = command[i + 2] === "(";
+      const end = matchParen(command, i + 2);
+      if (!arithmetic) st.substitutions.push(command.slice(i + 2, end - 1));
+      st.dynamic.push(arithmetic ? "$((\u2026))" : "$(\u2026)");
+      word += DYN;
+      inWord = true;
+      i = end;
+    } else if (c === "$" && command[i + 1] === "{") {
+      const end = command.indexOf("}", i);
+      word += expandVar(command.slice(i + 2, end === -1 ? command.length : end));
+      inWord = true;
+      i = end === -1 ? command.length : end + 1;
+    } else if (c === "$" && VAR_RE.test(command.slice(i + 1))) {
+      const name = VAR_RE.exec(command.slice(i + 1))[0];
+      word += expandVar(name);
+      inWord = true;
+      i += 1 + name.length;
+    } else if (c === "$" && /^[0-9@*#?$!-]/.test(command[i + 1] ?? "")) {
+      st.dynamic.push(`$${command[i + 1]}`);
+      word += DYN;
+      inWord = true;
+      i += 2;
+    } else if (c === "`") {
+      const end = matchBacktick(command, i + 1);
+      st.substitutions.push(command.slice(i + 1, end - 1));
+      st.dynamic.push("`\u2026`");
+      word += DYN;
+      inWord = true;
+      i = end;
+    } else if ((c === "<" || c === ">") && command[i + 1] === "(") {
+      endWord();
+      const end = matchParen(command, i + 2);
+      st.substitutions.push(command.slice(i + 2, end - 1));
+      i = end;
+    } else if (c === "<" || c === ">" || c === "&" && command[i + 1] === ">") {
+      if (inWord && /^\d+$/.test(word)) {
+        word = "";
+        inWord = false;
+      }
+      endWord();
+      const op = /^(?:&>>|&>|<<<|<<-|<<|>>|>\||>&|<&|<>|<|>)/.exec(command.slice(i))[0];
+      i += op.length;
+      if ((op === ">&" || op === "<&") && /^\s*(?:\d+|-)(?=\s|$|[;&|)])/.test(command.slice(i))) {
+        i += /^\s*(?:\d+|-)/.exec(command.slice(i))[0].length;
+        continue;
+      }
+      pendingRedirect = op === ">&" ? ">" : op === "<&" ? "<" : op;
+    } else if (SEP_CHARS.has(c)) {
+      endCommand();
+      if (c === "(") st.structure.push({ type: "open" });
+      else if (c === ")") st.structure.push({ type: "close" });
+      else if (c === "|" && command[i + 1] !== "|") st.structure.push({ type: "pipe" });
+      i += (c === "&" || c === "|" || c === ";") && command[i + 1] === c ? 2 : 1;
+    } else {
+      if (c === "*" || c === "?" || c === "[") glob = true;
+      if (c === "{") brace = true;
+      word += c;
+      inWord = true;
+      i++;
+    }
+  }
+  endCommand();
+  return st;
+}
+function expandBraces(text, limit = 256) {
+  const open = text.indexOf("{");
+  if (open === -1) return [text];
+  let depth = 0;
+  const commas = [];
+  let close = -1;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) {
+      close = i;
+      break;
+    } else if (c === "," && depth === 1) commas.push(i);
+  }
+  if (close === -1) return [text];
+  const head = text.slice(0, open);
+  const tail = text.slice(close + 1);
+  if (commas.length === 0) return expandBraces(tail, limit).map((t) => `${text.slice(0, close + 1)}${t}`);
+  const bounds = [open, ...commas, close];
+  const out = [];
+  for (let k = 0; k + 1 < bounds.length; k++) {
+    for (const t of expandBraces(`${head}${text.slice(bounds[k] + 1, bounds[k + 1])}${tail}`, limit)) {
+      out.push(t);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+function segmentRegex(segment) {
+  let re = "";
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i];
+    if (c === "*") re += "[^/]*";
+    else if (c === "?") re += "[^/]";
+    else if (c === "[") {
+      const end = segment.indexOf("]", i + 2);
+      if (end === -1) re += "\\[";
+      else {
+        re += `[${segment.slice(i + 1, end).replace(/^!/, "^").replaceAll("\\", "\\\\")}]`;
+        i = end;
+      }
+    } else re += c.replace(/[.+^${}()|\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`);
+}
+var GLOB_LIMIT = 2e3;
+function expandGlob(absPattern) {
+  const parts = absPattern.split("/").filter((p, idx) => p !== "" || idx === 0);
+  let frontier = [parts[0] === "" ? "/" : parts[0]];
+  for (const part of parts.slice(1)) {
+    const next = [];
+    const isGlob = /[*?[]/.test(part);
+    const re = isGlob ? segmentRegex(part.replaceAll("**", "*")) : void 0;
+    for (const dir of frontier) {
+      if (!re) {
+        next.push(join(dir, part));
+        continue;
+      }
+      let entries;
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (name.startsWith(".") && !part.startsWith(".")) continue;
+        if (re.test(name)) next.push(join(dir, name));
+        if (next.length > GLOB_LIMIT) return { matches: [], overflow: true };
+      }
+    }
+    frontier = next;
+  }
+  return { matches: frontier.filter((p) => exists(p)), overflow: false };
+}
+function exists(p) {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function expandHome(p) {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "time", "nice", "nohup", "command", "builtin", "exec", "timeout", "stdbuf", "ionice", "caffeinate"]);
+var NON_PATH_ARGS = /* @__PURE__ */ new Set([
+  "echo",
+  "printf",
+  "print",
+  "export",
+  "alias",
+  "unalias",
+  "true",
+  "false",
+  "sleep",
+  "kill",
+  "exit",
+  "return",
+  "set",
+  "unset",
+  "read",
+  "type",
+  "which",
+  "hash",
+  "jobs",
+  "wait",
+  "shift",
+  "trap",
+  "ulimit",
+  "umask",
+  "history"
+]);
+var WRITE_ARGS = /* @__PURE__ */ new Set(["touch", "mkdir", "rm", "rmdir", "tee", "truncate", "chmod", "chown", "chgrp", "unlink", "shred"]);
+var LIST_ARGS = /* @__PURE__ */ new Set(["ls", "dir", "stat", "file", "test", "[", "[[", "wc", "realpath", "readlink", "basename", "dirname"]);
+var INTERPRETERS = /^(?:bash|sh|zsh|dash|ksh|fish|python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|pwsh|powershell)$/;
+var INLINE_FLAGS = /* @__PURE__ */ new Set(["-c", "-e", "-p", "-r", "--eval", "--print", "-E", "eval", "-Command"]);
+var EVAL_COMMANDS = /* @__PURE__ */ new Set(["eval", "source", ".", "xargs", "parallel", "watch"]);
+var KEYWORDS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}"]);
+function commandIndex(words) {
+  let k = 0;
+  for (; ; ) {
+    while (k < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k].text) || KEYWORDS.has(words[k].text))) k++;
+    if (k >= words.length || !WRAPPERS.has(basename(words[k].text))) return k;
+    const wrapper = basename(words[k].text);
+    k++;
+    while (k < words.length && (words[k].text.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k].text))) k++;
+    if (wrapper === "timeout" && k < words.length && /^\d/.test(words[k].text)) k++;
+  }
+}
+function shapeOf(words) {
+  const k = commandIndex(words);
+  if (k >= words.length) return void 0;
+  const cmd = basename(words[k].text);
+  const args = [];
+  const argWords = [];
+  const flags = [];
+  let endOfFlags = false;
+  for (const w of words.slice(k + 1)) {
+    if (!endOfFlags && w.text === "--") {
+      endOfFlags = true;
+      flags.push("--");
+      continue;
+    }
+    if (!endOfFlags && w.text.startsWith("-") && w.text.length > 1) {
+      flags.push(w.text);
+      const eq = w.text.indexOf("=");
+      if (w.text.startsWith("--") && eq > 0) {
+        args.push(w.text.slice(eq + 1));
+        argWords.push({ ...w, text: w.text.slice(eq + 1) });
+      }
+      continue;
+    }
+    args.push(w.text);
+    argWords.push(w);
+  }
+  return { cmd, args, argWords, flags };
+}
+var hasFlag = (flags, short, long) => flags.some((f) => long.includes(f.split("=")[0]) || /^-[A-Za-z]+$/.test(f) && short.some((s) => f.includes(s)));
+var VALUE_FLAGS = {
+  grep: ["-e", "-f", "-m", "-A", "-B", "-C", "--include", "--exclude", "--exclude-dir"],
+  rg: ["-e", "-f", "-g", "-t", "-T", "-m", "-A", "-B", "-C", "--glob", "--type", "--max-count"],
+  head: ["-n", "-c"],
+  tail: ["-n", "-c"],
+  sed: ["-e", "-f"],
+  awk: ["-f", "-v", "-F"],
+  find: [],
+  git: ["-C", "-c"]
+};
+function positionals(words, cmd) {
+  const valued = new Set(VALUE_FLAGS[cmd] ?? []);
+  const pos = [];
+  let dashAt = -1;
+  for (let j = commandIndex(words) + 1; j < words.length; j++) {
+    const w = words[j];
+    const t = w.text;
+    if (dashAt === -1 && t === "--") {
+      dashAt = pos.length;
+      continue;
+    }
+    if (dashAt === -1 && t.startsWith("-") && t.length > 1) {
+      const eq = t.indexOf("=");
+      if (t.startsWith("--") && eq > 0) pos.push({ ...w, text: t.slice(eq + 1) });
+      else if (valued.has(t)) j++;
+      continue;
+    }
+    pos.push(w);
+  }
+  return { pos, dashAt };
+}
+function explicitPath(text) {
+  return text.startsWith("/") || text.startsWith("~") || text.startsWith("./") || text.startsWith("../") || text === "." || text === "..";
+}
+function analyzeShell(command, opts) {
+  const out = { refs: [], dynamic: [], unknownCwd: false };
+  if (Array.isArray(command)) {
+    const [bin, flag, script] = command;
+    if (command.length === 3 && typeof bin === "string" && INTERPRETERS.test(basename(bin)) && /^-[a-z]*c$/.test(String(flag)) && typeof script === "string") {
+      return analyzeShell(script, opts);
+    }
+    return analyzeShell(command.map(quoteArg).join(" "), opts);
+  }
+  analyzeInto(command, opts.cwd, out, 0);
+  out.dynamic = [...new Set(out.dynamic)];
+  return out;
+}
+function quoteArg(a) {
+  return `'${String(a).replaceAll("'", `'\\''`)}'`;
+}
+function analyzeInto(command, startCwd, out, depth) {
+  if (depth > 8) {
+    out.dynamic.push("nested substitution");
+    return;
+  }
+  const st = tokenize(command, startCwd);
+  out.dynamic.push(...st.dynamic);
+  for (const sub of st.substitutions) analyzeInto(sub, startCwd, out, depth + 1);
+  let cwd = startCwd;
+  const stack = [];
+  let inPipeline = false;
+  for (const node of st.structure) {
+    if (node.type === "open") {
+      stack.push(cwd);
+      continue;
+    }
+    if (node.type === "close") {
+      cwd = stack.length > 0 ? stack.pop() : cwd;
+      continue;
+    }
+    if (node.type === "pipe") {
+      inPipeline = true;
+      continue;
+    }
+    const sc = st.commands[node.index];
+    const next = analyzeCommand(sc, cwd, out, inPipeline);
+    inPipeline = false;
+    cwd = next;
+  }
+}
+function resolveWord(w, cwd, out) {
+  if (w.text.includes(DYN)) return void 0;
+  const variants = w.brace ? expandBraces(w.text) : [w.text];
+  const paths = [];
+  for (const v of variants) {
+    const expanded = expandHome(v);
+    if (!isAbsolute(expanded) && cwd === void 0) {
+      out.unknownCwd = true;
+      return void 0;
+    }
+    const abs = resolve(cwd ?? "/", expanded);
+    if (w.glob && /[*?[]/.test(v)) {
+      const g = expandGlob(abs);
+      if (g.overflow) {
+        paths.push(`${DYN}search:${staticPrefixDir(abs)}`);
+      } else paths.push(...g.matches);
+    } else paths.push(abs);
+  }
+  return paths;
+}
+function staticPrefixDir(abs) {
+  const idx = abs.search(/[*?[]/);
+  return idx === -1 ? abs : dirname(`${abs.slice(0, idx)}x`);
+}
+function analyzeCommand(sc, cwd, out, inPipeline) {
+  const shape = shapeOf(sc.words);
+  const cmd = shape?.cmd ?? "";
+  const push = (w, kind, force = false, command = cmd) => {
+    const paths = resolveWord(w, cwd, out);
+    if (!paths) return;
+    for (const p of paths) {
+      if (p.startsWith(`${DYN}search:`)) {
+        out.refs.push({ path: p.slice(`${DYN}search:`.length), kind: "search", raw: w.text, command, explicit: true });
+        continue;
+      }
+      const explicit = force || explicitPath(w.text) || w.glob || exists(p);
+      out.refs.push({ path: p, kind, raw: w.text, command, explicit });
+    }
+  };
+  for (const r of sc.redirects) {
+    if (r.op === "<<" || r.op === "<<-" || r.op === "<<<") continue;
+    const target = r.target.text;
+    if (target.includes(DYN)) {
+      out.dynamic.push("redirection to a computed path");
+      continue;
+    }
+    if (/^\/dev\/(?:null|stdout|stderr|stdin|tty|zero|u?random|fd\/\d+)$/.test(target)) continue;
+    push(r.target, r.op.includes("<") ? "read" : "write", true);
+  }
+  if (!shape) return cwd;
+  if (cmd === "cd" || cmd === "pushd") {
+    if (inPipeline) return cwd;
+    const target = shape.args[0];
+    if (target === void 0) return homedir();
+    if (target === "-" || target.includes(DYN)) {
+      out.dynamic.push(`${cmd} to a computed directory`);
+      return void 0;
+    }
+    const w = shape.argWords[0];
+    const paths = resolveWord(w, cwd, out);
+    return paths?.length === 1 && !paths[0].startsWith(DYN) ? paths[0] : void 0;
+  }
+  if (cmd === "popd") {
+    out.dynamic.push("popd");
+    return void 0;
+  }
+  if (EVAL_COMMANDS.has(cmd)) out.dynamic.push(cmd);
+  if (INTERPRETERS.test(cmd)) {
+    if (shape.flags.some((f) => INLINE_FLAGS.has(f)) || shape.args[0] === "eval")
+      out.dynamic.push(`${cmd} ${shape.flags.find((f) => INLINE_FLAGS.has(f)) ?? "eval"}`);
+    else if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
+  }
+  if (cmd === "find" && shape.flags.some((f) => f === "-exec" || f === "-execdir" || f === "-ok" || f === "-okdir")) out.dynamic.push("find -exec");
+  if (NON_PATH_ARGS.has(cmd)) return cwd;
+  const words = sc.words;
+  const { pos, dashAt } = positionals(words, cmd);
+  const flags = shape.flags;
+  if (cmd === "git") {
+    analyzeGit(pos, dashAt, flags, cwd, out, push);
+    return cwd;
+  }
+  const patternFirst = (cmd === "grep" || cmd === "egrep" || cmd === "fgrep" || cmd === "rg" || cmd === "ag" || cmd === "ack") && !flags.some((f) => f === "-e" || f === "-f" || f.startsWith("--regexp") || f === "--files");
+  const targets = patternFirst ? pos.slice(1) : pos;
+  const recursive = cmd === "rg" || cmd === "ag" || cmd === "ack" || cmd === "fd" || cmd === "fdfind" || cmd === "find" || cmd === "tree" || cmd === "du" || (cmd === "grep" || cmd === "egrep" || cmd === "fgrep") && hasFlag(flags, ["r", "R"], ["--recursive", "--dereference-recursive"]) || cmd === "ls" && hasFlag(flags, ["R"], ["--recursive"]) || (cmd === "zip" || cmd === "rsync" || cmd === "scp" || cmd === "cp") && hasFlag(flags, ["r", "R", "a"], ["--recursive", "--archive"]) || cmd === "tar" && (hasFlag(flags, ["c"], ["--create"]) || /^c/.test(shape.args[0] ?? ""));
+  if (recursive) {
+    const explicitTargets = cmd === "find" ? findRoots(words) : targets;
+    if (explicitTargets.length === 0 && cwd !== void 0) out.refs.push({ path: cwd, kind: "search", raw: ".", command: cmd, explicit: true });
+    else if (explicitTargets.length === 0) out.unknownCwd = true;
+    for (const w of explicitTargets) push(w, "search", cmd !== "tar" && cmd !== "zip");
+    return cwd;
+  }
+  if (LIST_ARGS.has(cmd)) {
+    if (cmd === "ls" && targets.length === 0) {
+      if (cwd !== void 0) out.refs.push({ path: cwd, kind: "list", raw: ".", command: cmd, explicit: true });
+      else out.unknownCwd = true;
+    }
+    for (const w of targets) push(w, "list");
+    return cwd;
+  }
+  if (WRITE_ARGS.has(cmd)) {
+    for (const w of targets) push(w, "write");
+    return cwd;
+  }
+  if (cmd === "cp" || cmd === "mv" || cmd === "ln" || cmd === "install") {
+    for (const [idx, w] of targets.entries()) push(w, idx === targets.length - 1 && targets.length > 1 ? "write" : "read");
+    return cwd;
+  }
+  if (cmd === "sed" && !flags.some((f) => f === "-e" || f === "-f")) {
+    for (const w of targets.slice(1)) push(w, "read");
+    return cwd;
+  }
+  if (cmd === "awk" && !flags.some((f) => f === "-f")) {
+    for (const w of targets.slice(1)) push(w, "read");
+    return cwd;
+  }
+  for (const w of targets) push(w, "read");
+  return cwd;
+}
+function findRoots(words) {
+  const roots = [];
+  let j = commandIndex(words) + 1;
+  while (j < words.length && /^-[HLP]$/.test(words[j].text)) j++;
+  for (; j < words.length; j++) {
+    const t = words[j].text;
+    if (t.startsWith("-") || t === "(" || t === "!") break;
+    roots.push(words[j]);
+  }
+  return roots;
+}
+var GIT_CONTENT = /* @__PURE__ */ new Set(["diff", "show", "log", "grep", "blame", "annotate", "cat-file", "archive", "format-patch", "whatchanged", "stash"]);
+var GIT_NAMES_ONLY = [
+  "--stat",
+  "--name-only",
+  "--name-status",
+  "--numstat",
+  "--shortstat",
+  "--quiet",
+  "--no-patch",
+  "-s",
+  "--oneline",
+  "--summary",
+  "--exit-code",
+  "--dirstat"
+];
+function analyzeGit(pos, dashAt, flags, cwd, out, pushAs) {
+  const sub = pos[0]?.text ?? "";
+  const rest = pos.slice(1);
+  const push = (w, kind, force = false) => pushAs(w, kind, force, `git ${sub}`);
+  for (const w of rest) {
+    const m = /^[^:\s]*:(.+)$/.exec(w.text);
+    if (m && !w.text.includes("://") && (sub === "show" || sub === "cat-file")) push({ ...w, text: m[1] }, "read", true);
+  }
+  if (!GIT_CONTENT.has(sub)) {
+    for (const w of rest) push(w, "list");
+    return;
+  }
+  const namesOnly = flags.some((f) => GIT_NAMES_ONLY.includes(f.split("=")[0]));
+  const logWithoutPatch = (sub === "log" || sub === "whatchanged") && !flags.some((f) => /^(?:-p|-u|--patch|-L.*|--full-diff|-G.*|-S.*)$/.test(f));
+  const stashWithoutPatch = sub === "stash" && !(rest[0]?.text === "show" && flags.some((f) => f === "-p" || f === "--patch"));
+  if (namesOnly && sub !== "grep" || logWithoutPatch || stashWithoutPatch) {
+    for (const w of rest) push(w, "list");
+    return;
+  }
+  const candidates = dashAt !== -1 ? pos.slice(Math.max(dashAt, 1)) : (sub === "grep" ? rest.slice(1) : rest).filter((w) => exists(resolve(cwd ?? "/", expandHome(w.text))));
+  const pathspecs = candidates.filter((w) => !w.text.includes(DYN));
+  if (pathspecs.length === 0) {
+    if (cwd === void 0) out.unknownCwd = true;
+    else out.refs.push({ path: cwd, kind: "search", raw: ".", command: `git ${sub}`, explicit: true });
+    return;
+  }
+  for (const w of pathspecs) push(w, "search", true);
+}
 
 // src/vault/vault.ts
 import { randomBytes } from "crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { homedir as homedir2 } from "os";
+import { join as join2 } from "path";
 
 // src/vault/placeholder.ts
 import { createHmac } from "crypto";
@@ -110,7 +769,7 @@ var PLACEHOLDER_RE = /SECRETGATE_[0-9a-f]{12,16}/g;
 
 // src/vault/vault.ts
 function defaultVaultHome() {
-  return process.env.SECRETGATE_HOME ?? join(homedir(), ".secretgate");
+  return process.env.SECRETGATE_HOME ?? join2(homedir2(), ".secretgate");
 }
 function writeFileAtomic(path, content, mode) {
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
@@ -128,7 +787,7 @@ var Vault = class {
   saltValue;
   constructor(home = defaultVaultHome()) {
     this.home = home;
-    this.vaultPath = join(home, "vault.json");
+    this.vaultPath = join2(home, "vault.json");
   }
   ensureHome() {
     mkdirSync(this.home, { recursive: true, mode: 448 });
@@ -136,7 +795,7 @@ var Vault = class {
   salt() {
     if (this.saltValue) return this.saltValue;
     this.ensureHome();
-    const saltPath = join(this.home, "salt");
+    const saltPath = join2(this.home, "salt");
     try {
       this.saltValue = readFileSync(saltPath, "utf8").trim();
     } catch {
@@ -195,50 +854,572 @@ var Vault = class {
   }
 };
 
+// src/paths.ts
+var SENSITIVE_GLOBS = [
+  "**/.env",
+  "**/.env.*",
+  "**/*.pem",
+  "**/*.key",
+  "**/id_rsa*",
+  "**/id_ed25519*",
+  "**/id_ecdsa*",
+  "**/.aws/**",
+  "**/.ssh/**",
+  "**/.kube/config",
+  "**/.npmrc",
+  "**/.netrc",
+  "**/.docker/config.json",
+  "**/credentials.json",
+  "**/.envrc",
+  "**/.dev.vars",
+  "**/.git-credentials",
+  "**/.pgpass",
+  "**/.pypirc",
+  "**/*.p12",
+  "**/*.pfx",
+  "**/*.tfstate",
+  "**/*.tfstate.backup"
+];
+var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
+var CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+function canonical(p) {
+  let head = resolve2(expandHome(p));
+  const tail = [];
+  for (; ; ) {
+    try {
+      return join3(realpathSync(head), ...[...tail].reverse());
+    } catch {
+      const parent = dirname2(head);
+      if (parent === head) return resolve2(expandHome(p));
+      tail.push(basename2(head));
+      head = parent;
+    }
+  }
+}
+function fold(p) {
+  return CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
+}
+function covers(dir, p) {
+  const a = fold(canonical(dir));
+  const b = fold(canonical(p));
+  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
+}
+function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
+  const normalized = expandHome(path.replaceAll("\\", "/"));
+  const absolute2 = resolve2(cwd, normalized).replaceAll("\\", "/");
+  const real = canonical(absolute2).replaceAll("\\", "/");
+  const spellings = [.../* @__PURE__ */ new Set([normalized, absolute2, real])];
+  const resolvedForms = [absolute2, real, relative(cwd, absolute2).replaceAll("\\", "/"), relative(canonical(cwd), real).replaceAll("\\", "/")];
+  if (resolvedForms.some((p) => !p.split("/").includes("..") && isAllowedPath(p, allowlist))) return void 0;
+  const vaultHome = defaultVaultHome();
+  if (covers(join3(vaultHome, "vault.json"), real) || covers(join3(vaultHome, "salt"), real)) return "secretgate vault";
+  for (const p of spellings) {
+    if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(p, g, true))) continue;
+    const hit = SENSITIVE_GLOBS.find((g) => pathMatchesGlob(p, g, true));
+    if (hit) return hit;
+  }
+  return void 0;
+}
+function commandTouchesSensitivePath(command, allowlist, cwd = process.cwd()) {
+  const analysis = analyzeShell(command, { cwd });
+  for (const ref of analysis.refs) {
+    if (ref.kind === "write" || ref.kind === "list") continue;
+    if (sensitivePathMatch(ref.path, allowlist, cwd)) return ref.raw;
+  }
+  return void 0;
+}
+
 // src/config.ts
-function readJson(path) {
+function readJsonFile(path) {
+  let raw;
   try {
-    return JSON.parse(readFileSync2(path, "utf8"));
+    raw = readFileSync2(path, "utf8");
+  } catch {
+    return { ok: false, missing: true, message: "unreadable" };
+  }
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch {
+    return { ok: false, missing: false, message: "not valid JSON" };
+  }
+}
+var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
+function strings(v) {
+  return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.length > 0) : [];
+}
+function validateAllowlist(v, where) {
+  if (v === void 0) return {};
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error(`${where} must be an object`);
+  const a = v;
+  for (const key of ["sha256", "rules", "paths"]) {
+    if (a[key] !== void 0 && !isStringArray(a[key])) throw new Error(`${where}.${key} must be an array of non-empty strings`);
+  }
+  return { sha256: a.sha256, rules: a.rules, paths: a.paths };
+}
+function validateScope(v, root, file) {
+  if (v === void 0) return void 0;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("scope must be an object");
+  const s = v;
+  for (const key of Object.keys(s)) if (!["allow", "deny", "bash"].includes(key)) throw new Error(`scope.${key} is not a known key (allow, deny, bash)`);
+  if (s.allow !== void 0 && !isStringArray(s.allow)) throw new Error("scope.allow must be an array of non-empty glob strings");
+  if (s.deny !== void 0 && !isStringArray(s.deny)) throw new Error("scope.deny must be an array of non-empty glob strings");
+  if (s.bash !== void 0 && s.bash !== "paths" && s.bash !== "strict") throw new Error('scope.bash must be "paths" or "strict"');
+  if (s.allow === void 0 && s.deny === void 0) throw new Error("scope needs an allow or a deny list");
+  return {
+    root,
+    allow: s.allow,
+    deny: s.deny,
+    bash: s.bash ?? "paths",
+    file
+  };
+}
+function projectConfigFiles(cwd) {
+  const files = [];
+  const home = resolve3(homedir3());
+  let dir = resolve3(cwd);
+  for (; ; ) {
+    if (dir === home) break;
+    const file = join4(dir, ".secretgate.json");
+    if (existsSync(file)) files.push(file);
+    if (existsSync(join4(dir, ".git"))) break;
+    const parent = dirname3(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return files;
+}
+function loadConfig(cwd) {
+  const home = defaultVaultHome();
+  const baseRead = readJsonFile(join4(home, "config.json"));
+  const base = baseRead.ok && baseRead.value && typeof baseRead.value === "object" ? baseRead.value : {};
+  const allowRead = readJsonFile(join4(home, "allowlist.json"));
+  const allow = allowRead.ok && allowRead.value && typeof allowRead.value === "object" ? allowRead.value : {};
+  const merged = { sha256: strings(allow.sha256), rules: strings(allow.rules), paths: strings(allow.paths) };
+  const forScan = { sha256: [...merged.sha256], rules: [...merged.rules], paths: [...merged.paths] };
+  const scopes = [];
+  const untrusted = [];
+  let error;
+  const trust = cwd ? readTrust() : {};
+  for (const file of cwd ? projectConfigFiles(cwd) : []) {
+    const read = readJsonFile(file);
+    try {
+      if (!read.ok) throw new Error(read.message);
+      if (read.value === null || typeof read.value !== "object" || Array.isArray(read.value)) throw new Error("must be a JSON object");
+      const project = read.value;
+      const list = validateAllowlist(project.allowlist, "allowlist");
+      const scope = validateScope(project.scope, canonical(dirname3(file)), file);
+      const entries = (list.sha256?.length ?? 0) + (list.rules?.length ?? 0) + (list.paths?.length ?? 0);
+      const targets = trust[canonical(file)] === fileHash(file) ? [merged, forScan] : [forScan];
+      if (entries > 0 && targets.length === 1) untrusted.push(file);
+      for (const t of targets) {
+        t.sha256.push(...list.sha256 ?? []);
+        t.rules.push(...list.rules ?? []);
+        t.paths.push(...list.paths ?? []);
+      }
+      if (scope) scopes.push(scope);
+    } catch (err) {
+      error ??= { file, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  return {
+    restoreBash: base.restoreBash === true,
+    hybrid: base.hybrid === "off" ? "off" : "auto",
+    allowlist: merged,
+    scanAllowlist: forScan,
+    untrusted,
+    scopes,
+    ...error ? { error } : {}
+  };
+}
+function trustPath() {
+  return join4(defaultVaultHome(), "trusted.json");
+}
+function fileHash(file) {
+  try {
+    return createHash2("sha256").update(readFileSync2(file)).digest("hex");
   } catch {
     return void 0;
   }
 }
-function loadConfig(cwd) {
-  const home = defaultVaultHome();
-  const base = readJson(join2(home, "config.json")) ?? {};
-  const allow = readJson(join2(home, "allowlist.json")) ?? {};
-  const project = cwd ? readJson(join2(cwd, ".secretgate.json")) ?? {} : {};
-  const merged = {
-    sha256: [...allow.sha256 ?? [], ...project.allowlist?.sha256 ?? []],
-    rules: [...allow.rules ?? [], ...project.allowlist?.rules ?? []],
-    paths: [...allow.paths ?? [], ...project.allowlist?.paths ?? []]
-  };
-  return {
-    restoreBash: base.restoreBash === true,
-    hybrid: base.hybrid === "off" ? "off" : "auto",
-    allowlist: merged
-  };
+function readTrust() {
+  const read = readJsonFile(trustPath());
+  if (!read.ok || !read.value || typeof read.value !== "object") return {};
+  const files = read.value.files;
+  return files && typeof files === "object" && !Array.isArray(files) ? files : {};
+}
+function setTrust(files, revoke = false) {
+  const trust = readTrust();
+  for (const file of files) {
+    const key = canonical(file);
+    const hash = fileHash(file);
+    if (revoke || !hash) delete trust[key];
+    else trust[key] = hash;
+  }
+  mkdirSync2(defaultVaultHome(), { recursive: true, mode: 448 });
+  const tmp = `${trustPath()}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ version: 1, files: trust }, null, 2), { mode: 384 });
+  renameSync2(tmp, trustPath());
 }
 function allowlistPath() {
-  return join2(defaultVaultHome(), "allowlist.json");
+  return join4(defaultVaultHome(), "allowlist.json");
+}
+
+// src/scope.ts
+import { lstatSync as lstatSync2, statSync } from "fs";
+import { homedir as homedir4 } from "os";
+import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute2, join as join5, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
+var fold2 = (p) => CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
+var toPosix = (p) => p.replaceAll("\\", "/");
+function absolute(path, cwd) {
+  return canonical(resolve4(cwd, expandHome(path)));
+}
+function relToRoot(scope, abs) {
+  const rel = relative2(scope.root, abs);
+  if (rel === "") return "";
+  if (rel.startsWith("..") || isAbsolute2(rel)) {
+    if (!CASE_INSENSITIVE_FS) return void 0;
+    const folded = relative2(fold2(scope.root), fold2(abs));
+    if (folded === "" || folded.startsWith("..") || isAbsolute2(folded)) return folded === "" ? "" : void 0;
+    return toPosix(abs.slice(abs.length - folded.length));
+  }
+  return toPosix(rel);
+}
+function selfAndAncestors(rel) {
+  const parts = rel.split("/");
+  return parts.map((_, i) => parts.slice(0, parts.length - i).join("/"));
+}
+var isAbsoluteGlob = (g) => g.startsWith("/") || g.startsWith("~");
+function globMatchesPath(glob, rel, abs) {
+  const g = toPosix(glob.replace(/^\.\//, ""));
+  const variants = g.endsWith("/**") ? [g, g.slice(0, -3)] : [g];
+  if (isAbsoluteGlob(g)) {
+    const expanded = variants.map((v) => toPosix(canonicalGlobBase(expandHome(v))));
+    const candidates = selfAndAncestors(toPosix(abs).replace(/^\//, "")).map((p) => `/${p}`);
+    return expanded.some((v) => candidates.some((c) => pathMatchesGlob(c, v, CASE_INSENSITIVE_FS)));
+  }
+  if (rel === void 0) return false;
+  if (rel === "") return variants.some((v) => v === "." || v === "**" || v === "");
+  return variants.some((v) => selfAndAncestors(rel).some((c) => pathMatchesGlob(c, v, CASE_INSENSITIVE_FS)));
+}
+function canonicalGlobBase(glob) {
+  const idx = glob.search(/[*?[{]/);
+  if (idx === -1) return canonical(glob);
+  const base = glob.slice(0, idx);
+  const cut = base.lastIndexOf("/");
+  if (cut <= 0) return glob;
+  return `${canonical(base.slice(0, cut))}${glob.slice(cut)}`;
+}
+function staticSegments(glob) {
+  const out = [];
+  for (const seg of toPosix(glob.replace(/^\.\//, "")).split("/")) {
+    if (/[*?[{]/.test(seg) || seg === "") break;
+    out.push(seg);
+  }
+  return out;
+}
+function describe(rel, abs) {
+  return rel === void 0 ? abs : rel === "" ? "the project root" : rel;
+}
+function pathOutOfScope(scope, path, cwd) {
+  const abs = absolute(path, cwd);
+  const rel = relToRoot(scope, abs);
+  const denied = scope.deny?.find((g) => globMatchesPath(g, rel, abs));
+  if (denied) return `'${describe(rel, abs)}' matches scope.deny '${denied}'`;
+  if (!scope.allow) return void 0;
+  if (scope.allow.some((g) => globMatchesPath(g, rel, abs))) return void 0;
+  return rel === void 0 ? `'${abs}' is outside the project root ${scope.root}` : `'${describe(rel, abs)}' is not in scope.allow`;
+}
+function leadsToAllowed(scope, abs) {
+  if (!scope.allow) return true;
+  const rel = relToRoot(scope, abs);
+  return scope.allow.some((g) => {
+    if (isAbsoluteGlob(g)) {
+      const base = canonicalGlobBase(expandHome(g));
+      const idx = base.search(/[*?[{]/);
+      return covers(abs, idx === -1 ? base : dirname4(`${base.slice(0, idx)}x`));
+    }
+    if (rel === void 0) return false;
+    if (rel === "") return true;
+    const prefix = staticSegments(g);
+    const parts = rel.split("/");
+    if (prefix.length < parts.length && toPosix(g).slice(prefix.join("/").length).replace(/^\//, "").startsWith("**")) {
+      return parts.slice(0, prefix.length).every((p, i) => fold2(p) === fold2(prefix[i]));
+    }
+    return parts.length <= prefix.length && parts.every((p, i) => fold2(p) === fold2(prefix[i]));
+  });
+}
+function denyBelow(scope, abs) {
+  const rel = relToRoot(scope, abs);
+  return scope.deny?.find((g) => {
+    if (isAbsoluteGlob(g)) {
+      const base = canonicalGlobBase(expandHome(g));
+      const idx = base.search(/[*?[{]/);
+      const staticDir = idx === -1 ? base : dirname4(`${base.slice(0, idx)}x`);
+      return covers(abs, staticDir) || covers(staticDir, abs);
+    }
+    if (rel === void 0) return false;
+    const prefix = staticSegments(g);
+    if (prefix.length === 0) return true;
+    const parts = rel === "" ? [] : rel.split("/");
+    return parts.length < prefix.length ? parts.every((p, i) => fold2(p) === fold2(prefix[i])) : false;
+  });
+}
+function isDirectory(abs) {
+  try {
+    return statSync(abs).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function exists2(abs) {
+  try {
+    lstatSync2(abs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function accessViolation(scope, path, cwd, kind) {
+  const out = pathOutOfScope(scope, path, cwd);
+  const abs = absolute(path, cwd);
+  if (kind === "read" || kind === "write") return out;
+  if (kind === "list") {
+    if (!out) return void 0;
+    const rel = relToRoot(scope, abs);
+    if (scope.deny?.some((g) => globMatchesPath(g, rel, abs))) return out;
+    return leadsToAllowed(scope, abs) ? void 0 : out;
+  }
+  if (out) return out;
+  const below = isDirectory(abs) ? denyBelow(scope, abs) : void 0;
+  if (below) return `'${describe(relToRoot(scope, abs), abs)}' contains paths matching scope.deny '${below}'`;
+  return void 0;
+}
+var STATE_ENTRIES = ["config.json", "allowlist.json", "disabled.json", "sessions.json", "trusted.json", "vault.json", "salt", "bin", "stopped-sessions"];
+function isSecretgateState(abs) {
+  const home = defaultVaultHome();
+  return STATE_ENTRIES.some((entry) => covers(join5(home, entry), abs));
+}
+function controlRoots(scope) {
+  const home = homedir4();
+  const codex = process.env.CODEX_HOME ?? join5(home, ".codex");
+  const xdg = process.env.XDG_CONFIG_HOME ?? join5(home, ".config");
+  return [codex, join5(scope.root, ".codex"), join5(xdg, "opencode"), join5(scope.root, ".opencode")];
+}
+function isControlFile(scope, path, cwd) {
+  const abs = absolute(path, cwd);
+  const name = fold2(basename3(abs));
+  if (name === ".secretgate.json") return true;
+  const parent = fold2(basename3(dirname4(abs)));
+  if (parent === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
+  if (name === "opencode.json" || name === "opencode.jsonc") return true;
+  return isSecretgateState(abs) || controlRoots(scope).some((root) => covers(root, abs));
+}
+function controlViolation(scope, path, cwd) {
+  return isControlFile(scope, path, cwd) ? `'${path}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)` : void 0;
+}
+var SAFE_READERS = /* @__PURE__ */ new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "jq",
+  "wc",
+  "ls",
+  "stat",
+  "file",
+  "diff",
+  "cmp",
+  "nl",
+  "tree",
+  "fd"
+]);
+var GIT_READ_ONLY = /^git (?:diff|show|log|blame|annotate|status|grep|ls-files|cat-file|whatchanged|shortlog|add|commit|check-ignore)$/;
+function searchAdvice(scope) {
+  const target = scope.allow?.map((g) => staticSegments(g).join("/")).find((p) => p.length > 0);
+  return target ? ` \u2014 point it at an in-scope directory explicitly (e.g. ${target}/)` : "";
+}
+function shellViolation(scope, command, cwd, workdir) {
+  const base = workdir ? resolve4(cwd, expandHome(workdir)) : cwd;
+  if (workdir) {
+    const v = accessViolation(scope, base, cwd, "list");
+    if (v) return `working directory ${v}`;
+  }
+  const text = Array.isArray(command) ? command.join(" ") : command;
+  if (/(?:^|[\s;&|(/])secretgate(?:\.mjs)?["']?\s+uninstall\b/.test(text)) return "uninstalling secretgate is not allowed while a scope is active";
+  const analysis = analyzeShell(command, { cwd: base });
+  if (scope.bash === "strict" && analysis.dynamic.length > 0) {
+    return `scope.bash is "strict" and this command uses ${analysis.dynamic.slice(0, 3).join(", ")}, which cannot be checked statically \u2014 spell the paths out`;
+  }
+  if (analysis.unknownCwd) return "this command changes to a directory that cannot be resolved statically, so its relative paths cannot be checked";
+  for (const ref of analysis.refs) {
+    const v = refViolation(scope, ref, base);
+    if (v) return v;
+  }
+  return void 0;
+}
+function refViolation(scope, ref, cwd) {
+  if (isControlFile(scope, ref.path, cwd) && (ref.kind === "write" || !(SAFE_READERS.has(ref.command) || GIT_READ_ONLY.test(ref.command)))) {
+    return `'${ref.raw}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)`;
+  }
+  if (!ref.explicit) return void 0;
+  const v = accessViolation(scope, ref.path, cwd, ref.kind);
+  if (!v) return void 0;
+  if (ref.kind === "search")
+    return `\`${ref.command}\` would read everything under ${ref.raw === "." ? "the working directory" : `'${ref.raw}'`}: ${v}${searchAdvice(scope)}`;
+  return v;
+}
+function searchRootOf(call, cwd) {
+  const root = resolve4(cwd, expandHome(call.searchRoot ?? "."));
+  const pattern = call.pattern ? expandHome(call.pattern) : "";
+  const idx = pattern.search(/[*?[{]/);
+  const prefix = idx === -1 ? "" : pattern.slice(0, idx);
+  const cut = prefix.lastIndexOf("/");
+  return cut === -1 ? root : resolve4(root, prefix.slice(0, cut) || "/");
+}
+function toolCallScopeViolation(scopes, call, cwd) {
+  for (const scope of scopes) {
+    const v = oneScope(scope, call, cwd);
+    if (v) return `secretgate scope (${scope.file}): ${v}.`;
+  }
+  return void 0;
+}
+function oneScope(scope, call, cwd) {
+  switch (call.kind) {
+    case "read":
+      for (const p of call.paths) {
+        const v = accessViolation(scope, p, cwd, isDirectory(absolute(p, cwd)) ? "list" : "read");
+        if (v) return v;
+      }
+      return void 0;
+    case "write":
+    case "patch":
+      for (const p of call.paths) {
+        const v = controlViolation(scope, p, cwd) ?? accessViolation(scope, p, cwd, "write");
+        if (v) return v;
+      }
+      return void 0;
+    case "list":
+      for (const p of call.paths.length > 0 ? call.paths : ["."]) {
+        const v = accessViolation(scope, p, cwd, "list");
+        if (v) return v;
+      }
+      return void 0;
+    case "search": {
+      const root = searchRootOf(call, cwd);
+      return accessViolation(scope, root, cwd, "list");
+    }
+    case "shell":
+      return call.command === void 0 ? void 0 : shellViolation(scope, call.command, cwd, call.workdir);
+    default:
+      for (const p of call.paths) {
+        const abs = resolve4(cwd, expandHome(p));
+        if (!exists2(abs)) continue;
+        const v = accessViolation(scope, p, cwd, isDirectory(abs) ? "list" : "read");
+        if (v) return v;
+      }
+      return void 0;
+  }
+}
+function lineOutOfScope(scopes, line, cwd) {
+  const trimmed = line.trim();
+  if (trimmed === "" || trimmed === "--") return void 0;
+  const candidate = /^(.+?)(?::\d+[:-]|-\d+-|:|$)/.exec(trimmed)?.[1]?.trim();
+  if (!candidate || candidate.length > 4096) return void 0;
+  const abs = resolve4(cwd, expandHome(candidate));
+  if (!exists2(abs)) return void 0;
+  return scopes.some((s) => pathOutOfScope(s, abs, cwd) !== void 0);
+}
+function filterSearchText(scopes, text, cwd) {
+  let dropping = false;
+  const kept = [];
+  for (const line of text.split("\n")) {
+    const indented = /^\s/.test(line) && line.trim() !== "";
+    if (!indented) {
+      const out = lineOutOfScope(scopes, line, cwd);
+      dropping = out === true;
+    }
+    if (!dropping) kept.push(line);
+  }
+  return kept.join("\n");
+}
+function filterSearchOutput(scopes, value, cwd) {
+  if (scopes.length === 0) return { value, changed: false };
+  if (typeof value === "string") {
+    const filtered = filterSearchText(scopes, value, cwd);
+    return { value: filtered, changed: filtered !== value };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = [];
+    for (const item of value) {
+      if (typeof item === "string" && lineOutOfScope(scopes, item, cwd) === true) {
+        changed = true;
+        continue;
+      }
+      const r = filterSearchOutput(scopes, item, cwd);
+      changed ||= r.changed;
+      next.push(r.value);
+    }
+    return { value: next, changed };
+  }
+  if (value && typeof value === "object") {
+    let changed = false;
+    const next = {};
+    for (const [k, v] of Object.entries(value)) {
+      const r = filterSearchOutput(scopes, v, cwd);
+      changed ||= r.changed;
+      next[k] = r.value;
+    }
+    if (changed && Array.isArray(next.filenames) && typeof next.numFiles === "number") next.numFiles = next.filenames.length;
+    return { value: changed ? next : value, changed };
+  }
+  return { value, changed: false };
+}
+function promptScopeViolation(scopes, prompt, cwd) {
+  if (scopes.length === 0) return void 0;
+  for (const m of prompt.matchAll(/(?:^|[\s(])@("[^"]+"|[^\s,;)'"`]+)/g)) {
+    const raw = m[1].replace(/^"|"$/g, "").replace(/[.:]+$/, "");
+    const explicit = raw.startsWith("/") || raw.startsWith("~") || raw.startsWith("./") || raw.startsWith("../");
+    const abs = resolve4(cwd, expandHome(raw.replace(/#L?\d+(?:-\d+)?$/, "")));
+    if (!explicit && !exists2(abs)) continue;
+    for (const scope of scopes) {
+      const v = accessViolation(scope, abs, cwd, isDirectory(abs) ? "list" : "read");
+      if (v) return `secretgate scope (${scope.file}): @${raw} \u2014 ${v}. Mention an in-scope file instead.`;
+    }
+  }
+  return void 0;
+}
+function describeScope(scope) {
+  return [
+    `root   ${scope.root}${sep2}`,
+    `allow  ${scope.allow ? scope.allow.join(", ") : "(everything under the root)"}`,
+    `deny   ${scope.deny?.length ? scope.deny.join(", ") : "(none)"}`,
+    `bash   ${scope.bash}`
+  ];
 }
 
 // src/disable.ts
 import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync as closeSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, realpathSync, renameSync as renameSync2, writeSync as writeSync2 } from "fs";
-import { basename, dirname, join as join3, resolve, sep } from "path";
+import { closeSync as closeSync2, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync3, renameSync as renameSync3, writeSync as writeSync2 } from "fs";
+import { join as join6 } from "path";
 var NOT_DISABLED = { disabled: false };
 var SESSION_INDEX_MAX = 20;
 var DEFAULT_DISABLE_MINUTES = 60;
 var MAX_DISABLE_MINUTES = 1440;
 function disablePath() {
-  return join3(defaultVaultHome(), "disabled.json");
+  return join6(defaultVaultHome(), "disabled.json");
 }
 function sessionIndexPath() {
-  return join3(defaultVaultHome(), "sessions.json");
+  return join6(defaultVaultHome(), "sessions.json");
 }
 function writeFileAtomic2(path, content, mode) {
-  mkdirSync2(defaultVaultHome(), { recursive: true, mode: 448 });
+  mkdirSync3(defaultVaultHome(), { recursive: true, mode: 448 });
   const tmp = `${path}.${process.pid}.${randomBytes2(4).toString("hex")}.tmp`;
   const fd = openSync2(tmp, "w", mode);
   try {
@@ -246,9 +1427,9 @@ function writeFileAtomic2(path, content, mode) {
   } finally {
     closeSync2(fd);
   }
-  renameSync2(tmp, path);
+  renameSync3(tmp, path);
 }
-function readJson2(path) {
+function readJson(path) {
   try {
     return JSON.parse(readFileSync3(path, "utf8"));
   } catch {
@@ -259,7 +1440,7 @@ function emptyDisableFile() {
   return { version: 1, sessions: {}, paths: {} };
 }
 function readDisableFile() {
-  const parsed = readJson2(disablePath());
+  const parsed = readJson(disablePath());
   if (parsed?.version !== 1) return emptyDisableFile();
   return {
     version: 1,
@@ -272,6 +1453,10 @@ function isRecord(v) {
 }
 function isLive(entry, now) {
   if (!entry) return false;
+  if (entry.ceiling !== void 0) {
+    const ceiling = Date.parse(String(entry.ceiling));
+    if (!Number.isFinite(ceiling) || ceiling <= now) return false;
+  }
   if (entry.until === null) return true;
   const until = Date.parse(String(entry.until));
   return Number.isFinite(until) && until > now;
@@ -289,25 +1474,6 @@ function envDisabled() {
   const raw = (process.env.SECRETGATE_DISABLE ?? "").trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
-function canonical(p) {
-  let head = resolve(p);
-  const tail = [];
-  for (; ; ) {
-    try {
-      return join3(realpathSync(head), ...[...tail].reverse());
-    } catch {
-      const parent = dirname(head);
-      if (parent === head) return resolve(p);
-      tail.push(basename(head));
-      head = parent;
-    }
-  }
-}
-function covers(dir, cwd) {
-  const a = canonical(dir);
-  const b = canonical(cwd);
-  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
-}
 function disableState(ctx = {}) {
   if (envDisabled()) return { disabled: true, scope: "env" };
   const now = Date.now();
@@ -315,11 +1481,19 @@ function disableState(ctx = {}) {
   if (ctx.sessionId) {
     const entry = file.sessions[ctx.sessionId];
     if (isLive(entry, now))
-      return { disabled: true, scope: "session", until: entry?.until ?? void 0, target: ctx.sessionId, ...entry?.lifetime ? { lifetime: true } : {} };
+      return {
+        disabled: true,
+        scope: "session",
+        until: entry?.until ?? void 0,
+        target: ctx.sessionId,
+        ...entry?.lifetime ? { lifetime: true } : {},
+        ...entry?.liftScope ? { includesScope: true } : {}
+      };
   }
   if (ctx.cwd) {
     for (const [dir, entry] of Object.entries(file.paths)) {
-      if (isLive(entry, now) && covers(dir, ctx.cwd)) return { disabled: true, scope: "path", until: entry.until ?? void 0, target: dir };
+      if (isLive(entry, now) && covers(dir, ctx.cwd))
+        return { disabled: true, scope: "path", until: entry.until ?? void 0, target: dir, ...entry.liftScope ? { includesScope: true } : {} };
     }
   }
   return NOT_DISABLED;
@@ -337,7 +1511,11 @@ function addPause(req) {
   const lifetime = req.scope === "session" && req.lifetime === true;
   const until = lifetime || req.minutes === null ? null : new Date(now + Math.min(req.minutes, MAX_DISABLE_MINUTES) * 6e4).toISOString();
   const entry = req.scope === "session" && req.cwd ? { until, cwd: req.cwd } : { until };
-  if (lifetime) entry.lifetime = true;
+  if (req.liftScope) entry.liftScope = true;
+  if (lifetime) {
+    entry.lifetime = true;
+    entry.ceiling = new Date(now + MAX_DISABLE_MINUTES * 6e4).toISOString();
+  }
   file[req.scope === "session" ? "sessions" : "paths"][req.target] = entry;
   writeFileAtomic2(disablePath(), JSON.stringify(file, null, 2), 384);
   return until;
@@ -356,7 +1534,7 @@ function clearPauses() {
   return before;
 }
 function readSessionIndex() {
-  const parsed = readJson2(sessionIndexPath());
+  const parsed = readJson(sessionIndexPath());
   if (parsed?.version !== 1 || !isRecord(parsed.sessions)) return {};
   return parsed.sessions;
 }
@@ -365,8 +1543,9 @@ function recordSession(sessionId, cwd) {
   if (!sessionId || !cwd) return;
   try {
     const sessions = readSessionIndex();
-    if (sessions[sessionId]?.cwd === cwd) return;
-    const nextSeq = Math.max(0, ...Object.values(sessions).map((e) => e?.seq ?? 0)) + 1;
+    const maxSeq = Math.max(0, ...Object.values(sessions).map((e) => e?.seq ?? 0));
+    if (sessions[sessionId]?.cwd === cwd && sessions[sessionId]?.seq === maxSeq) return;
+    const nextSeq = maxSeq + 1;
     sessions[sessionId] = { cwd, lastSeen: (/* @__PURE__ */ new Date()).toISOString(), seq: nextSeq };
     const trimmed = Object.entries(sessions).sort(bySeqDesc).slice(0, SESSION_INDEX_MAX);
     writeFileAtomic2(sessionIndexPath(), JSON.stringify({ version: 1, sessions: Object.fromEntries(trimmed) }, null, 2), 384);
@@ -382,54 +1561,9 @@ function currentSession(cwd) {
 function describeDisable(state) {
   if (!state.disabled) return "";
   const where = state.scope === "env" ? "SECRETGATE_DISABLE is set for this process" : state.scope === "session" ? `session ${state.target} is paused` : `directory ${state.target} is paused`;
-  const when = state.until ? ` until ${state.until}` : state.lifetime ? " until the session ends" : state.scope === "env" ? "" : " until re-enabled";
-  return `${where}${when}`;
-}
-
-// src/engine/allowlist.ts
-import { createHash } from "crypto";
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
-function isAllowedValue(secret, allowlist) {
-  if (!allowlist?.sha256?.length) return false;
-  const h = sha256(secret);
-  return allowlist.sha256.includes(h);
-}
-function isDisabledRule(ruleId, allowlist) {
-  return allowlist?.rules?.includes(ruleId) ?? false;
-}
-function pathMatchesGlob(path, glob, caseInsensitive = false) {
-  let re = "";
-  let i = 0;
-  while (i < glob.length) {
-    const c = glob[i];
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        if (glob[i + 2] === "/") {
-          re += "(?:.*/)?";
-          i += 3;
-        } else {
-          re += ".*";
-          i += 2;
-        }
-      } else {
-        re += "[^/]*";
-        i++;
-      }
-    } else if (c === "?") {
-      re += "[^/]";
-      i++;
-    } else {
-      re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-      i++;
-    }
-  }
-  return new RegExp(`^(?:${re})$`, caseInsensitive ? "i" : "").test(path);
-}
-function isAllowedPath(path, allowlist) {
-  if (!path || !allowlist?.paths?.length) return false;
-  return allowlist.paths.some((g) => pathMatchesGlob(path, g));
+  const alsoScope = state.includesScope ? " (project scope lifted too)" : "";
+  const when = state.until ? ` until ${state.until}` : state.lifetime ? " until the session ends (24 h at most)" : state.scope === "env" ? "" : " until re-enabled";
+  return `${where}${when}${alsoScope}`;
 }
 
 // src/engine/entropy.ts
@@ -446,6 +1580,65 @@ function shannonEntropy(s) {
     entropy -= p * Math.log2(p);
   }
   return entropy;
+}
+
+// src/engine/gitleaks-bin.ts
+import { spawn } from "child_process";
+import { existsSync as existsSync2, mkdtempSync, readFileSync as readFileSync4, rmSync } from "fs";
+import { tmpdir } from "os";
+import { delimiter, join as join7 } from "path";
+var cachedPath;
+function gitleaksPath() {
+  if (cachedPath !== void 0) return cachedPath;
+  const exe = process.platform === "win32" ? "gitleaks.exe" : "gitleaks";
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (dir && existsSync2(join7(dir, exe))) {
+      cachedPath = join7(dir, exe);
+      return cachedPath;
+    }
+  }
+  cachedPath = null;
+  return null;
+}
+var LEAK_EXIT = 99;
+function scanWithGitleaks(text, opts = {}) {
+  const bin = opts.bin ?? gitleaksPath();
+  if (!bin) return Promise.resolve([]);
+  const dir = mkdtempSync(join7(tmpdir(), "secretgate-gl-"));
+  const report = join7(dir, "report.json");
+  return new Promise((resolve8, reject) => {
+    const child = spawn(bin, ["stdin", "--no-banner", "--exit-code", String(LEAK_EXIT), "--report-format", "json", "--report-path", report], {
+      stdio: ["pipe", "ignore", "pipe"],
+      timeout: opts.timeoutMs ?? 1e4
+    });
+    let stderr = "";
+    child.stderr.on("data", (d) => {
+      stderr += d;
+    });
+    child.on("error", (err) => {
+      rmSync(dir, { recursive: true, force: true });
+      reject(err);
+    });
+    child.on("close", (code) => {
+      try {
+        if (code === 0) {
+          resolve8([]);
+          return;
+        }
+        if (code !== LEAK_EXIT) {
+          reject(new Error(`gitleaks exited ${code}: ${stderr.slice(0, 500)}`));
+          return;
+        }
+        const raw = JSON.parse(readFileSync4(report, "utf8"));
+        resolve8(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
+      } catch (err) {
+        reject(err);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+    child.stdin.end(text);
+  });
 }
 
 // src/engine/luhn.ts
@@ -4803,7 +5996,10 @@ var BUILTIN_RULES = [
   // captured group is the PASSWORD; a placeholder-ish value is skipped.
   {
     id: "url-credentials",
-    re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:([^\s:/@]{3,256})@[^\s]+/dgi,
+    // The scheme is bounded and anchored on a non-scheme character: `\b` fired
+    // after every `.`/`-`, making `x://a.a.a.…` quadratic (6 s on 160 KB), and
+    // the scan deadline is only checked between rules.
+    re: /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]{0,256}:([^\s:/@]{3,256})@[^\s]+/dgi,
     keywords: ["://"],
     allowlists: [],
     post: (secret) => !looksLikePlaceholder(secret),
@@ -4861,6 +6057,9 @@ var RULE_SOURCE_TEXTS;
 function isRuleSourceText(secret) {
   RULE_SOURCE_TEXTS ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]);
   return RULE_SOURCE_TEXTS.some((s) => s.includes(secret));
+}
+function isNonSecret(secret) {
+  return PLACEHOLDER_ONLY.test(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
 }
 function sensitiveFileNameRule(path) {
   return PATH_RULES.find((r) => new RegExp(r.path.source, r.path.flags).test(path))?.id;
@@ -4924,7 +6123,7 @@ function scan(text, cfg = {}) {
   }
   const lower = text.toLowerCase();
   const starts = lineStarts(text);
-  const pragmaLines = pragmaAllowedLines(text);
+  const pragmaLines = cfg.pragmas === false ? /* @__PURE__ */ new Set() : pragmaAllowedLines(text);
   const findings = [];
   const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
   for (const rule of COMPILED) {
@@ -4981,75 +6180,53 @@ function dedupe(findings) {
   return kept.sort((a, b) => a.start - b.start);
 }
 
-// src/paths.ts
-import { homedir as homedir2 } from "os";
-import { relative, resolve as resolve2 } from "path";
-var SENSITIVE_GLOBS = [
-  "**/.env",
-  "**/.env.*",
-  "**/*.pem",
-  "**/*.key",
-  "**/id_rsa*",
-  "**/id_ed25519*",
-  "**/id_ecdsa*",
-  "**/.aws/**",
-  "**/.ssh/**",
-  "**/.kube/config",
-  "**/.npmrc",
-  "**/.netrc",
-  "**/.docker/config.json",
-  "**/credentials.json"
-];
-var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
-function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
-  const normalized = path.replaceAll("\\", "/");
-  const expanded = normalized.startsWith("~/") ? `${homedir2()}/${normalized.slice(2)}` : normalized;
-  const absolute = resolve2(cwd, expanded).replaceAll("\\", "/");
-  if ([normalized, absolute, relative(cwd, absolute).replaceAll("\\", "/")].some((p) => isAllowedPath(p, allowlist))) return void 0;
-  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g, true))) return void 0;
-  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g, true));
-}
-var READ_COMMANDS = /* @__PURE__ */ new Set([
-  "cat",
-  "head",
-  "tail",
-  "less",
-  "more",
-  "bat",
-  "xxd",
-  "od",
-  "strings",
-  "hexdump",
-  "nl",
-  "tac",
-  "base64",
-  "sed",
-  "awk",
-  "grep",
-  "rg",
-  "printf",
-  "print"
-]);
-function commandTouchesSensitivePath(command, allowlist, cwd) {
-  for (const segment of command.split(/[;\n]|&&|\|\||\||&/)) {
-    const tokens = segment.trim().split(/\s+/);
-    if (tokens.length === 0) continue;
-    const cmd = (tokens[0] ?? "").replace(/^.*\//, "");
-    if (!READ_COMMANDS.has(cmd)) continue;
-    for (const raw of tokens.slice(1)) {
-      if (raw.startsWith(">")) break;
-      const token = raw.replace(/^['"`]+|['"`]+$/g, "");
-      if (token.length < 2 || token.startsWith("-")) continue;
-      const hit = sensitivePathMatch(token, allowlist, cwd);
-      if (hit) return token;
-    }
+// src/prompt-directive.ts
+var NAME = String.raw`[\`'"]?secretgate[\`'"]?`;
+var COURTESY = String.raw`(?:(?:stp|svp|please|pls|merci|thanks|now|maintenant|ok|okay)[\s,.!]*)*`;
+var TAIL = String.raw`(?:\s+(?:pour|for)\s+(?:cette|ce|this|la|the)\s+(?:session|run|conversation|conv))?(?:\s+(?:stp|svp|please|merci|thanks))?\s*[.!]*`;
+var SCOPE = String.raw`(?:\s+(?:et|and|\+|avec|with|,)\s*(?:le|la|the)?\s*(?:scope|p[ée]rim[èe]tre))?`;
+var DISABLE = new RegExp(
+  String.raw`^${COURTESY}(?:d[ée]sactiv(?:e|er|ez)|coupe(?:r|z)?|mets\s+en\s+pause|disable|turn\s+off|switch\s+off|pause)\s+(?:le\s+|la\s+|the\s+)?${NAME}(${SCOPE})${TAIL}$|^${COURTESY}(?:turn\s+|switch\s+)?${NAME}\s*:?\s*off${TAIL}$`,
+  "i"
+);
+var ENABLE = new RegExp(
+  String.raw`^${COURTESY}(?:r[ée]activ(?:e|er|ez)|rallume(?:r|z)?|enable|re-?enable|turn\s+(?:back\s+)?on|resume)\s+(?:le\s+|la\s+|the\s+)?${NAME}(?:\s+back\s+on)?${TAIL}$|^${COURTESY}(?:turn\s+|switch\s+)?${NAME}\s*:?\s*(?:back\s+)?on${TAIL}$`,
+  "i"
+);
+var SKILL_DISABLE = /^[/$]secretgate\s+(?:disable|off|pause|stop|d[ée]sactiv(?:e|er|ez)?|coupe)(\s+(?:--)?(?:scope|p[ée]rim[èe]tre)|\s+(?:et|and|\+)\s+(?:le\s+|la\s+|the\s+)?(?:scope|p[ée]rim[èe]tre))?\s*[.!]*$/i;
+var SKILL_ENABLE = /^[/$]secretgate\s+(?:enable|on|resume|r[ée]activ(?:e|er|ez)?|rallume)\s*[.!]*$/i;
+function promptDirective(prompt) {
+  for (const raw of prompt.split(/\r?\n/)) {
+    const line = raw.trim().replace(/^(["'`])(.*)\1$/, "$2").trim();
+    if (line.length === 0 || line.length > 120) continue;
+    const skillOff = SKILL_DISABLE.exec(line);
+    if (skillOff) return { action: "disable", liftScope: Boolean(skillOff[1]) };
+    if (SKILL_ENABLE.test(line)) return { action: "enable" };
+    const off = DISABLE.exec(line);
+    if (off) return { action: "disable", liftScope: Boolean(off[1]) };
+    if (ENABLE.test(line)) return { action: "enable" };
   }
   return void 0;
+}
+function applyPromptDirective(directive, sessionId, cwd) {
+  if (!sessionId) {
+    return "secretgate: this agent did not report a session id, so it cannot be paused from the conversation \u2014 run `secretgate disable --session` in a terminal instead.";
+  }
+  if (directive.action === "enable") {
+    const cleared = removePause("session", sessionId);
+    return cleared.length > 0 ? "secretgate: re-enabled for this session, at your request. Prompts, tool input and tool output are scanned again." : "secretgate: already active for this session.";
+  }
+  addPause({ scope: "session", target: sessionId, minutes: null, cwd, lifetime: true, liftScope: directive.liftScope });
+  return [
+    "secretgate: DISABLED for this session only, at your request \u2014 prompts, tool input and tool output are no longer scanned until the session ends (24 h at most).",
+    directive.liftScope ? "The project scope is lifted too." : "A project scope, if any, stays enforced (say \u201Cd\xE9sactive secretgate et le scope\u201D to lift it too).",
+    "Say \u201Cr\xE9active secretgate\u201D to turn it back on. A new session is protected automatically."
+  ].join(" ");
 }
 
 // src/redact.ts
 function redactText(text, vault, source, cfg = {}) {
-  const findings = scan(text, cfg);
+  const findings = scan(text, { ...cfg, pragmas: cfg.pragmas ?? false });
   if (findings.length === 0) return { text, findings, replaced: [] };
   let out = text;
   const replaced = [];
@@ -5070,6 +6247,192 @@ function restorePlaceholders(text, vault) {
     return secret;
   });
   return { text: out, restored };
+}
+
+// src/hooks/policy.ts
+import { homedir as homedir5 } from "os";
+import { basename as basename4, dirname as dirname5, join as join8, resolve as resolve5 } from "path";
+function touchesOnly(call, file, cwd) {
+  if (call.kind !== "read" && call.kind !== "write" && call.kind !== "patch") return false;
+  return call.paths.length > 0 && call.paths.every((p) => canonical(resolve5(cwd, expandHome(p))) === canonical(file));
+}
+function guardedPath(abs, cwd) {
+  const home = homedir5();
+  const name = basename4(abs).toLowerCase();
+  if (name === ".secretgate.json") return true;
+  if (basename4(dirname5(abs)).toLowerCase() === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
+  const codex = process.env.CODEX_HOME ?? join8(home, ".codex");
+  const opencode = join8(process.env.XDG_CONFIG_HOME ?? join8(home, ".config"), "opencode");
+  return isSecretgateState(abs) || covers(join8(codex, "hooks.json"), abs) || covers(join8(codex, "config.toml"), abs) || covers(join8(opencode, "plugin"), abs) || covers(join8(opencode, "opencode.json"), abs) || name === "opencode.json" && covers(cwd, abs);
+}
+var SELF_DISABLE = /(?:^|[\s;&|(/"'`])secretgate(?:\.mjs)?["']?\s+(disable|allow|uninstall|trust|vault\s+clear)\b/;
+function tamperReason(call, cwd) {
+  if (call.kind === "shell" && call.command !== void 0) {
+    const text = Array.isArray(call.command) ? call.command.join(" ") : call.command;
+    const m = SELF_DISABLE.exec(text);
+    if (m) return `this runs \`secretgate ${m[1]}\`, which changes what secretgate protects \u2014 that is your call, not the agent's`;
+    const base = call.workdir ? resolve5(cwd, expandHome(call.workdir)) : cwd;
+    for (const ref of analyzeShell(call.command, { cwd: base }).refs) {
+      if (ref.kind === "write" && guardedPath(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
+    }
+    return void 0;
+  }
+  if (call.kind === "write" || call.kind === "patch") {
+    for (const p of call.paths)
+      if (guardedPath(canonical(resolve5(cwd, expandHome(p))), cwd)) return `this edits '${p}', which configures secretgate or its hooks`;
+  }
+  return void 0;
+}
+function patternLooksSensitive(pattern, allowlist, cwd) {
+  const name = basename4(pattern);
+  for (const probe of [name.replace(/[*?]/g, ""), name.replace(/[*?]/g, "x")]) {
+    if (probe && sensitivePathMatch(probe, allowlist, cwd)) return pattern;
+  }
+  return void 0;
+}
+function sensitiveReason(call, cfg, cwd) {
+  const deny2 = (target, hit) => `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. If the agent needs a value from it, reference it as an env var instead \u2014 or allow the file with \`secretgate allow --path '${target}'\`.`;
+  switch (call.kind) {
+    case "read":
+    case "other":
+      for (const p of call.paths) {
+        const hit = sensitivePathMatch(p, cfg.allowlist, cwd);
+        if (hit) return deny2(p, hit);
+      }
+      return void 0;
+    case "search": {
+      for (const p of call.paths) {
+        const hit = sensitivePathMatch(p, cfg.allowlist, cwd) ?? sensitivePathMatch(join8(p, "x"), cfg.allowlist, cwd);
+        if (hit) return deny2(p, hit);
+      }
+      const pattern = call.pattern ? patternLooksSensitive(call.pattern, cfg.allowlist, cwd) : void 0;
+      return pattern ? deny2(pattern, "search pattern naming sensitive files") : void 0;
+    }
+    case "shell": {
+      if (call.command === void 0) return void 0;
+      const base = call.workdir ? resolve5(cwd, expandHome(call.workdir)) : cwd;
+      const touched = commandTouchesSensitivePath(call.command, cfg.allowlist, base);
+      return touched ? `secretgate: this command reads '${touched}', which looks sensitive. Its content must not enter the model.` : void 0;
+    }
+    default:
+      return void 0;
+  }
+}
+function preToolPolicy(call, cfg, cwd, opts) {
+  if (cfg.error && !touchesOnly(call, cfg.error.file, cwd)) {
+    return {
+      action: "deny",
+      reason: `secretgate: ${cfg.error.file} is invalid (${cfg.error.message}). Tool calls are refused until it is fixed, because it may declare a scope. Fix the file (the agent may read and edit it).`
+    };
+  }
+  const scope = toolCallScopeViolation(cfg.scopes, call, cwd);
+  if (scope) return { action: "deny", reason: scope };
+  if (opts.disabled) return void 0;
+  const tamper = tamperReason(call, cwd);
+  if (tamper) return { action: "ask", reason: `secretgate: ${tamper}. Approve only if you asked for it.` };
+  const sensitive = sensitiveReason(call, cfg, cwd);
+  if (sensitive) return { action: "deny", reason: sensitive };
+  return void 0;
+}
+
+// src/hooks/scan-budget.ts
+var SCAN_CAP = 2 * 1024 * 1024;
+var SCAN_DEADLINE_MS = 5e3;
+function isBinaryField(key, value, parent) {
+  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || key === "url" && typeof value === "string" && /^data:(image|audio)\//.test(value);
+}
+function eventRedactor(vault, source, allowlist) {
+  const deadline = performance.now() + SCAN_DEADLINE_MS;
+  let remaining = SCAN_CAP;
+  return (text) => {
+    remaining -= text.length;
+    const deadlineMs = deadline - performance.now();
+    if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
+    return redactText(text, vault, source, { allowlist, deadlineMs }).text;
+  };
+}
+
+// src/hooks/stopped-session.ts
+import { createHash as createHash3 } from "crypto";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, writeFileSync as writeFileSync2 } from "fs";
+import { join as join9 } from "path";
+function stoppedPath(session) {
+  return join9(defaultVaultHome(), "stopped-sessions", createHash3("sha256").update(session).digest("hex"));
+}
+function isStoppedSession(session) {
+  return typeof session === "string" && existsSync3(stoppedPath(session));
+}
+function stopSession(session) {
+  if (typeof session !== "string" || !session) return;
+  mkdirSync4(join9(defaultVaultHome(), "stopped-sessions"), { recursive: true, mode: 448 });
+  writeFileSync2(stoppedPath(session), "unscannable tool result\n", { mode: 384 });
+}
+
+// src/hooks/tool-call.ts
+var SHELL = /* @__PURE__ */ new Set(["bash", "shell", "exec", "exec_command", "local_shell", "localshell", "run_command", "container.exec", "unified_exec"]);
+var READ = /* @__PURE__ */ new Set(["read", "read_file", "view", "open_file", "notebookread", "cat"]);
+var WRITE = /* @__PURE__ */ new Set(["write", "write_file", "create_file", "edit", "multiedit", "notebookedit", "str_replace", "str_replace_editor", "edit_file"]);
+var PATCH = /* @__PURE__ */ new Set(["apply_patch", "patch"]);
+var LIST = /* @__PURE__ */ new Set(["ls", "list", "list_dir", "list_directory"]);
+var SEARCH_GLOB = /* @__PURE__ */ new Set(["glob", "find_files", "file_search"]);
+var SEARCH_GREP = /* @__PURE__ */ new Set(["grep", "search", "search_files", "codesearch"]);
+var str = (v) => typeof v === "string" && v.length > 0 ? v : void 0;
+function patchPaths(patch) {
+  const out = [];
+  for (const m of patch.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): *(.+?) *$/gm)) out.push(m[1]);
+  return out;
+}
+function filePaths(input) {
+  const out = [];
+  for (const key of ["file_path", "filePath", "path", "notebook_path", "notebookPath", "target_file", "file"]) {
+    const v = str(input[key]);
+    if (v) out.push(v);
+  }
+  for (const key of ["paths", "file_paths", "filePaths"]) {
+    if (Array.isArray(input[key])) {
+      for (const v of input[key]) if (str(v)) out.push(v);
+    }
+  }
+  if (Array.isArray(input.edits)) {
+    for (const e of input.edits) if (e && typeof e === "object" && str(e.file_path ?? e.filePath)) out.push(e.file_path ?? e.filePath);
+  }
+  return [...new Set(out)];
+}
+function patchText(input) {
+  for (const key of ["patchText", "patch", "input", "command", "diff"]) {
+    const v = input[key];
+    if (typeof v === "string" && v.includes("*** ")) return v;
+  }
+  return void 0;
+}
+function extractToolCall(toolName, toolInput) {
+  const name = toolName.toLowerCase().replace(/^functions\./, "").replace(/^mcp__.*__/, "");
+  if (typeof toolInput === "string") {
+    if (PATCH.has(name) || toolInput.startsWith("*** Begin Patch")) return { kind: "patch", paths: patchPaths(toolInput) };
+    if (SHELL.has(name)) return { kind: "shell", paths: [], command: toolInput };
+    return { kind: "other", paths: [] };
+  }
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  if (PATCH.has(name)) {
+    const patch = patchText(input);
+    return { kind: "patch", paths: patch ? patchPaths(patch) : filePaths(input) };
+  }
+  if (SHELL.has(name)) {
+    const cmd = input.cmd ?? input.command;
+    if (typeof cmd === "string" && /^\s*apply_patch\b/.test(cmd)) return { kind: "patch", paths: patchPaths(cmd) };
+    if (Array.isArray(cmd) && cmd[0] === "apply_patch" && typeof cmd[1] === "string") return { kind: "patch", paths: patchPaths(cmd[1]) };
+    const command = typeof cmd === "string" ? cmd : Array.isArray(cmd) ? cmd.map(String) : void 0;
+    return { kind: "shell", paths: [], command, workdir: str(input.workdir) ?? str(input.cwd) };
+  }
+  if (READ.has(name)) return { kind: "read", paths: filePaths(input) };
+  if (WRITE.has(name)) return { kind: "write", paths: filePaths(input) };
+  if (LIST.has(name)) return { kind: "list", paths: filePaths(input) };
+  if (SEARCH_GLOB.has(name) || SEARCH_GREP.has(name)) {
+    const root = str(input.path) ?? str(input.directory) ?? str(input.dir);
+    const pattern = SEARCH_GLOB.has(name) ? str(input.pattern) ?? str(input.glob) : str(input.glob) ?? str(input.include);
+    return { kind: "search", paths: root ? [root] : [], searchRoot: root, pattern };
+  }
+  return { kind: "other", paths: filePaths(input) };
 }
 
 // src/hooks/walk.ts
@@ -5111,39 +6474,6 @@ function mapStrings(value, fn, skip) {
   return { value: root, changed };
 }
 
-// src/hooks/scan-budget.ts
-var SCAN_CAP = 2 * 1024 * 1024;
-var SCAN_DEADLINE_MS = 5e3;
-function isBinaryField(key, value, parent) {
-  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || key === "url" && typeof value === "string" && /^data:(image|audio)\//.test(value);
-}
-function eventRedactor(vault, source, allowlist) {
-  const deadline = performance.now() + SCAN_DEADLINE_MS;
-  let remaining = SCAN_CAP;
-  return (text) => {
-    remaining -= text.length;
-    const deadlineMs = deadline - performance.now();
-    if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
-    return redactText(text, vault, source, { allowlist, deadlineMs }).text;
-  };
-}
-
-// src/hooks/stopped-session.ts
-import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync3, writeFileSync } from "fs";
-import { join as join4 } from "path";
-function stoppedPath(session) {
-  return join4(defaultVaultHome(), "stopped-sessions", createHash2("sha256").update(session).digest("hex"));
-}
-function isStoppedSession(session) {
-  return typeof session === "string" && existsSync(stoppedPath(session));
-}
-function stopSession(session) {
-  if (typeof session !== "string" || !session) return;
-  mkdirSync3(join4(defaultVaultHome(), "stopped-sessions"), { recursive: true, mode: 448 });
-  writeFileSync(stoppedPath(session), "unscannable tool result\n", { mode: 384 });
-}
-
 // src/hooks/claude-code.ts
 var ALLOW_TAG = "[allow-secret]";
 var PASS = { stdout: "", exit: 0 };
@@ -5162,7 +6492,10 @@ function withholdOutput(reason, input, blockFallback = false) {
   }
   if (replacement === void 0 && blockFallback) replacement = notice;
   if (replacement === void 0) {
-    stopSession(input?.session_id);
+    try {
+      stopSession(input?.session_id);
+    } catch {
+    }
     return {
       stdout: JSON.stringify({
         continue: false,
@@ -5181,22 +6514,39 @@ function withholdOutput(reason, input, blockFallback = false) {
 }
 function parseOrUndefined(raw) {
   try {
-    return JSON.parse(raw);
+    const v = JSON.parse(raw);
+    return v !== null && typeof v === "object" && !Array.isArray(v) ? v : void 0;
   } catch {
     return void 0;
   }
 }
-var str = (v) => typeof v === "string" && v.length > 0 ? v : void 0;
+var str2 = (v) => typeof v === "string" && v.length > 0 ? v : void 0;
+function failClosed(event, input, blockFallback = false) {
+  const reason = "secretgate could not scan this safely (invalid input, scan budget or local storage error)";
+  if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
+  if (event === "pre-tool-use") return deny(reason);
+  return withholdOutput(reason, input, blockFallback);
+}
 function disabledResult(event, input, state, notices) {
+  const load = (cwd) => {
+    const cfg = loadConfig(cwd);
+    return state.includesScope ? { ...cfg, scopes: [], error: void 0 } : cfg;
+  };
   if (event === "pre-tool-use") {
-    if (input === null || typeof input !== "object") return DEFER;
+    if (input === void 0) return DEFER;
+    const cfg = load(str2(input.cwd));
+    const decision = preToolPolicy(extractToolCall(String(input.tool_name ?? ""), input.tool_input), cfg, str2(input.cwd) ?? process.cwd(), { disabled: true });
+    if (decision) return deny(decision.reason);
     try {
-      return restoreOnly(input);
+      return restoreOnly(input, cfg);
     } catch {
       return DEFER;
     }
   }
   if (event === "user-prompt-submit") {
+    const cfg = input ? load(str2(input.cwd)) : void 0;
+    const outOfScope = cfg && input ? promptScopeViolation(cfg.scopes, String(input.prompt ?? ""), str2(input.cwd) ?? process.cwd()) : void 0;
+    if (outOfScope) return { stdout: JSON.stringify({ decision: "block", reason: outOfScope }), exit: 0 };
     if (!notices) return PASS;
     return {
       stdout: JSON.stringify({
@@ -5205,53 +6555,65 @@ function disabledResult(event, input, state, notices) {
       exit: 0
     };
   }
-  if (event === "post-tool-use") return PASS;
+  if (event === "post-tool-use") {
+    if (input === void 0 || !("tool_response" in input)) return PASS;
+    const cfg = load(str2(input.cwd));
+    const filtered = scopeFilter(input, cfg);
+    return filtered.changed ? updatedOutput(filtered.value) : PASS;
+  }
   return { stdout: "", exit: 2 };
 }
 async function handleClaudeCode(event, rawStdin, opts = {}) {
   const parsed = parseOrUndefined(rawStdin);
   try {
-    if (event === "user-prompt-submit") recordSession(str(parsed?.session_id), str(parsed?.cwd));
-    const state = disableState({ cwd: str(parsed?.cwd), sessionId: str(parsed?.session_id) });
-    if (state.disabled) return disabledResult(event, parsed, state, opts.notices !== false);
-    if (!opts.blockFallback && isStoppedSession(parsed?.session_id)) {
-      const reason = "secretgate stopped this session after an unscannable tool result. Start a fresh session; resuming may expose the old result.";
-      if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
-      if (event === "pre-tool-use") return deny(reason);
-      return { stdout: JSON.stringify({ continue: false, stopReason: reason }), exit: 0 };
-    }
-    const input = parsed ?? JSON.parse(rawStdin);
-    if (event !== "post-tool-use" && rawStdin.length > SCAN_CAP || input.__secretgate_unscannable) throw new Error("input exceeds scan budget");
-    switch (event) {
-      case "user-prompt-submit":
-        return userPromptSubmit(input);
-      case "pre-tool-use":
-        return preToolUse(input);
-      case "post-tool-use":
-        return postToolUse(input);
-      default:
-        return { stdout: "", exit: 2 };
-    }
-  } catch {
-    const reason = "secretgate could not scan this safely (invalid input, scan budget or local storage error)";
+    let notice;
     if (event === "user-prompt-submit") {
-      return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
+      recordSession(str2(parsed?.session_id), str2(parsed?.cwd));
+      const directive = typeof parsed?.prompt === "string" ? promptDirective(parsed.prompt) : void 0;
+      if (directive) notice = applyPromptDirective(directive, str2(parsed?.session_id), str2(parsed?.cwd));
     }
-    if (event === "pre-tool-use") {
-      return {
-        stdout: JSON.stringify({
-          hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason }
-        }),
-        exit: 0
-      };
-    }
-    return withholdOutput(reason, parsed, opts.blockFallback);
+    const withNotice = (r) => notice && opts.notices !== false ? addSystemMessage(r, notice) : r;
+    const state = disableState({ cwd: str2(parsed?.cwd), sessionId: str2(parsed?.session_id) });
+    if (state.disabled) return withNotice(disabledResult(event, parsed, state, opts.notices !== false && !notice));
+    if (notice) return withNotice(handleEnabled(event, rawStdin, parsed, opts));
+    return handleEnabled(event, rawStdin, parsed, opts);
+  } catch {
+    return failClosed(event, parsed, opts.blockFallback);
   }
 }
-function userPromptSubmit(input) {
+function addSystemMessage(r, message) {
+  const out = r.stdout.trim() ? JSON.parse(r.stdout) : {};
+  out.systemMessage = typeof out.systemMessage === "string" ? `${message}
+${out.systemMessage}` : message;
+  return { stdout: JSON.stringify(out), exit: r.exit };
+}
+function handleEnabled(event, rawStdin, parsed, opts) {
+  if (!opts.blockFallback && isStoppedSession(parsed?.session_id)) {
+    const reason = "secretgate stopped this session after an unscannable tool result. Start a fresh session; resuming may expose the old result.";
+    if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
+    if (event === "pre-tool-use") return deny(reason);
+    return { stdout: JSON.stringify({ continue: false, stopReason: reason }), exit: 0 };
+  }
+  const input = parsed ?? JSON.parse(rawStdin);
+  if (input === null || typeof input !== "object") throw new Error("event is not an object");
+  if (event !== "post-tool-use" && rawStdin.length > SCAN_CAP || input.__secretgate_unscannable) throw new Error("input exceeds scan budget");
+  const cfg = loadConfig(str2(input.cwd));
+  switch (event) {
+    case "user-prompt-submit":
+      return userPromptSubmit(input, cfg);
+    case "pre-tool-use":
+      return preToolUse(input, cfg);
+    case "post-tool-use":
+      return postToolUse(input, cfg);
+    default:
+      return { stdout: "", exit: 2 };
+  }
+}
+function userPromptSubmit(input, cfg) {
   const prompt = String(input.prompt ?? "");
+  const outOfScope = promptScopeViolation(cfg.scopes, prompt, str2(input.cwd) ?? process.cwd());
+  if (outOfScope) return { stdout: JSON.stringify({ decision: "block", reason: outOfScope }), exit: 0 };
   if (prompt.includes(ALLOW_TAG)) return PASS;
-  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : void 0);
   const vault = new Vault();
   const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS2 });
   if (r.findings.length === 0) return PASS;
@@ -5275,23 +6637,24 @@ function deny(reason) {
     exit: 0
   };
 }
+function ask(reason) {
+  return {
+    stdout: JSON.stringify({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: reason }
+    }),
+    exit: 0
+  };
+}
 function normalizeToolName(name) {
   switch (name.toLowerCase()) {
     case "bash":
     case "shell":
     case "exec":
+    case "exec_command":
     case "local_shell":
     case "localshell":
     case "run_command":
       return "Bash";
-    case "read":
-    case "read_file":
-    case "view":
-    case "open_file":
-      return "Read";
-    case "grep":
-    case "search":
-      return "Grep";
     case "write":
     case "write_file":
     case "create_file":
@@ -5308,32 +6671,16 @@ function normalizeToolName(name) {
   }
 }
 var RESTORE_TOOLS = /* @__PURE__ */ new Set(["Write", "Edit"]);
-var READ_TOOLS = /* @__PURE__ */ new Set(["Read", "Grep"]);
-function preToolUse(input) {
-  const toolName = normalizeToolName(String(input.tool_name ?? ""));
-  const toolInput = input.tool_input ?? {};
-  const cfg = loadConfig(str(input.cwd));
-  if (READ_TOOLS.has(toolName)) {
-    const target = typeof toolInput.file_path === "string" ? toolInput.file_path : typeof toolInput.path === "string" ? toolInput.path : void 0;
-    const hit = target ? sensitivePathMatch(target, cfg.allowlist, str(input.cwd)) : void 0;
-    if (hit) {
-      return deny(
-        `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. If the agent needs a value from it, reference it as an env var instead \u2014 or allow the file with \`secretgate allow --path '${target}'\`.`
-      );
-    }
-  }
-  if (toolName === "Bash" && typeof toolInput.command === "string") {
-    const touched = commandTouchesSensitivePath(toolInput.command, cfg.allowlist, str(input.cwd));
-    if (touched) {
-      return deny(`secretgate: this command touches '${touched}', which looks sensitive. Its content must not enter the model.`);
-    }
-  }
-  return restoreOnly(input);
+function preToolUse(input, cfg) {
+  const cwd = str2(input.cwd) ?? process.cwd();
+  const decision = preToolPolicy(extractToolCall(String(input.tool_name ?? ""), input.tool_input), cfg, cwd, { disabled: false });
+  if (decision?.action === "deny") return deny(decision.reason);
+  if (decision?.action === "ask") return ask(decision.reason);
+  return restoreOnly(input, cfg);
 }
-function restoreOnly(input) {
+function restoreOnly(input, cfg) {
   const toolName = normalizeToolName(String(input.tool_name ?? ""));
   const toolInput = input.tool_input ?? {};
-  const cfg = loadConfig(str(input.cwd));
   if (!RESTORE_TOOLS.has(toolName) && !(toolName === "Bash" && cfg.restoreBash)) return DEFER;
   const vault = new Vault();
   const { value, changed } = mapStrings(toolInput, (s) => restorePlaceholders(s, vault).text);
@@ -5345,13 +6692,13 @@ function restoreOnly(input) {
     exit: 0
   };
 }
-function postToolUse(input) {
-  if (!("tool_response" in input)) return PASS;
-  const toolName = String(input.tool_name ?? "");
-  const cfg = loadConfig(typeof input.cwd === "string" ? input.cwd : void 0);
-  const vault = new Vault();
-  const { value, changed } = mapStrings(input.tool_response, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), isBinaryField);
-  if (!changed) return PASS;
+function scopeFilter(input, cfg) {
+  if (cfg.scopes.length === 0) return { value: input.tool_response, changed: false };
+  const call = extractToolCall(String(input.tool_name ?? ""), input.tool_input);
+  if (call.kind !== "search" && call.kind !== "list") return { value: input.tool_response, changed: false };
+  return filterSearchOutput(cfg.scopes, input.tool_response, str2(input.cwd) ?? process.cwd());
+}
+function updatedOutput(value) {
   return {
     stdout: JSON.stringify({
       hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: value }
@@ -5359,12 +6706,26 @@ function postToolUse(input) {
     exit: 0
   };
 }
+function postToolUse(input, cfg) {
+  if (!("tool_response" in input)) return PASS;
+  const toolName = String(input.tool_name ?? "");
+  const filtered = scopeFilter(input, cfg);
+  const vault = new Vault();
+  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), isBinaryField);
+  if (!changed && !filtered.changed) return PASS;
+  return updatedOutput(value);
+}
 
 // src/hooks/codex.ts
 async function handleCodex(event, rawStdin) {
   const r = await handleClaudeCode(event, rawStdin, { notices: false, blockFallback: true });
   if (event === "pre-tool-use" && r.stdout.trim()) {
     const output = JSON.parse(r.stdout);
+    if (output.hookSpecificOutput?.permissionDecision === "ask") {
+      output.hookSpecificOutput.permissionDecision = "deny";
+      output.hookSpecificOutput.permissionDecisionReason += " Codex cannot ask for approval from a hook, so this was refused: run the command yourself if you meant it.";
+      return { ...r, stdout: JSON.stringify(output) };
+    }
     if (output.hookSpecificOutput?.updatedInput !== void 0) {
       output.hookSpecificOutput.permissionDecision = "allow";
       return { ...r, stdout: JSON.stringify(output) };
@@ -5391,14 +6752,14 @@ ${text}`
 
 // src/install/allow-store.ts
 import { randomBytes as randomBytes3 } from "crypto";
-import { closeSync as closeSync3, mkdirSync as mkdirSync4, openSync as openSync3, readFileSync as readFileSync4, renameSync as renameSync3, writeSync as writeSync3 } from "fs";
-import { dirname as dirname2 } from "path";
+import { closeSync as closeSync3, mkdirSync as mkdirSync5, openSync as openSync3, readFileSync as readFileSync5, renameSync as renameSync4, writeSync as writeSync3 } from "fs";
+import { dirname as dirname6 } from "path";
 function writeAllow(add) {
   const path = allowlistPath();
-  mkdirSync4(dirname2(path), { recursive: true, mode: 448 });
+  mkdirSync5(dirname6(path), { recursive: true, mode: 448 });
   let current = {};
   try {
-    current = JSON.parse(readFileSync4(path, "utf8"));
+    current = JSON.parse(readFileSync5(path, "utf8"));
   } catch {
   }
   const merged = {
@@ -5413,13 +6774,13 @@ function writeAllow(add) {
   } finally {
     closeSync3(fd);
   }
-  renameSync3(tmp, path);
+  renameSync4(tmp, path);
   return merged;
 }
 
 // src/install/json-merge.ts
 import { randomBytes as randomBytes4 } from "crypto";
-import { closeSync as closeSync4, copyFileSync, existsSync as existsSync2, openSync as openSync4, readFileSync as readFileSync5, renameSync as renameSync4, writeSync as writeSync4 } from "fs";
+import { closeSync as closeSync4, copyFileSync, existsSync as existsSync4, openSync as openSync4, readFileSync as readFileSync6, renameSync as renameSync5, writeSync as writeSync4 } from "fs";
 var SettingsParseError = class extends Error {
   constructor(path, cause) {
     super(`refusing to edit ${path}: it is not valid JSON (${cause}). Fix it manually, then re-run.`);
@@ -5439,8 +6800,8 @@ function stableStringify(v) {
 function editJsonFile(path, mutate) {
   let original;
   let obj = {};
-  if (existsSync2(path)) {
-    original = readFileSync5(path, "utf8");
+  if (existsSync4(path)) {
+    original = readFileSync6(path, "utf8");
     if (original.trim() !== "") {
       try {
         obj = JSON.parse(original);
@@ -5472,12 +6833,12 @@ function editJsonFile(path, mutate) {
   } finally {
     closeSync4(fd);
   }
-  renameSync4(tmp, path);
+  renameSync5(tmp, path);
   return { path, changed: true, backupPath };
 }
 
 // src/install/claude-code.ts
-import { existsSync as existsSync3, readFileSync as readFileSync6, rmSync } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7, rmSync as rmSync2 } from "fs";
 var CC_DENY_RULES = [
   "Read(**/.env)",
   "Read(**/.env.local)",
@@ -5496,21 +6857,36 @@ var CC_DENY_RULES = [
   "Read(**/.netrc)",
   "Read(**/.npmrc)",
   "Read(**/.docker/config.json)",
-  "Read(**/credentials.json)"
+  "Read(**/credentials.json)",
+  "Read(**/.envrc)",
+  "Read(**/.dev.vars)",
+  "Read(**/.git-credentials)",
+  "Read(**/.pgpass)",
+  "Read(**/.pypirc)",
+  "Read(**/*.p12)",
+  "Read(**/*.pfx)",
+  "Read(**/*.tfstate)",
+  "Read(~/.secretgate/vault.json)"
 ];
 var MARKER = "hook claude-code";
+var PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|NotebookEdit|NotebookRead|Bash|mcp__.*";
 var EVENTS = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
-  { event: "PreToolUse", arg: "pre-tool-use", matcher: "Read|Grep|Edit|Write|MultiEdit|NotebookEdit|Bash" },
+  { event: "PreToolUse", arg: "pre-tool-use", matcher: PRE_TOOL_MATCHER },
   { event: "PostToolUse", arg: "post-tool-use", matcher: "*" }
 ];
+function claudeCodeMatcherCurrent(settings) {
+  const groups = settings?.hooks?.PreToolUse;
+  if (!Array.isArray(groups)) return false;
+  return groups.some((g) => g.matcher === PRE_TOOL_MATCHER && (g.hooks ?? []).some((h) => String(h.command ?? "").includes(MARKER)));
+}
 function withoutOurGroups(groups) {
   if (!Array.isArray(groups)) return [];
   return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !String(h.command ?? "").includes(MARKER)) })).filter((g) => g.hooks.length > 0);
 }
 function installClaudeCode({ settingsPath, command }) {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
-  const previous = existsSync3(ownershipPath) ? JSON.parse(readFileSync6(ownershipPath, "utf8")) : {};
+  const previous = existsSync5(ownershipPath) ? JSON.parse(readFileSync7(ownershipPath, "utf8")) : {};
   const added = [];
   const report = editJsonFile(settingsPath, (s) => {
     s.hooks ??= {};
@@ -5532,7 +6908,7 @@ function installClaudeCode({ settingsPath, command }) {
 }
 function uninstallClaudeCode({ settingsPath }) {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
-  const owned = existsSync3(ownershipPath) ? JSON.parse(readFileSync6(ownershipPath, "utf8")).deny ?? [] : [];
+  const owned = existsSync5(ownershipPath) ? JSON.parse(readFileSync7(ownershipPath, "utf8")).deny ?? [] : [];
   const report = editJsonFile(settingsPath, (s) => {
     if (s.hooks && typeof s.hooks === "object") {
       for (const { event } of EVENTS) {
@@ -5547,15 +6923,15 @@ function uninstallClaudeCode({ settingsPath }) {
       if (Object.keys(s.permissions).length === 0) delete s.permissions;
     }
   });
-  if (existsSync3(ownershipPath)) rmSync(ownershipPath);
+  if (existsSync5(ownershipPath)) rmSync2(ownershipPath);
   return report;
 }
 
 // src/install/codex.ts
-import { createHash as createHash3, randomBytes as randomBytes5 } from "crypto";
-import { closeSync as closeSync5, copyFileSync as copyFileSync2, existsSync as existsSync4, mkdirSync as mkdirSync5, openSync as openSync5, readFileSync as readFileSync7, realpathSync as realpathSync2, renameSync as renameSync5, writeSync as writeSync5 } from "fs";
-import { homedir as homedir3 } from "os";
-import { join as join5, resolve as resolve3 } from "path";
+import { createHash as createHash4, randomBytes as randomBytes5 } from "crypto";
+import { closeSync as closeSync5, copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync2, renameSync as renameSync6, writeSync as writeSync5 } from "fs";
+import { homedir as homedir6 } from "os";
+import { join as join10, resolve as resolve6 } from "path";
 
 // src/install/toml-touch.ts
 var BLOCK_START = "# >>> secretgate managed >>>";
@@ -5715,7 +7091,7 @@ function removeHookTrust(content, keys) {
 // src/install/codex.ts
 var MARKER2 = "hook codex";
 function codexHome() {
-  return process.env.CODEX_HOME ?? join5(homedir3(), ".codex");
+  return process.env.CODEX_HOME ?? join10(homedir6(), ".codex");
 }
 function withoutOurGroups2(groups) {
   if (!Array.isArray(groups)) return [];
@@ -5726,6 +7102,7 @@ var EVENTS2 = [
   { event: "PreToolUse", arg: "pre-tool-use", matcher: ".*" },
   { event: "PostToolUse", arg: "post-tool-use", matcher: ".*" }
 ];
+var CODEX_HOOK_COUNT = EVENTS2.length;
 var EVENT_KEY = {
   UserPromptSubmit: "user_prompt_submit",
   PreToolUse: "pre_tool_use",
@@ -5755,10 +7132,10 @@ function hookTrustHash(event, group, handler) {
     hooks: [normalizedHandler]
   };
   const serialized = JSON.stringify(canonicalize(identity));
-  return `sha256:${createHash3("sha256").update(serialized).digest("hex")}`;
+  return `sha256:${createHash4("sha256").update(serialized).digest("hex")}`;
 }
 function ourHookTrustEntries(hooksPath) {
-  const root = JSON.parse(readFileSync7(hooksPath, "utf8"));
+  const root = JSON.parse(readFileSync8(hooksPath, "utf8"));
   const entries = [];
   for (const { event } of EVENTS2) {
     for (const [groupIndex, group] of (root.hooks?.[event] ?? []).entries()) {
@@ -5775,8 +7152,8 @@ function ourHookTrustEntries(hooksPath) {
 }
 function codexWiringStatus(codexDir) {
   try {
-    const hooksPath = join5(realpathSync2(codexDir), "hooks.json");
-    const config = readFileSync7(join5(codexDir, "config.toml"), "utf8");
+    const hooksPath = join10(realpathSync2(codexDir), "hooks.json");
+    const config = readFileSync8(join10(codexDir, "config.toml"), "utf8");
     const entries = ourHookTrustEntries(hooksPath);
     const tables = config.split(/(?=^\s*\[)/m);
     const trusted = entries.filter(
@@ -5792,7 +7169,7 @@ function codexWiringStatus(codexDir) {
   }
 }
 function writeTextWithBackup(path, content) {
-  if (existsSync4(path)) {
+  if (existsSync6(path)) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync2(path, `${path}.secretgate-backup-${stamp}`);
   }
@@ -5803,11 +7180,11 @@ function writeTextWithBackup(path, content) {
   } finally {
     closeSync5(fd);
   }
-  renameSync5(tmp, path);
+  renameSync6(tmp, path);
 }
 function installCodex({ codexDir, command }) {
-  mkdirSync5(codexDir, { recursive: true });
-  const hooksPath = join5(realpathSync2(codexDir), "hooks.json");
+  mkdirSync6(codexDir, { recursive: true });
+  const hooksPath = join10(realpathSync2(codexDir), "hooks.json");
   const hooksReport = editJsonFile(hooksPath, (root) => {
     root.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS2) {
@@ -5819,10 +7196,10 @@ function installCodex({ codexDir, command }) {
       root.hooks[event] = [...kept, group];
     }
   });
-  const configPath = join5(codexDir, "config.toml");
-  const current = existsSync4(configPath) ? readFileSync7(configPath, "utf8") : "";
+  const configPath = join10(codexDir, "config.toml");
+  const current = existsSync6(configPath) ? readFileSync8(configPath, "utf8") : "";
   const featureEdit = enableHooksFeature(current);
-  const legacyPath = resolve3(codexDir, "hooks.json");
+  const legacyPath = resolve6(codexDir, "hooks.json");
   const legacyKeys = legacyPath === hooksPath ? [] : ourHookTrustEntries(hooksPath).map((entry) => entry.key.replace(hooksPath, legacyPath));
   const migrated = removeHookTrust(featureEdit.content, legacyKeys);
   const trustEdit = upsertHookTrust(migrated.content, ourHookTrustEntries(hooksPath));
@@ -5837,10 +7214,10 @@ function installCodex({ codexDir, command }) {
   };
 }
 function uninstallCodex({ codexDir }) {
-  const hooksPath = existsSync4(codexDir) ? join5(realpathSync2(codexDir), "hooks.json") : resolve3(codexDir, "hooks.json");
-  const trustKeys = existsSync4(hooksPath) ? ourHookTrustEntries(hooksPath).map((entry) => entry.key) : [];
+  const hooksPath = existsSync6(codexDir) ? join10(realpathSync2(codexDir), "hooks.json") : resolve6(codexDir, "hooks.json");
+  const trustKeys = existsSync6(hooksPath) ? ourHookTrustEntries(hooksPath).map((entry) => entry.key) : [];
   let hooksReport = { path: hooksPath, changed: false };
-  if (existsSync4(hooksPath)) {
+  if (existsSync6(hooksPath)) {
     hooksReport = editJsonFile(hooksPath, (root) => {
       if (root.hooks && typeof root.hooks === "object") {
         for (const { event } of EVENTS2) {
@@ -5852,11 +7229,11 @@ function uninstallCodex({ codexDir }) {
       }
     });
   }
-  const configPath = join5(codexDir, "config.toml");
+  const configPath = join10(codexDir, "config.toml");
   let configChanged = false;
-  if (existsSync4(configPath)) {
-    const trustEdit = removeHookTrust(readFileSync7(configPath, "utf8"), trustKeys);
-    const remaining = existsSync4(hooksPath) ? JSON.parse(readFileSync7(hooksPath, "utf8")).hooks : void 0;
+  if (existsSync6(configPath)) {
+    const trustEdit = removeHookTrust(readFileSync8(configPath, "utf8"), trustKeys);
+    const remaining = existsSync6(hooksPath) ? JSON.parse(readFileSync8(hooksPath, "utf8")).hooks : void 0;
     const foreignHooks = remaining && Object.keys(remaining).length > 0;
     const sharedConfig = /\[hooks\.(?!state\b)|\[plugins\./.test(trustEdit.content);
     const featureEdit = foreignHooks || sharedConfig ? { content: trustEdit.content, changed: false } : disableHooksFeature(trustEdit.content);
@@ -5869,37 +7246,37 @@ function uninstallCodex({ codexDir }) {
 }
 
 // src/install/opencode.ts
-import { existsSync as existsSync5, mkdirSync as mkdirSync6, readFileSync as readFileSync8, rmSync as rmSync2, writeFileSync as writeFileSync2 } from "fs";
-import { homedir as homedir4 } from "os";
-import { join as join6 } from "path";
+import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync9, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "fs";
+import { homedir as homedir7 } from "os";
+import { join as join11 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
-  return join6(xdg && xdg !== "" ? xdg : join6(homedir4(), ".config"), "opencode");
+  return join11(xdg && xdg !== "" ? xdg : join11(homedir7(), ".config"), "opencode");
 }
 function installOpencode({ configDir, pluginSource }) {
-  const target = join6(configDir, "plugin", "secretgate.js");
-  const content = readFileSync8(pluginSource, "utf8");
-  if (existsSync5(target)) {
-    const existing = readFileSync8(target, "utf8");
+  const target = join11(configDir, "plugin", "secretgate.js");
+  const content = readFileSync9(pluginSource, "utf8");
+  if (existsSync7(target)) {
+    const existing = readFileSync9(target, "utf8");
     if (!existing.includes(OWNERSHIP_MARKER)) {
       throw new Error(`refusing to overwrite ${target}: the existing file is not ours (foreign plugin?). Remove it manually first.`);
     }
     if (existing === content) return { path: target, changed: false };
   }
-  mkdirSync6(join6(configDir, "plugin"), { recursive: true });
-  writeFileSync2(target, content);
+  mkdirSync7(join11(configDir, "plugin"), { recursive: true });
+  writeFileSync3(target, content);
   return { path: target, changed: true };
 }
 function uninstallOpencode({ configDir }) {
   let changed = false;
-  const target = join6(configDir, "plugin", "secretgate.js");
-  if (existsSync5(target) && readFileSync8(target, "utf8").includes(OWNERSHIP_MARKER)) {
-    rmSync2(target);
+  const target = join11(configDir, "plugin", "secretgate.js");
+  if (existsSync7(target) && readFileSync9(target, "utf8").includes(OWNERSHIP_MARKER)) {
+    rmSync3(target);
     changed = true;
   }
-  const configPath = join6(configDir, "opencode.json");
-  if (existsSync5(configPath)) {
+  const configPath = join11(configDir, "opencode.json");
+  if (existsSync7(configPath)) {
     const r = editJsonFile(configPath, (cfg) => {
       if (Array.isArray(cfg.plugin)) {
         cfg.plugin = cfg.plugin.filter((p) => !/^secretgate@/.test(p));
@@ -5924,11 +7301,13 @@ Commands:
   install     Wire secretgate into an agent (--claude-code | --codex | --opencode | --all)
   uninstall   Remove exactly what install added
   status      Doctor: what is wired, versions, vault health, known limitations
-  scan        Scan a file, directory or stdin (-) for secrets; exit 1 on findings
+  scan        Scan a file, directory or stdin (-) for secrets; exit 1 on findings (--no-gitleaks: JS engine only)
   pipe        Read stdin, write it back with secrets redacted to placeholders
   allow       Allowlist a value (hashed), a rule id (--rule) or a path glob (--path)
+  trust       Let the hooks honor this repo's .secretgate.json allowlist (--revoke to undo)
+  scope       Show the project scope; \`scope check <path\u2026>\` exits 1 if a path is outside it
   vault       Manage the placeholder vault (list | clear) \u2014 never prints secrets
-  disable     Turn the firewall off for this run (--minutes N | --forever | --session, --project, --session <id>)
+  disable     Turn the firewall off for this run (--minutes N | --forever | --session, --project, --session <id>; --scope also lifts the project scope)
   enable      Turn it back on (--project, --session [id], --all)
   hook        Internal: agent hook entrypoint (secretgate hook <agent> <event>)
 
@@ -5940,7 +7319,12 @@ Disabling: \`secretgate disable\` pauses the current agent run for ${DEFAULT_DIS
 expires on its own. \`secretgate disable --session\` pauses it for the session's
 LIFETIME instead \u2014 off until this run ends, then a new session is protected with
 no timer to wait on. \`SECRETGATE_DISABLE=1 <agent>\` disables one process without
-touching any state. None stop placeholder restore, and \`scan\`/\`pipe\` always run.
+touching any state. None stop placeholder restore or the project scope, and
+\`scan\`/\`pipe\` always run.
+
+Scope: a "scope" in .secretgate.json keeps the agent inside some directories of
+the project (reads, edits, searches, shell commands, @mentions). The nearest
+.secretgate.json from the working directory up to the repository root is used.
 `;
 async function readIoStdinCapped(io, cap) {
   if (io.stdin) {
@@ -5981,9 +7365,9 @@ var SKIP_DIRS = /* @__PURE__ */ new Set([
 ]);
 var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
+  for (const entry of readdirSync2(root, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
-    const full = join8(root, entry.name);
+    const full = join12(root, entry.name);
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkFiles(full);
     } else if (entry.isFile()) {
@@ -5992,7 +7376,7 @@ function* walkFiles(root) {
   }
 }
 function readTextFile(path) {
-  const stats = statSync(path);
+  const stats = statSync2(path);
   if (stats.size === 0 || stats.size > MAX_FILE_BYTES) return void 0;
   const buf = readFileSync10(path);
   const probe = buf.subarray(0, 8192);
@@ -6002,13 +7386,35 @@ function readTextFile(path) {
 function hashPrefix(secret) {
   return sha256(secret).slice(0, 12);
 }
+async function gitleaksExtra(bin, text, found, allowlist) {
+  const known = new Set(found.map((f) => f.secret));
+  const extra = [];
+  for (const g of await scanWithGitleaks(text, { bin })) {
+    if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
+    known.add(g.secret);
+    const start = Math.max(0, text.indexOf(g.secret));
+    const line = text.slice(0, start).split("\n").length - 1;
+    extra.push({
+      ruleId: `gitleaks:${g.ruleId}`,
+      match: g.secret,
+      secret: g.secret,
+      start,
+      end: start + g.secret.length,
+      entropy: shannonEntropy(g.secret),
+      line
+    });
+  }
+  return extra;
+}
 async function cmdScan(args, io) {
   let json = false;
+  let hybrid = true;
   const excludes = [];
   let target;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--json") json = true;
+    else if (a === "--no-gitleaks") hybrid = false;
     else if (a === "--exclude") {
       const g = args[++i];
       if (!g) {
@@ -6028,13 +7434,20 @@ async function cmdScan(args, io) {
     return 2;
   }
   const cfg = loadConfig(process.cwd());
+  const allowlist = cfg.scanAllowlist;
+  const gitleaks = hybrid && cfg.hybrid === "auto" ? gitleaksPath() : null;
   const hits = [];
+  const extra = [];
+  const scanText = (text, sourcePath, label) => {
+    const found = scan(text, { sourcePath, allowlist });
+    for (const finding of found) hits.push({ finding, path: label });
+    if (gitleaks) extra.push(async () => (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label })));
+  };
   if (target === "-") {
-    const text = await readIoStdin(io);
-    for (const finding of scan(text, { allowlist: cfg.allowlist })) hits.push({ finding, path: "stdin" });
+    scanText(await readIoStdin(io), void 0, "stdin");
   } else {
-    const root = resolve4(target);
-    const stats = statSync(root, { throwIfNoEntry: false });
+    const root = resolve7(target);
+    const stats = statSync2(root, { throwIfNoEntry: false });
     if (!stats) {
       io.stderr(`scan: no such file or directory: ${target}
 `);
@@ -6042,9 +7455,10 @@ async function cmdScan(args, io) {
     }
     const files = stats.isDirectory() ? [...walkFiles(root)] : [root];
     for (const file of files) {
-      const rel = stats.isDirectory() ? relative2(root, file) : file;
-      if (excludes.some((g) => pathMatchesGlob(rel, g))) continue;
-      if (cfg.allowlist.paths?.some((g) => pathMatchesGlob(rel, g))) continue;
+      const rel = stats.isDirectory() ? relative3(root, file) : file;
+      const fromCwd = relative3(process.cwd(), file);
+      if (excludes.some((g) => pathMatchesGlob(rel, g) || pathMatchesGlob(fromCwd, g))) continue;
+      if (allowlist.paths?.some((g) => pathMatchesGlob(rel, g) || pathMatchesGlob(fromCwd, g))) continue;
       const nameRule = sensitiveFileNameRule(rel);
       if (nameRule) {
         hits.push({ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel });
@@ -6052,9 +7466,19 @@ async function cmdScan(args, io) {
       }
       const text = readTextFile(file);
       if (text === void 0) continue;
-      for (const finding of scan(text, { sourcePath: rel, allowlist: cfg.allowlist })) hits.push({ finding, path: rel });
+      scanText(text, fromCwd.startsWith("..") ? rel : fromCwd, rel);
     }
   }
+  const added = new Array(extra.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < extra.length) {
+      const i = next++;
+      added[i] = await extra[i]();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, extra.length) }, worker));
+  hits.push(...added.flat());
   if (json) {
     io.stdout(
       `${JSON.stringify(
@@ -6118,6 +7542,68 @@ async function cmdAllow(args, io) {
 `);
   return 0;
 }
+async function cmdTrust(args, io) {
+  const revoke = args.includes("--revoke");
+  const unknown = args.find((a) => a !== "--revoke");
+  if (unknown) {
+    io.stderr(`trust: unknown option ${unknown}
+`);
+    return 2;
+  }
+  const files = projectConfigFiles(process.cwd());
+  if (files.length === 0) {
+    io.stderr("trust: no .secretgate.json found from here up to the repository root\n");
+    return 2;
+  }
+  setTrust(files, revoke);
+  for (const f of files) io.stdout(`secretgate: ${revoke ? "no longer trusting" : "trusting the current content of"} ${f}
+`);
+  if (!revoke) io.stdout("secretgate: its allowlist now applies to the hooks. Any edit to the file needs `secretgate trust` again.\n");
+  return 0;
+}
+async function cmdScope(args, io) {
+  const cwd = process.cwd();
+  const cfg = loadConfig(cwd);
+  if (cfg.error) {
+    io.stderr(`secretgate: ${cfg.error.file} is invalid: ${cfg.error.message}
+`);
+    return 2;
+  }
+  if (args[0] === "check") {
+    const paths = args.slice(1);
+    if (paths.length === 0) {
+      io.stderr("scope check: expected one or more paths\n");
+      return 2;
+    }
+    let out = 0;
+    for (const p of paths) {
+      const why = cfg.scopes.map((s) => pathOutOfScope(s, p, cwd)).find(Boolean);
+      io.stdout(why ? `out  ${p} \u2014 ${why}
+` : `in   ${p}
+`);
+      if (why) out++;
+    }
+    return out > 0 ? 1 : 0;
+  }
+  if (args.length > 0) {
+    io.stderr(`scope: unknown argument ${args[0]} (try \`secretgate scope check <path\u2026>\`)
+`);
+    return 2;
+  }
+  if (cfg.scopes.length === 0) {
+    io.stdout("secretgate: no scope \u2014 the agent may read any file here (sensitive files excepted).\n");
+    io.stdout('Declare one in .secretgate.json: { "scope": { "allow": ["src/**"], "deny": [], "bash": "paths" } }\n');
+    return 0;
+  }
+  for (const s of cfg.scopes) {
+    io.stdout(`scope from ${s.file}
+`);
+    for (const line of describeScope(s)) io.stdout(`  ${line}
+`);
+  }
+  if (cfg.scopes.length > 1) io.stdout("Every scope above applies: a path must be inside all of them.\n");
+  return 0;
+}
 async function cmdVault(args, io) {
   const vault = new Vault();
   if (args[0] === "list") {
@@ -6141,11 +7627,12 @@ async function cmdVault(args, io) {
   return 2;
 }
 function parseDisableFlags(args, io, verb) {
-  const flags = { project: false, sessionCurrent: false, minutes: DEFAULT_DISABLE_MINUTES, minutesExplicit: false, all: false };
+  const flags = { project: false, sessionCurrent: false, minutes: DEFAULT_DISABLE_MINUTES, minutesExplicit: false, all: false, liftScope: false };
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--project") flags.project = true;
     else if (a === "--all") flags.all = true;
+    else if (a === "--scope" && verb === "disable") flags.liftScope = true;
     else if (a === "--forever") {
       flags.minutes = null;
       flags.minutesExplicit = true;
@@ -6207,12 +7694,14 @@ async function cmdDisable(args, io) {
     scope = session ? "session" : "path";
     target = session ?? cwd;
   }
-  const until = addPause({ scope, target, minutes: flags.minutes, cwd, lifetime });
+  const until = addPause({ scope, target, minutes: flags.minutes, cwd, lifetime, liftScope: flags.liftScope });
   const what = scope === "session" ? `session ${target}` : `directory ${target}`;
   const bound = until ? `until ${until}` : lifetime ? "until this session ends" : "until you re-enable it";
   io.stdout(`secretgate: DISABLED for ${what} ${bound}
 `);
   io.stdout("secretgate: prompts, tool input and tool output are no longer scanned. Placeholder restore still runs, and `scan`/`pipe` still work.\n");
+  if (flags.liftScope) io.stdout("secretgate: the project scope (.secretgate.json) is lifted too for this pause.\n");
+  else if (loadConfig(cwd).scopes.length > 0) io.stdout("secretgate: the project scope stays enforced \u2014 add --scope to lift it too.\n");
   io.stdout(`secretgate: re-enable with \`secretgate enable${scope === "path" ? " --project" : flags.session ? ` --session ${target}` : " --session"}\`
 `);
   if (lifetime) io.stdout("secretgate: this pause covers ONLY this run \u2014 a new session (a new conversation) is protected automatically.\n");
@@ -6278,7 +7767,14 @@ async function cmdHook(args, io) {
     raw = "__SECRETGATE_STDIN_ERROR__";
   }
   if (agent === "claude-code" || agent === "codex") {
-    const r = agent === "codex" ? await handleCodex(event, raw) : await handleClaudeCode(event, raw);
+    let r;
+    try {
+      r = agent === "codex" ? await handleCodex(event, raw) : await handleClaudeCode(event, raw);
+    } catch {
+      r = failClosed(event, void 0, agent === "codex");
+      if (agent === "codex" && event === "post-tool-use")
+        r = { stdout: JSON.stringify({ decision: "block", reason: "[secretgate withheld this tool output: it could not be scanned safely]" }), exit: 0 };
+    }
     if (r.stdout) io.stdout(r.stdout);
     return r.exit;
   }
@@ -6289,8 +7785,8 @@ async function cmdHook(args, io) {
 function installedCliCommand() {
   const self = fileURLToPath(import.meta.url);
   if (!self.endsWith(".mjs")) return `node "${self}"`;
-  const target = join8(defaultVaultHome(), "bin", "secretgate.mjs");
-  mkdirSync7(dirname3(target), { recursive: true, mode: 448 });
+  const target = join12(defaultVaultHome(), "bin", "secretgate.mjs");
+  mkdirSync8(dirname7(target), { recursive: true, mode: 448 });
   copyFileSync3(self, target);
   chmodSync(target, 493);
   return `node "${target}"`;
@@ -6316,24 +7812,24 @@ function parseAgentFlags(args, io) {
   return flags;
 }
 function opencodePluginSource() {
-  const selfDir = dirname3(fileURLToPath(import.meta.url));
-  const candidates = [join8(selfDir, "secretgate-opencode.mjs"), join8(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
-  const found = candidates.find((c) => existsSync7(c));
+  const selfDir = dirname7(fileURLToPath(import.meta.url));
+  const candidates = [join12(selfDir, "secretgate-opencode.mjs"), join12(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const found = candidates.find((c) => existsSync8(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
   return found;
 }
 function claudeSettingsPath(project) {
-  return project ? join8(process.cwd(), ".claude", "settings.json") : join8(homedir5(), ".claude", "settings.json");
+  return project ? join12(process.cwd(), ".claude", "settings.json") : join12(homedir8(), ".claude", "settings.json");
 }
 function projectSettingsAliasesGlobal() {
   const canon = (p) => {
     try {
       return realpathSync3(p);
     } catch {
-      return resolve4(p);
+      return resolve7(p);
     }
   };
-  return canon(process.cwd()) === canon(homedir5());
+  return canon(process.cwd()) === canon(homedir8());
 }
 function installForAgents(flags, io) {
   const outcome = { installed: { claudeCode: false, codex: false, opencode: false }, errors: [] };
@@ -6355,7 +7851,7 @@ function installForAgents(flags, io) {
       if (flags.project && projectSettingsAliasesGlobal()) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
-      mkdirSync7(dirname3(settingsPath), { recursive: true });
+      mkdirSync8(dirname7(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
@@ -6376,7 +7872,7 @@ function installForAgents(flags, io) {
   if (flags.codex) {
     outcome.installed.codex = attempt("codex", () => {
       const dir = codexHome();
-      mkdirSync7(dir, { recursive: true });
+      mkdirSync8(dir, { recursive: true });
       const r = installCodex({ codexDir: dir, command: installedCliCommand() });
       io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
 `);
@@ -6398,18 +7894,18 @@ async function cmdInstall(args, io) {
 }
 function detectAgents() {
   return {
-    claudeCode: existsSync7(join8(homedir5(), ".claude")),
-    codex: existsSync7(codexHome()),
-    opencode: existsSync7(opencodeConfigDir()),
+    claudeCode: existsSync8(join12(homedir8(), ".claude")),
+    codex: existsSync8(codexHome()),
+    opencode: existsSync8(opencodeConfigDir()),
     project: false
   };
 }
 function verifyClaudeCodeWiring(io) {
-  const pinned = join8(defaultVaultHome(), "bin", "secretgate.mjs");
+  const pinned = join12(defaultVaultHome(), "bin", "secretgate.mjs");
   const self = fileURLToPath(import.meta.url);
-  const bundle = existsSync7(pinned) ? pinned : self;
+  const bundle = existsSync8(pinned) ? pinned : self;
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join8(tmpdir2(), "secretgate-verify-"));
+  const tmpHome = mkdtempSync2(join12(tmpdir2(), "secretgate-verify-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
@@ -6474,17 +7970,23 @@ TOKEN=${fake}
   }
   return ok;
 }
+function codexWiringComplete(state) {
+  return state.feature && state.expected >= CODEX_HOOK_COUNT && state.trusted === state.expected;
+}
 function verifyCodexWiring(io) {
   const state = codexWiringStatus(codexHome());
-  if (state.expected !== 3 || state.trusted !== 3 || !state.feature) {
-    io.stdout("  \u2717 codex: expected three enabled, trusted hooks; run install --codex to repair wiring.\n");
+  if (!codexWiringComplete(state)) {
+    io.stdout(
+      `  \u2717 codex: expected ${CODEX_HOOK_COUNT} enabled, trusted hooks (found ${state.trusted}/${state.expected}); run install --codex to repair wiring.
+`
+    );
     return false;
   }
-  const pinned = join8(defaultVaultHome(), "bin", "secretgate.mjs");
+  const pinned = join12(defaultVaultHome(), "bin", "secretgate.mjs");
   const self = fileURLToPath(import.meta.url);
-  const bundle = existsSync7(pinned) ? pinned : self;
+  const bundle = existsSync8(pinned) ? pinned : self;
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join8(tmpdir2(), "secretgate-verify-codex-"));
+  const tmpHome = mkdtempSync2(join12(tmpdir2(), "secretgate-verify-codex-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
@@ -6515,6 +8017,18 @@ TOKEN=${fake}
       io.stdout("  \u2717 codex tool-output replacement FAILED \u2014 a secret would reach the model\n");
       ok = false;
     }
+    const denied = runHook("pre-tool-use", {
+      hook_event_name: "PreToolUse",
+      cwd: tmpHome,
+      tool_name: "Bash",
+      tool_input: { command: "cat ~/.ssh/id_rsa" }
+    });
+    if (denied.hookSpecificOutput?.permissionDecision === "deny") {
+      io.stdout("  \u2713 codex: a shell command reading a sensitive path (~/.ssh/id_rsa) is denied\n");
+    } else {
+      io.stdout("  \u2717 codex sensitive-path deny FAILED \u2014 a key file could reach the model\n");
+      ok = false;
+    }
   } catch (err) {
     io.stdout(`  \u2717 could not run the wired Codex hook: ${err instanceof Error ? err.message.split("\n")[0] : "unknown"}
 `);
@@ -6525,9 +8039,9 @@ TOKEN=${fake}
   return ok;
 }
 function verifyOpencodeBundle(io) {
-  const scratch = mkdtempSync2(join8(tmpdir2(), "secretgate-verify-opencode-"));
-  const plugin = join8(opencodeConfigDir(), "plugin", "secretgate.js");
-  const verificationModule = join8(scratch, "secretgate.mjs");
+  const scratch = mkdtempSync2(join12(tmpdir2(), "secretgate-verify-opencode-"));
+  const plugin = join12(opencodeConfigDir(), "plugin", "secretgate.js");
+  const verificationModule = join12(scratch, "secretgate.mjs");
   const script = `
     const { SecretgatePlugin } = await import(${JSON.stringify(pathToFileURL(verificationModule).href)});
     const hooks = await SecretgatePlugin({ directory: process.cwd() });
@@ -6663,8 +8177,8 @@ async function cmdStatus(_args, io) {
 `);
   }
   if (here.disabled || pauses.length > 0) io.stdout("\n");
-  const pinned = join8(defaultVaultHome(), "bin", "secretgate.mjs");
-  if (existsSync7(pinned)) {
+  const pinned = join12(defaultVaultHome(), "bin", "secretgate.mjs");
+  if (existsSync8(pinned)) {
     const pinnedVersion = /VERSION = "([^"]+)"/.exec(readFileSync10(pinned, "utf8"))?.[1] ?? "unknown";
     io.stdout(`bundle    pinned at ${pinned} (v${pinnedVersion}${pinnedVersion !== VERSION ? ` \u2014 CLI is v${VERSION}, re-run install to refresh` : ""})
 `);
@@ -6679,9 +8193,22 @@ async function cmdStatus(_args, io) {
     const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d) => d.startsWith("Read(")).length : 0;
     io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}
 `);
+    if (wired > 0 && !claudeCodeMatcherCurrent(settings))
+      io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) \u2014 run \`secretgate init\` to update
+`);
   }
-  io.stdout("claude-code limitation: @file mentions bypass tool hooks (deny rules are the only cover there).\n");
-  const codexHooks = readJsonSafe(join8(codexHome(), "hooks.json"));
+  io.stdout("claude-code limitation: @file mentions bypass tool hooks; deny rules cover sensitive files, the scope check covers @path in the prompt text.\n");
+  const cfg = loadConfig(process.cwd());
+  if (cfg.error) io.stdout(`project   !! ${cfg.error.file} is invalid (${cfg.error.message}) \u2014 tool calls are refused until it is fixed
+`);
+  for (const s of cfg.scopes)
+    io.stdout(
+      `scope     active from ${s.file}: allow ${s.allow ? s.allow.join(", ") : "(all)"}${s.deny?.length ? `; deny ${s.deny.join(", ")}` : ""}; bash ${s.bash}${here.disabled && !here.includesScope ? " (still enforced while disabled)" : here.includesScope ? " \u2014 LIFTED by the current pause" : ""}
+`
+    );
+  for (const f of cfg.untrusted) io.stdout(`project   allowlist in ${f} is NOT trusted \u2014 the hooks ignore it until you run \`secretgate trust\`
+`);
+  const codexHooks = readJsonSafe(join12(codexHome(), "hooks.json"));
   const codexWired = hookWireCount(codexHooks, "hook codex");
   const codexState = codexWiringStatus(codexHome());
   const codexFeature = codexState.feature;
@@ -6691,24 +8218,26 @@ async function cmdStatus(_args, io) {
   );
   if (codexWired > 0)
     io.stdout(
-      `codex     trusted and enabled: ${codexState.trusted}/${codexState.expected}; ${codexState.trusted === 3 && codexState.expected === 3 ? "definitions match" : "re-run install --codex"}
+      `codex     trusted and enabled: ${codexState.trusted}/${codexState.expected}; ${codexWiringComplete(codexState) ? "definitions match" : "re-run install --codex"}
 `
     );
   if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
-  const ocPlugin = join8(opencodeConfigDir(), "plugin", "secretgate.js");
-  const ocConfig = readJsonSafe(join8(opencodeConfigDir(), "opencode.json"));
+  const ocPlugin = join12(opencodeConfigDir(), "plugin", "secretgate.js");
+  const ocConfig = readJsonSafe(join12(opencodeConfigDir(), "opencode.json"));
   const ocPinned = Array.isArray(ocConfig?.plugin) && ocConfig.plugin.some((p) => /^secretgate@/.test(p));
-  io.stdout(`opencode  ${existsSync7(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}
+  io.stdout(`opencode  ${existsSync8(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}
 `);
-  const { gitleaksPath: gitleaksPath2 } = await Promise.resolve().then(() => (init_gitleaks_bin(), gitleaks_bin_exports));
-  const gl = gitleaksPath2();
-  io.stdout(`engines   built-in JS rules${gl ? ` + gitleaks binary (${gl})` : " (gitleaks binary not found \u2014 `scan` runs JS engine only)"}
-`);
+  const gl = gitleaksPath();
+  const hybridOff = loadConfig(process.cwd()).hybrid === "off";
+  io.stdout(
+    `engines   built-in JS rules${gl ? hybridOff ? ` (gitleaks at ${gl} is switched off: config hybrid = "off")` : ` + gitleaks binary in \`scan\` (${gl})` : " (gitleaks binary not found \u2014 `scan` runs the JS engine only)"}
+`
+  );
   const vault = new Vault();
   const entries = vault.list();
   io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
   try {
-    const mode = statSync(join8(defaultVaultHome(), "vault.json")).mode & 511;
+    const mode = statSync2(join12(defaultVaultHome(), "vault.json")).mode & 511;
     io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
 `);
   } catch {
@@ -6722,6 +8251,8 @@ var commands = {
   pipe: cmdPipe,
   allow: cmdAllow,
   vault: cmdVault,
+  trust: cmdTrust,
+  scope: cmdScope,
   disable: cmdDisable,
   enable: cmdEnable,
   install: cmdInstall,

@@ -258,6 +258,8 @@ describe("describeDisable", () => {
       "session s1 is paused until 2030-01-01T00:00:00.000Z",
     );
     expect(describeDisable({ disabled: true, scope: "path", target: "/proj" })).toBe("directory /proj is paused until re-enabled");
-    expect(describeDisable({ disabled: true, scope: "session", target: "s1", lifetime: true })).toBe("session s1 is paused until the session ends");
+    expect(describeDisable({ disabled: true, scope: "session", target: "s1", lifetime: true })).toBe(
+      "session s1 is paused until the session ends (24 h at most)",
+    );
   });
 });

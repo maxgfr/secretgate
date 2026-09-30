@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -409,5 +409,90 @@ describe("secretgate status", () => {
     expect(await run(["status"], io)).toBe(0);
     expect(text()).toContain("claude-code global");
     expect(text()).not.toContain("claude-code project");
+  });
+});
+
+describe("secretgate scope / trust / disable --scope", () => {
+  const origCwd = process.cwd();
+  let proj: string;
+
+  beforeEach(() => {
+    proj = realpathSync(work);
+    mkdirSync(join(proj, ".git"));
+    mkdirSync(join(proj, "src"));
+    writeFileSync(join(proj, "src", "x.ts"), "x\n");
+    process.chdir(proj);
+  });
+
+  afterEach(() => {
+    process.chdir(origCwd);
+  });
+
+  it("`scope` explains there is none, then shows the effective one", async () => {
+    const none = capture();
+    expect(await run(["scope"], none.io)).toBe(0);
+    expect(none.text()).toContain("no scope");
+    writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"], deny: ["src/gen/**"], bash: "strict" } }));
+    const some = capture();
+    expect(await run(["scope"], some.io)).toBe(0);
+    expect(some.text()).toContain("allow  src/**");
+    expect(some.text()).toContain("deny   src/gen/**");
+    expect(some.text()).toContain("bash   strict");
+  });
+
+  it("`scope check` exits 1 when any path is out of scope", async () => {
+    writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
+    const ok = capture();
+    expect(await run(["scope", "check", "src/x.ts"], ok.io)).toBe(0);
+    expect(ok.text()).toMatch(/^in {3}src\/x\.ts/);
+    const bad = capture();
+    expect(await run(["scope", "check", "src/x.ts", "../outside"], bad.io)).toBe(1);
+    expect(bad.text()).toMatch(/out {2}\.\.\/outside — .*outside the project root/);
+  });
+
+  it("`scope` reports an invalid config (exit 2)", async () => {
+    writeFileSync(join(proj, ".secretgate.json"), "{");
+    const c = capture();
+    expect(await run(["scope"], c.io)).toBe(2);
+    expect(c.errText()).toContain("invalid");
+  });
+
+  it("`trust` makes the hooks honor the repo allowlist; `status` says when it does not", async () => {
+    writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ allowlist: { rules: ["github-pat"] } }));
+    const before = capture();
+    await run(["status"], before.io);
+    expect(before.text()).toContain("is NOT trusted");
+    const t = capture();
+    expect(await run(["trust"], t.io)).toBe(0);
+    expect(t.text()).toContain("trusting the current content");
+    const after = capture();
+    await run(["status"], after.io);
+    expect(after.text()).not.toContain("NOT trusted");
+    expect(await run(["trust", "--revoke"], capture().io)).toBe(0);
+  });
+
+  it("`disable` keeps the scope unless --scope is passed; status shows both", async () => {
+    writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
+    const d = capture();
+    expect(await run(["disable", "--project"], d.io)).toBe(0);
+    expect(d.text()).toContain("stays enforced");
+    const s = capture();
+    await run(["status"], s.io);
+    expect(s.text()).toContain("still enforced while disabled");
+    await run(["enable", "--project"], capture().io);
+    const d2 = capture();
+    expect(await run(["disable", "--project", "--scope"], d2.io)).toBe(0);
+    expect(d2.text()).toContain("lifted too");
+    expect(disableState({ cwd: proj })).toMatchObject({ disabled: true, includesScope: true });
+    expect(await run(["enable", "--project"], capture().io)).toBe(0);
+    expect(disableState({ cwd: proj }).disabled).toBe(false);
+  });
+
+  it("`scan` honors the repo allowlist relative to cwd, even for a single file", async () => {
+    mkdirSync(join(proj, "tests"));
+    writeFileSync(join(proj, "tests", "fx.ts"), `t = "${FAKE.githubPat}"\n`);
+    writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ allowlist: { paths: ["tests/**"] } }));
+    expect(await run(["scan", "tests/fx.ts", "--no-gitleaks"], capture().io)).toBe(0);
+    expect(await run(["scan", "tests", "--no-gitleaks"], capture().io)).toBe(0);
   });
 });

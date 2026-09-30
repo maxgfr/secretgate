@@ -31,6 +31,9 @@ const EVENTS: Array<{ event: string; arg: string; matcher?: string }> = [
   { event: "PostToolUse", arg: "post-tool-use", matcher: ".*" },
 ];
 
+/** How many hooks a complete Codex install wires (and must trust). */
+export const CODEX_HOOK_COUNT = EVENTS.length;
+
 const EVENT_KEY: Record<string, string> = {
   UserPromptSubmit: "user_prompt_submit",
   PreToolUse: "pre_tool_use",

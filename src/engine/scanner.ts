@@ -29,6 +29,12 @@ export interface ScanConfig {
    * CLI, which may take its time over a whole repo.
    */
   deadlineMs?: number;
+  /**
+   * Honor inline `gitleaks:allow` / `secretgate:allow` pragmas (default true).
+   * Right for scanning your own files; wrong for text on its way to a model —
+   * a fetched page or tool output could mark its own secret as allowed.
+   */
+  pragmas?: boolean;
 }
 
 // Thrown when a scan exceeds its wall-clock budget — callers in the hook path
@@ -209,7 +215,10 @@ const BUILTIN_RULES: CompiledRule[] = [
   // captured group is the PASSWORD; a placeholder-ish value is skipped.
   {
     id: "url-credentials",
-    re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:([^\s:/@]{3,256})@[^\s]+/dgi,
+    // The scheme is bounded and anchored on a non-scheme character: `\b` fired
+    // after every `.`/`-`, making `x://a.a.a.…` quadratic (6 s on 160 KB), and
+    // the scan deadline is only checked between rules.
+    re: /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]{0,256}:([^\s:/@]{3,256})@[^\s]+/dgi,
     keywords: ["://"],
     allowlists: [],
     post: (secret) => !looksLikePlaceholder(secret),
@@ -281,6 +290,13 @@ function isRuleSourceText(secret: string): boolean {
 
 // File names that ARE the finding (e.g. a .p12 bundle) — used by callers that
 // scan directories; content scanning ignores them.
+/** Rule-independent "this is not a real secret" checks, shared with the
+ *  gitleaks hybrid pass: our own placeholders, our own detection patterns, and
+ *  obvious placeholder values. */
+export function isNonSecret(secret: string): boolean {
+  return PLACEHOLDER_ONLY.test(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
+}
+
 export function sensitiveFileNameRule(path: string): string | undefined {
   return PATH_RULES.find((r) => new RegExp(r.path.source, r.path.flags).test(path))?.id;
 }
@@ -355,7 +371,7 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
 
   const lower = text.toLowerCase();
   const starts = lineStarts(text);
-  const pragmaLines = pragmaAllowedLines(text);
+  const pragmaLines = cfg.pragmas === false ? new Set<number>() : pragmaAllowedLines(text);
   const findings: Finding[] = [];
   const deadline = cfg.deadlineMs !== undefined ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
 

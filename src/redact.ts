@@ -10,9 +10,11 @@ export interface RedactResult {
 }
 
 // Replace every finding's secret span with its vault placeholder. Spans are
-// replaced right-to-left so earlier offsets stay valid.
+// replaced right-to-left so earlier offsets stay valid. Redaction guards text
+// bound for a model, so inline allow pragmas are ignored unless asked for:
+// the text being redacted is exactly what could carry a forged one.
 export function redactText(text: string, vault: Vault, source: string, cfg: ScanConfig = {}): RedactResult {
-  const findings = scan(text, cfg);
+  const findings = scan(text, { ...cfg, pragmas: cfg.pragmas ?? false });
   if (findings.length === 0) return { text, findings, replaced: [] };
   let out = text;
   const replaced: Array<{ placeholder: string; ruleId: string }> = [];

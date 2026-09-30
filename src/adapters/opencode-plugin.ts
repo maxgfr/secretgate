@@ -1,9 +1,13 @@
-import { loadConfig } from "../config.js";
+import { fileURLToPath } from "node:url";
+import { loadConfig, type SecretgateConfig } from "../config.js";
 import { disableState, recordSession } from "../disable.js";
-import { commandTouchesSensitivePath, sensitivePathMatch } from "../paths.js";
-import { restorePlaceholders } from "../redact.js";
-import { Vault } from "../vault/vault.js";
+import { preToolPolicy } from "../hooks/policy.js";
 import { eventRedactor, isBinaryField } from "../hooks/scan-budget.js";
+import { extractToolCall } from "../hooks/tool-call.js";
+import { applyPromptDirective, promptDirective } from "../prompt-directive.js";
+import { restorePlaceholders } from "../redact.js";
+import { accessViolation, filterSearchOutput, promptScopeViolation } from "../scope.js";
+import { Vault } from "../vault/vault.js";
 
 // OpenCode plugin — bundled standalone as scripts/secretgate-opencode.mjs and
 // installed into ~/.config/opencode/plugin/secretgate.js. OpenCode's hook
@@ -48,7 +52,31 @@ function mutateStringsInPlace(container: any, fn: (s: string) => string): boolea
 }
 
 const RESTORE_TOOLS = new Set(["write", "edit", "patch", "apply_patch", "multiedit"]);
-const READ_TOOLS = new Set(["read", "grep"]);
+
+interface PromptPart {
+  type?: string;
+  text?: unknown;
+  synthetic?: boolean;
+  url?: unknown;
+  filename?: unknown;
+  mime?: unknown;
+  source?: { path?: unknown };
+}
+
+// The file an attachment part inlines (an @mention), when it is a local file.
+function attachedPath(part: PromptPart): string | undefined {
+  if (typeof part.url === "string" && part.url.startsWith("file:")) {
+    try {
+      return fileURLToPath(part.url);
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof part.source?.path === "string") return part.source.path;
+  // Synthetic "Called the Read tool with the following input: {"filePath":…}".
+  if (part.synthetic && typeof part.text === "string") return /"filePath":\s*"((?:[^"\\]|\\.)*)"/.exec(part.text)?.[1];
+  return undefined;
+}
 
 // The plugin runs INSIDE the OpenCode process, so `SECRETGATE_DISABLE=1 opencode`
 // reaches it the same way it reaches a spawned hook, and process.cwd() is the
@@ -57,7 +85,13 @@ const READ_TOOLS = new Set(["read", "grep"]);
 export const SecretgatePlugin = async (ctx: unknown) => {
   const directory = (ctx as { directory?: unknown } | undefined)?.directory;
   const cwd = typeof directory === "string" ? directory : process.cwd();
-  const isOff = (sessionId?: unknown): boolean => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : undefined }).disabled;
+  const offState = (sessionId?: unknown) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : undefined });
+  const isOff = (sessionId?: unknown): boolean => offState(sessionId).disabled;
+  // Project config for this event; `disable --scope` lifts the scope too.
+  const configFor = (sessionId?: unknown): SecretgateConfig => {
+    const cfg = loadConfig(cwd);
+    return offState(sessionId).includesScope ? { ...cfg, scopes: [], error: undefined } : cfg;
+  };
   return {
     // OpenCode keeps rewritten args in tool history, including failed calls.
     // Redact that history immediately before it is converted to model messages.
@@ -76,18 +110,50 @@ export const SecretgatePlugin = async (ctx: unknown) => {
         }
       }
     },
-    "chat.message": async (input: { sessionID?: unknown } | undefined, output: { message?: unknown; parts?: Array<{ text?: unknown }> }) => {
+    "chat.message": async (input: { sessionID?: unknown } | undefined, output: { message?: unknown; parts?: PromptPart[] }) => {
       const sessionID = input?.sessionID;
       recordSession(typeof sessionID === "string" ? sessionID : undefined, cwd);
-      if (isOff(sessionID)) return;
       const parts = output?.parts;
       if (!Array.isArray(parts)) return;
-      if (parts.some((p) => typeof p?.text === "string" && p.text.includes(ALLOW_TAG))) return;
+      // "désactive secretgate" typed by the user pauses this session. OpenCode
+      // has no user-facing hook message, so the confirmation rides along in
+      // the prompt for the model to relay.
+      const said = parts.find(
+        (p) => typeof p?.text === "string" && !p.synthetic && (p.type === undefined || p.type === "text") && promptDirective(String(p.text)),
+      );
+      if (said) {
+        const notice = applyPromptDirective(promptDirective(String(said.text))!, typeof sessionID === "string" ? sessionID : undefined, cwd);
+        said.text = `${said.text}\n\n[${notice}]`;
+      }
+      const cfg = configFor(sessionID);
+      // Scope first — it holds while secretgate is disabled. Out-of-scope
+      // attachments are replaced by a note (OpenCode can rewrite the prompt).
+      if (cfg.scopes.length > 0) {
+        for (const part of parts) {
+          if (!part || typeof part !== "object") continue;
+          const path = attachedPath(part);
+          const why = path ? cfg.scopes.map((s) => accessViolation(s, path, cwd, "read")).find(Boolean) : undefined;
+          if (why) {
+            for (const key of ["url", "filename", "mime", "source"] as const) delete part[key];
+            part.type = "text";
+            part.text = `[secretgate: an attachment was removed — ${why}]`;
+            continue;
+          }
+          if (typeof part.text === "string" && !part.synthetic) {
+            const mention = promptScopeViolation(cfg.scopes, part.text, cwd);
+            if (mention) throw new Error(mention);
+          }
+        }
+      }
+      if (isOff(sessionID)) return;
+      // [allow-secret] exempts only what the user typed — never attached file
+      // content, which could otherwise carry the tag itself.
+      const typed = (p: PromptPart): boolean => typeof p?.text === "string" && !p.synthetic && (p.type === undefined || p.type === "text");
+      const bypass = parts.some((p) => typed(p) && String(p.text).includes(ALLOW_TAG));
       try {
-        const cfg = loadConfig(cwd);
         const vault = new Vault();
         const redact = eventRedactor(vault, "opencode:prompt", cfg.allowlist);
-        const mapped = parts.map((part) => (typeof part?.text === "string" ? redact(part.text) : undefined));
+        const mapped = parts.map((part) => (typeof part?.text === "string" && !(bypass && typed(part)) ? redact(part.text) : undefined));
         parts.forEach((part, i) => {
           if (mapped[i] !== undefined) part.text = mapped[i];
         });
@@ -99,24 +165,16 @@ export const SecretgatePlugin = async (ctx: unknown) => {
     "tool.execute.before": async (input: { tool?: string; sessionID?: unknown }, output: { args?: Record<string, any> }) => {
       const tool = String(input?.tool ?? "").toLowerCase();
       const args = output?.args ?? {};
-      const cfg = loadConfig(cwd);
-      // Disabled: skip the sensitive-path deny, but keep restoring placeholders
-      // so a disabled run never writes a dead SECRETGATE_ token to disk.
-      const off = isOff(input?.sessionID);
-      if (!off && READ_TOOLS.has(tool)) {
-        const target = typeof args.filePath === "string" ? args.filePath : typeof args.path === "string" ? args.path : undefined;
-        const hit = target ? sensitivePathMatch(target, cfg.allowlist, cwd) : undefined;
-        if (hit) {
-          throw new Error(
-            `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. Allow it with \`secretgate allow --path '${target}'\` if this is intentional.`,
-          );
-        }
-      }
-      if (!off && tool === "bash" && typeof args.command === "string") {
-        const touched = commandTouchesSensitivePath(args.command, cfg.allowlist, cwd);
-        if (touched) {
-          throw new Error(`secretgate: this command touches '${touched}', which looks sensitive; its content must not enter the model.`);
-        }
+      const cfg = configFor(input?.sessionID);
+      // Disabled: skip the secret checks, but keep the scope and keep restoring
+      // placeholders so a disabled run never writes a dead SECRETGATE_ token.
+      const decision = preToolPolicy(extractToolCall(tool, args), cfg, cwd, { disabled: isOff(input?.sessionID) });
+      if (decision) {
+        throw new Error(
+          decision.action === "ask"
+            ? `${decision.reason} OpenCode plugins cannot ask for approval, so this was refused: run it yourself if you meant it.`
+            : decision.reason,
+        );
       }
       const restoreThis = RESTORE_TOOLS.has(tool) || (tool === "bash" && cfg.restoreBash);
       if (restoreThis) {
@@ -126,13 +184,18 @@ export const SecretgatePlugin = async (ctx: unknown) => {
     },
 
     "tool.execute.after": async (
-      input: { tool?: string; sessionID?: unknown },
+      input: { tool?: string; sessionID?: unknown; args?: unknown },
       output: { title?: string; output?: string; metadata?: unknown; content?: unknown; structuredContent?: unknown; attachments?: unknown; isError?: boolean },
     ) => {
-      if (isOff(input?.sessionID)) return;
       const tool = String(input?.tool ?? "").toLowerCase();
       try {
-        const cfg = loadConfig(cwd);
+        const cfg = configFor(input?.sessionID);
+        // glob/grep/list over a partly in-scope tree: drop out-of-scope entries.
+        const kind = extractToolCall(tool, input?.args).kind;
+        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list") && typeof output?.output === "string") {
+          output.output = filterSearchOutput(cfg.scopes, output.output, cwd).value as string;
+        }
+        if (isOff(input?.sessionID)) return;
         const vault = new Vault();
         mutateStringsInPlace(output, eventRedactor(vault, `opencode:${tool}`, cfg.allowlist));
       } catch {

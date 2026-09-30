@@ -12,6 +12,8 @@ the agent reads .env                 -> DENIED (the value never enters the model
 a bash command prints a credential   -> the model sees SECRETGATE_a1b2c3d4e5f6
 the agent writes that placeholder
 into a file                          -> the REAL value lands on disk
+the repo scopes the agent to src/,
+and it reads docs/private.md         -> DENIED (out of scope, never sent)
 ```
 
 ## Install
@@ -51,15 +53,21 @@ anything per-use.
   basic-auth URLs) and **quoted passwords with punctuation** that gitleaks' generic
   rule misses. Zero runtime dependencies, single bundled `.mjs`, ~50ms per scan.
   If the real `gitleaks` binary is installed, `secretgate scan` runs it as a
-  second engine (hybrid).
+  second engine and reports what it adds (`--no-gitleaks`, or `"hybrid": "off"`
+  in `~/.secretgate/config.json`, to skip it). Hooks always use the JS engine only.
 - **Redact-and-restore**: each secret maps to a stable `SECRETGATE_<hmac>`
   placeholder (per-install salt, vault at `~/.secretgate/vault.json`, 0600).
   The model only ever sees placeholders; consistent across sessions, restored
   on Write/Edit. Restoring inside Bash commands is **off by default** — a
   prompt-injected `curl $PLACEHOLDER` must not exfiltrate the real value.
-- **Sensitive-file deny**: reads of `.env*`, `*.pem`, `*.key`, `id_rsa*`,
-  `~/.aws/**`, `~/.ssh/**`, `~/.kube/config`, `.npmrc`, `.netrc`… are refused
-  outright (`.env.example`/`.sample`/`.template`/`.dist` stay readable).
+- **Sensitive-file deny**: reads of `.env`, `.env.*`, `.envrc`, `*.pem`, `*.key`,
+  `*.p12`/`*.pfx`, `id_rsa*`, `~/.aws/**`, `~/.ssh/**`, `~/.kube/config`, `.npmrc`,
+  `.netrc`, `.git-credentials`, `.pgpass`, `.pypirc`, `*.tfstate`, `.dev.vars`,
+  the secretgate vault… are refused outright (`.env.example`/`.sample`/`.template`/`.dist`
+  stay readable). Paths are resolved first — `..`, `~`, symlinks and case
+  variants all land on the same file.
+- **Project scope** (optional): a `.secretgate.json` can keep the agent inside
+  some directories of the repository — see [Scope](#scope).
 - **Standalone scanner**: `secretgate scan <dir>` (exit 1 on findings) doubles
   as a pre-commit hook; `secretgate pipe` redacts any stream.
 
@@ -72,6 +80,8 @@ anything per-use.
 | Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
 | Placeholder written to a file | ✅ real value restored | ✅ real value restored | ✅ real value restored |
 | Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ✅ **withheld** via block-and-replace | ✅ withheld on scan failure |
+| Agent leaves the project [scope](#scope) | ✅ Read/Edit/Write/LS/Glob/Grep/Bash/MCP denied, search results filtered, `@path` blocked | ✅ shell/`apply_patch` denied | ✅ tools denied, glob/grep/list filtered, attachments removed |
+| Agent tries to switch secretgate off | ✅ **asks you** first | ✅ refused — you run it | ✅ refused — you run it |
 
 **Scan failures are explicit.** Supported output envelopes are replaced with a
 withholding notice. If Claude Code cannot accept a safe replacement, Secretgate
@@ -85,7 +95,9 @@ past the agent's timeout (which would otherwise fail open).
 
 | Gap | Why | Mitigation |
 |---|---|---|
-| Claude Code `@file` mentions | inlined without firing tool hooks | `permissions.deny` rules (broadened to cover keys, `.aws`, `.ssh`, `credentials.json`, …) block the common sensitive files |
+| Claude Code `@file` mentions | inlined without firing tool hooks | `permissions.deny` rules (broadened to cover keys, `.aws`, `.ssh`, `credentials.json`, …) block the common sensitive files; with a scope, an out-of-scope `@path` in the prompt text is blocked |
+| Shell commands are analysed, not sandboxed | `$(…)`, variables, `eval`, `python -c` hide paths from any static check | quotes, `cd`, redirections, globs and `x/../y` are resolved; `"bash": "strict"` refuses what cannot be checked; for a hard guarantee add the agent's OS sandbox (Claude Code sandbox, Codex permission profiles) |
+| An agent running as you | it can reach anything your user can, given enough indirection | switching secretgate off from the agent needs your approval (Claude Code) or is refused (Codex, OpenCode); the OS sandbox is the hard boundary |
 | Codex failed/unsupported tool output | `PostToolUse` only fires for successful supported tools; native output rewrite remains unsupported | Bash/apply_patch and successful MCP/local-function results are block-and-replace protected; an MCP result marked as an error can still bypass the post hook |
 | Codex local telemetry/logs | block-and-replace changes the model-visible result, not Codex's local logging copy | the raw result stays local; protect access to Codex logs and telemetry configuration |
 | Low-entropy secrets (`password: hunter2`) | indistinguishable from prose without huge false positives | catches strong/quoted passwords; use a real password manager |
@@ -93,7 +105,7 @@ past the agent's timeout (which would otherwise fail open).
 | Restore → off-machine exfil | a prompt-injected agent could write a placeholder to a file (restored to the real value) then `git push` / upload it | Bash restore is **off** by default; the secret never reaches the model, only a file the agent already had write access to |
 | Images / clipboard / screenshots | no hook surface | — |
 | Secrets already in context before install | history is not rewritten | start a fresh session |
-| A disabled run (see below) | you asked for it — nothing is scanned while it lasts | pauses expire on their own (60 min default), `status` leads with a banner, and no in-repo file can trigger one |
+| A disabled run (see below) | you asked for it — nothing is scanned while it lasts | pauses expire on their own (60 min default, 24 h at most for a session pause), `status` leads with a banner, and no in-repo file can trigger one |
 
 > A blocked prompt is never sent to the LLM, but Claude Code still echoes your
 > `Original prompt:` back to your **local** terminal — that's your own input on
@@ -106,28 +118,62 @@ past the agent's timeout (which would otherwise fail open).
 
 Narrowest fix first:
 
-1. inline `# pragma: allowlist secret` (or `# gitleaks:allow`) on the line
+1. inline `# pragma: allowlist secret` (or `# gitleaks:allow`) on the line —
+   honored by `secretgate scan`, **not** by the hooks: text on its way to the
+   model (a fetched page, a tool result) could carry a forged pragma
 2. `secretgate allow <value>` — stored as SHA-256, never in clear
 3. `secretgate allow --path 'tests/fixtures/**'`
 4. `secretgate allow --rule <rule-id>` (last resort)
-5. one-off prompt bypass: include `[allow-secret]` in the prompt
-6. whole firewall off for one run: `secretgate disable` (see below)
+5. one-off prompt bypass: include `[allow-secret]` in the prompt (it exempts
+   what you typed, never content attached to the prompt)
+6. whole firewall off for one run: say "désactive secretgate" (see below)
 
 Projects can commit shared entries in `.secretgate.json`:
-`{"allowlist": {"paths": ["testdata/**"]}}`.
+`{"allowlist": {"paths": ["testdata/**"]}}`. `secretgate scan` always honors
+them (the repository describing its own fixtures). The **hooks** honor them only
+after you run `secretgate trust` in that repository — and again after every
+edit of the file — so a repository you clone cannot allowlist every rule and
+quietly switch detection off for itself. `secretgate status` lists untrusted files.
 
 ## Turning it off for one run
 
 Sometimes you *are* working on the credentials — debugging an auth flow, an
-incident, a fixtures repo. Three scopes, narrowest first:
+incident, a fixtures repo. The quickest way is to **say so in the conversation**,
+on a line of its own:
+
+```
+désactive secretgate            (or: disable secretgate / secretgate off)
+désactive secretgate et le scope   (also lifts the project scope)
+réactive secretgate             (or: enable secretgate / secretgate on)
+/secretgate disable             the skill, by name (Codex: $secretgate disable)
+/secretgate disable scope       … also lifting the scope;  /secretgate enable to undo
+```
+
+That pauses **this session only**, from that very prompt on, until the session
+ends (24 h at most); a new conversation is protected again. Claude Code shows a
+confirmation; on OpenCode it is added to the prompt; Codex applies it silently
+(`secretgate status` shows it). Only prompts you submit are read, and only a
+line that *is* the instruction counts — "how do I disable secretgate?" does not.
+The skill form is applied by the same prompt hook before the skill even loads,
+so the agent has nothing to run and nothing to approve; the skill then just
+confirms with `secretgate status`. `pnpm test:live` checks this on all three
+agents.
+
+From a terminal, three scopes, narrowest first:
 
 ```bash
 SECRETGATE_DISABLE=1 claude       # one process. No state, dies with the shell.
 secretgate disable                # this agent run, 60 min (--minutes N | --forever)
 secretgate disable --session      # this agent run, for its whole lifetime (no timer)
 secretgate disable --project      # this directory tree, until `enable --project`
+secretgate disable --scope …      # any of the above, also lifting the project scope
 secretgate enable                 # back on   (--all clears every pause)
 ```
+
+If the **agent** runs `secretgate disable` (or `allow`, `trust`, `uninstall`,
+or edits `~/.secretgate/`, `.secretgate.json` or its own hook settings),
+Claude Code asks you first; Codex and OpenCode cannot ask from a hook, so they
+refuse and tell you to run it yourself — or to say "désactive secretgate".
 
 `secretgate disable` with no flag pauses the **agent session** running in this
 directory — another session in the same repo stays protected. Run it from the
@@ -135,18 +181,75 @@ agent's own shell to pause exactly that run. A pause **expires on its own**, and
 `secretgate status` leads with a loud banner while any of them is active.
 
 `secretgate disable --session` pauses that same run for the **session's
-lifetime** instead of a fixed 60 minutes: no clock to wait on, and it is
-collected the moment the run ends (its id leaves the recent-session index), so a
-**new conversation is protected automatically** and no stale pause is left
-behind. `secretgate enable --session` turns it back on now.
+lifetime** instead of a fixed 60 minutes: it ends with the run (a new
+conversation is protected automatically), with a 24 h ceiling in case the run
+is resumed for days. `secretgate enable --session` turns it back on now.
+"Most recent session" means the one that last received a prompt, so running it
+from the session you are talking to pauses that one.
 
-Two things a disable never switches off: **placeholder restore** (otherwise the
-agent would write dead `SECRETGATE_…` tokens into your files) and the standalone
-`scan` / `pipe` commands (running one is the intent).
+Three things a disable never switches off: **placeholder restore** (otherwise the
+agent would write dead `SECRETGATE_…` tokens into your files), the standalone
+`scan` / `pipe` commands (running one is the intent), and the **project scope**
+unless you add `--scope` (or say "… et le scope").
 
 > The off switch lives in `~/.secretgate/` and **only** there. A
-> `.secretgate.json` in a repository can widen the allowlist but cannot disable
-> the firewall — otherwise any repo you cloned could ship its own kill switch.
+> `.secretgate.json` in a repository cannot disable the firewall, and its
+> allowlist only reaches the hooks once you `secretgate trust` it — otherwise
+> any repo you cloned could ship its own kill switch.
+
+## Scope
+
+Keep the agent inside part of a repository, so content outside it is never sent
+to the model. Declare it in the project's `.secretgate.json`:
+
+```jsonc
+{
+  "scope": {
+    "allow": ["src/**", "tests/**", "package.json"], // present → everything else is out
+    "deny":  ["src/legacy/**"],                       // wins over allow
+    "bash":  "paths"                                  // "paths" (default) | "strict"
+  }
+}
+```
+
+- **Root**: the directory holding the `.secretgate.json`. It is found from the
+  agent's working directory upwards, up to the repository root, so a session
+  started in `src/` sees it too. If several files declare a scope, all apply.
+- **Globs** are relative to the root (`*`, `**`, `?`, `{a,b}`); `src` and
+  `src/**` both cover the whole directory. Absolute or `~/` globs are allowed.
+  With an `allow` list, anything outside the root is out of scope.
+- **Paths are resolved first**: `~`, `..`, symlinks (a link in `src/` pointing
+  at `secret/` is out), `/var` vs `/private/var`, and case on macOS/Windows.
+- **What is checked**: reads, edits and writes (Read/Edit/Write/MultiEdit/
+  NotebookEdit/`apply_patch`); listings (a directory leading to allowed paths may
+  be listed); Glob/Grep (refused on an unrelated root, results filtered
+  otherwise); every path of every shell command, including `cd`, redirections,
+  globs and `git show HEAD:path`; recursive commands with no in-scope target
+  (`grep -r`, `rg`, `find`, `ls -R`, `tree`, `git diff`/`show`/`log -p` without
+  pathspec) are refused with a hint to target an allowed directory; `@path`
+  mentions in the prompt (Claude Code/Codex block the prompt, OpenCode removes
+  the attachment); MCP tools that name existing paths.
+- **`"bash": "strict"`** additionally refuses commands whose paths cannot be
+  known statically: `$(…)`, backticks, variables, `eval`, `bash -c`,
+  `python -c`, `node -e`, `xargs`, `find -exec`…
+- **The fence cannot be moved from inside**: while a scope is active,
+  `.secretgate.json` (any of them), `.claude/settings*.json`, Codex and OpenCode
+  configuration and secretgate's own state are read-only for the agent.
+- **A pause keeps the scope** (it switches off secret scanning, not the
+  boundary): lift it with `secretgate disable --scope` or "désactive secretgate
+  et le scope", or edit `.secretgate.json` yourself.
+- **An invalid `.secretgate.json`** (bad JSON, `"allow": "src/**"`, unknown
+  keys in `scope`…) makes every tool call fail closed, except reading and
+  editing that file, until it is fixed — it might have held a scope.
+
+`secretgate scope` prints the effective scope; `secretgate scope check <path…>`
+exits 1 if any path is outside it (handy in scripts and CI).
+
+Compared with the agents' own `permissions.deny`: one file for three agents,
+an allow-list rather than a deny-list, and it also covers shell commands, search
+results and `@mentions`. It is still a static check of what the agent asks to
+do, not an OS sandbox — pair it with the agent's sandbox when you need a hard
+guarantee.
 
 ## Commands
 
@@ -155,11 +258,13 @@ secretgate init       Install for the agents on this machine + verify the firewa
 secretgate install    --claude-code|--codex|--opencode|--all [--project]
 secretgate uninstall  (same flags — removes exactly what install added)
 secretgate status     doctor: wiring, engines, vault health, limitations
-secretgate scan       <file|dir|-> [--json] [--exclude <glob>]   exit 1 on findings
+secretgate scan       <file|dir|-> [--json] [--exclude <glob>] [--no-gitleaks]   exit 1 on findings
 secretgate pipe       stdin -> stdout, secrets redacted
 secretgate allow      <value> | --rule <id> | --path <glob>
+secretgate trust      [--revoke]   let the hooks honor this repo's .secretgate.json allowlist
+secretgate scope      [check <path…>]   show the project scope / exit 1 if a path is outside it
 secretgate vault      list | clear
-secretgate disable    [--minutes N | --forever | --session] [--project] [--session <id>]
+secretgate disable    [--minutes N | --forever | --session] [--project] [--session <id>] [--scope]
 secretgate enable     [--project] [--session [id]] [--all]
 secretgate hook       <agent> <event>        (internal hook entrypoint)
 ```
@@ -169,8 +274,10 @@ Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
 
 ## How it's validated
 
-- 300+ tests incl. per-event hook replays and a **zero-budget false-positive
-  corpus** (lockfiles, minified JS, uuids, git logs, base64 blobs).
+- 450+ tests incl. per-event hook replays for all three hosts, the shell
+  analyser, the scope, known bypass regressions, and a **zero-budget
+  false-positive corpus** (lockfiles, minified JS, uuids, git logs, base64
+  blobs). CI enforces a coverage floor on `src/`.
 - A **differential CI job** runs the real gitleaks binary against the same
   payloads and requires the JS engine to find everything gitleaks finds
   (machine check on the Go→JS regex conversion).
@@ -225,8 +332,8 @@ MIT — rule definitions derived from [gitleaks](https://github.com/gitleaks/git
 One `secretgate init` wires the hooks into Claude Code, Codex and
 OpenCode, and from then on every prompt, file read and tool result is
 scanned and redacted by the hooks — not by the model, and not on request.
-Turning the firewall off is `secretgate disable` for a run, or removing the
-hooks; nothing about it depends on a skill being invoked.
+Turning the firewall off is saying "désactive secretgate", `secretgate disable`
+for a run, or removing the hooks; nothing about it depends on a skill being invoked.
 
 The shipped skill is also model-invocable, so the agent can reach
 `secretgate`'s own commands when a task calls for them. You keep both switches:

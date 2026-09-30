@@ -26,6 +26,15 @@ export const CC_DENY_RULES = [
   "Read(**/.npmrc)",
   "Read(**/.docker/config.json)",
   "Read(**/credentials.json)",
+  "Read(**/.envrc)",
+  "Read(**/.dev.vars)",
+  "Read(**/.git-credentials)",
+  "Read(**/.pgpass)",
+  "Read(**/.pypirc)",
+  "Read(**/*.p12)",
+  "Read(**/*.pfx)",
+  "Read(**/*.tfstate)",
+  "Read(~/.secretgate/vault.json)",
 ];
 
 // Identifies OUR hook entries regardless of how the CLI is invoked
@@ -36,13 +45,23 @@ const MARKER = "hook claude-code";
 // (matcher "*") — an allow-list would silently miss MCP tools, custom tools and
 // any future tool, letting their output reach the model unredacted. The
 // deep-walk handles whatever shape the result has. PreToolUse stays targeted:
-// its deny/restore logic only applies to the file/shell tools named here, and
-// any secret an MCP read tool pulls in is still redacted by PostToolUse.
+// its deny/scope/restore logic applies to the file, search and shell tools
+// named here, plus MCP tools (whose path arguments are checked too); any
+// secret another tool pulls in is still redacted by PostToolUse.
+export const PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|NotebookEdit|NotebookRead|Bash|mcp__.*";
+
 const EVENTS: Array<{ event: string; arg: string; matcher?: string }> = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
-  { event: "PreToolUse", arg: "pre-tool-use", matcher: "Read|Grep|Edit|Write|MultiEdit|NotebookEdit|Bash" },
+  { event: "PreToolUse", arg: "pre-tool-use", matcher: PRE_TOOL_MATCHER },
   { event: "PostToolUse", arg: "post-tool-use", matcher: "*" },
 ];
+
+/** Is a settings file wired with the current PreToolUse matcher? */
+export function claudeCodeMatcherCurrent(settings: Record<string, any> | undefined): boolean {
+  const groups = settings?.hooks?.PreToolUse;
+  if (!Array.isArray(groups)) return false;
+  return groups.some((g: HookGroup) => g.matcher === PRE_TOOL_MATCHER && (g.hooks ?? []).some((h) => String(h.command ?? "").includes(MARKER)));
+}
 
 interface HookGroup {
   matcher?: string;

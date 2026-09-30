@@ -133,6 +133,8 @@ for (const agent of agents) {
   let phase = "prompt",
     turn = 0;
   const requests = [];
+  const scopeMarker = "SCOPE" + "_MARKER_" + Math.random().toString(36).slice(2);
+  const scopeDenials = [];
   let failure;
   const server = createServer(async (req, res) => {
     let raw = "";
@@ -167,6 +169,35 @@ for (const agent of agents) {
       ).flatMap((t) => (t.type === "namespace" ? t.tools.map((x) => ({ ...x, namespace: t.name })) : [t]));
       const names = tools.map((t) => t.name);
       let tool;
+      if (phase === "skill") {
+        // The pause is applied by the prompt hook; the model just answers.
+        if (agent === "codex") responses(res, body.model);
+        else anthropic(res, body.model);
+        return;
+      }
+      if (phase === "scope") {
+        // One attempt to read a file outside the declared scope, then a plain
+        // answer. The file's marker must never appear in any model request.
+        assert(!raw.includes(scopeMarker), `${agent}: OUT-OF-SCOPE FILE CONTENT REACHED MODEL REQUEST`);
+        if (turn++ === 0 && tools.length) {
+          const name = agent === "claude-code" ? "Read" : agent === "opencode" ? "read" : names.find((n) => n === "exec_command" || n === "shell");
+          tool = {
+            name,
+            args:
+              agent === "claude-code"
+                ? { file_path: join(project, "private", "notes.txt") }
+                : agent === "opencode"
+                  ? { filePath: join(project, "private", "notes.txt") }
+                  : name === "exec_command"
+                    ? { cmd: "cat private/notes.txt" }
+                    : { command: ["cat", "private/notes.txt"] },
+            namespace: tools.find((t) => t.name === name)?.namespace,
+          };
+        } else scopeDenials.push(raw.includes("scope"));
+        if (agent === "codex") responses(res, body.model, tool);
+        else anthropic(res, body.model, tool);
+        return;
+      }
       if (!tools.length) {
         if (agent === "codex") responses(res, body.model);
         else anthropic(res, body.model);
@@ -314,6 +345,49 @@ for (const agent of agents) {
         `PASS ${agent} ${phase}: result redacted before model request, restore on disk, ${requests.filter((r) => r.phase === phase).length} requests inspected`,
       );
     }
+    // Scope: the project fences the agent into src/; a read of private/ is
+    // denied before it runs, so its content never reaches a model request.
+    phase = "scope";
+    turn = 0;
+    mkdirSync(join(project, "src"), { recursive: true });
+    mkdirSync(join(project, "private"), { recursive: true });
+    writeFileSync(join(project, "private", "notes.txt"), `${scopeMarker}\n`);
+    writeFileSync(join(project, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
+    const scoped = await run(command, [...args, "Read private/notes.txt and summarise it."], { cwd: project, env });
+    if (failure) {
+      console.error((scoped.stderr + scoped.stdout).replaceAll(scopeMarker, "[MARKER]").slice(-5000));
+      throw failure;
+    }
+    assert(turn >= 1, `${agent}: scope scenario never reached a tool call; ${scoped.stdout.slice(-900)}`);
+    assert(scopeDenials.some(Boolean), `${agent}: the denial reason never reached the model`);
+    console.log(`PASS ${agent} scope: out-of-scope read denied, content never sent, ${requests.filter((r) => r.phase === "scope").length} requests inspected`);
+
+    // Skill: invoking the installed skill by name with `disable` pauses THIS
+    // session through the prompt hook — nothing for the agent to run.
+    phase = "skill";
+    rmSync(join(project, ".secretgate.json"), { force: true });
+    execFileSync("npx", ["--yes", "skills", "add", root, "--skill", "secretgate", "--agent", agent, "--copy", "-y"], { cwd: project, stdio: "pipe" });
+    const invocation = agent === "codex" ? "$secretgate disable" : "/secretgate disable";
+    const skillRun = await run(command, [...args, invocation], { cwd: project, env });
+    if (failure) throw failure;
+    let pauses = {};
+    try {
+      pauses = JSON.parse(readFileSync(join(state, "disabled.json"), "utf8"));
+    } catch {}
+    const lifetime = Object.values(pauses.sessions ?? {}).filter((p) => p.lifetime === true);
+    const sent = JSON.stringify(
+      requests
+        .filter((r) => r.phase === "skill")
+        .at(-1)
+        ?.body?.messages?.at(-1) ??
+        requests.at(-1)?.body?.input?.at(-1) ??
+        {},
+    );
+    assert(
+      lifetime.length === 1,
+      `${agent}: \`${invocation}\` did not pause the session; last user message: ${sent.slice(0, 1500)}; ${(skillRun.stdout + skillRun.stderr).slice(-600)}`,
+    );
+    console.log(`PASS ${agent} skill: \`${invocation}\` paused this session only (session-lifetime, set by the prompt hook)`);
   } finally {
     server.closeAllConnections();
     await new Promise((r) => server.close(r));

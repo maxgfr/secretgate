@@ -13,6 +13,14 @@ export async function handleCodex(event: string, rawStdin: string): Promise<Hook
   const r = await handleClaudeCode(event, rawStdin, { notices: false, blockFallback: true });
   if (event === "pre-tool-use" && r.stdout.trim()) {
     const output = JSON.parse(r.stdout);
+    if (output.hookSpecificOutput?.permissionDecision === "ask") {
+      // Codex parses "ask" but does not support it yet: refuse, and hand the
+      // decision back to the user explicitly.
+      output.hookSpecificOutput.permissionDecision = "deny";
+      output.hookSpecificOutput.permissionDecisionReason +=
+        " Codex cannot ask for approval from a hook, so this was refused: run the command yourself if you meant it.";
+      return { ...r, stdout: JSON.stringify(output) };
+    }
     if (output.hookSpecificOutput?.updatedInput !== undefined) {
       // Codex requires allow with rewritten arguments; its own tool approvals
       // remain enforced separately. Claude supports decision-free updatedInput.

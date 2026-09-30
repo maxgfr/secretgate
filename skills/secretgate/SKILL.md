@@ -46,31 +46,84 @@ into OpenCode's config directory. These survive eviction of the skill cache.
   configured in `~/.secretgate/config.json`.
 - Clean operations are silent. A normal Claude pre-tool hook returns `{}` so
   the regular permission flow continues.
-- Sensitive reads are denied. Templates such as `.env.example` stay readable.
+- Sensitive reads are denied, including through shell commands, symlinks and
+  `..` paths. Templates such as `.env.example` stay readable.
   `allow --path` exempts matching reads from the hook deny; tool output is still
   scanned. The agent's independent permission rules can still refuse a read.
 
 ## Exceptions and pauses
 
 Prefer a targeted exception: inline `# pragma: allowlist secret` or
-`gitleaks:allow`, then `allow <value>` (stored as SHA-256), then `allow --path
-<glob>`. Disable a whole rule with `allow --rule <id>` only when appropriate.
-Projects can add exceptions in `.secretgate.json`; OpenCode uses its project
-directory, including when its server starts elsewhere.
+`gitleaks:allow` (honored by `scan`, not by the hooks), then `allow <value>`
+(stored as SHA-256), then `allow --path <glob>`. Disable a whole rule with
+`allow --rule <id>` only when appropriate. Projects can add exceptions in
+`.secretgate.json`; `scan` always honors them, the hooks only after the user
+runs `trust` in that repository (again after each edit). OpenCode uses its
+project directory, including when its server starts elsewhere.
 
-`[allow-secret]` in a prompt bypasses that prompt's scan once.
+`[allow-secret]` in a prompt bypasses that prompt's scan once. It covers what
+the user typed, not attached file content.
 
-When asked to pause protection, use the narrowest requested scope:
+### Disable or enable through this skill
+
+When invoked as `/secretgate disable` (Codex: `$secretgate disable`; also
+`désactive`, `off`, `disable scope`) or `/secretgate enable` (`réactive`, `on`),
+the prompt hook has already applied it to this session before you read this.
+Do not run `disable` yourself.
+
+1. Run `node scripts/secretgate.mjs status` (read-only) and report what it says:
+   the pause, its bound (until the session ends, 24 h at most), and whether the
+   project scope was lifted.
+2. Only if `status` shows this session is not paused (the hooks are not wired
+   or are older than this skill), run
+   `node scripts/secretgate.mjs disable --session` (`--scope` when asked). Claude
+   Code asks the user to approve it; that is expected. On Codex/OpenCode it is
+   refused, so tell the user to run it themselves (`! secretgate disable --session`).
+
+The same works without the skill: the user writes, on its own line,
+`désactive secretgate` (or `disable secretgate`), `réactive secretgate`, or
+`désactive secretgate et le scope`. The pause covers this session only, until it
+ends (24 h at most).
+
+From a terminal, use the narrowest requested scope:
 
 - `SECRETGATE_DISABLE=1 <agent>`: one process.
 - `disable`: current indexed session, 60 minutes; directory fallback if no
-  session is known. `--minutes N`, `--forever`, `--session` and `--project`
-  provide explicit scopes/lifetimes; see `--help`.
+  session is known. `--minutes N`, `--forever`, `--session`, `--project` and
+  `--scope` (also lift the project scope) are explicit options; see `--help`.
 - `enable` reverses the current pause; `enable --all` clears every pause.
+
+When you run `disable`, `allow`, `trust` or `uninstall` yourself, Claude Code
+asks the user to approve; Codex and OpenCode refuse. That is intended: turning
+the firewall off is the user's decision. Do not work around it. Ask the user
+to approve, to say `désactive secretgate`, or to run the command themselves.
 
 State lives under `~/.secretgate/` (or `SECRETGATE_HOME`), never in a repository's
 configuration. Restore, `scan` and `pipe` keep working while protection is paused.
 Report the effective scope and expiry after changing a pause.
+
+## Project scope
+
+A `scope` in the project's `.secretgate.json` fences the agent into part of
+the repository:
+
+```json
+{ "scope": { "allow": ["src/**", "tests/**"], "deny": ["src/legacy/**"], "bash": "paths" } }
+```
+
+`deny` wins over `allow`. With `allow`, everything else is out, including paths
+outside the repository. Reads, edits, listings, searches, shell commands, MCP
+path arguments and `@path` prompt mentions are checked. `"bash": "strict"` also
+refuses commands whose paths cannot be known statically. While a scope is active,
+the files that define it are read-only for the agent. A pause keeps the scope
+unless it lifts it explicitly.
+
+- `scope` prints the effective scope and `scope check <path…>` exits 1 on any
+  out-of-scope path. Use them before planning work in a scoped repository.
+- When a call is refused as out of scope, do not look for another route to the
+  same content. Say what you needed and let the user widen the scope.
+- Shell analysis is best effort. Recommend the agent's OS sandbox when the user
+  needs a hard guarantee.
 
 ## Verification and limits
 

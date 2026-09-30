@@ -1,14 +1,759 @@
 #!/usr/bin/env node
 
+// src/adapters/opencode-plugin.ts
+import { fileURLToPath } from "url";
+
 // src/config.ts
-import { readFileSync as readFileSync2 } from "fs";
-import { join as join2 } from "path";
+import { createHash as createHash2 } from "crypto";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync } from "fs";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
+
+// src/paths.ts
+import { realpathSync } from "fs";
+import { basename as basename2, dirname as dirname2, join as join3, relative, resolve as resolve2, sep } from "path";
+
+// src/engine/allowlist.ts
+import { createHash } from "crypto";
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+function isAllowedValue(secret, allowlist) {
+  if (!allowlist?.sha256?.length) return false;
+  const h = sha256(secret);
+  return allowlist.sha256.includes(h);
+}
+function isDisabledRule(ruleId, allowlist) {
+  return allowlist?.rules?.includes(ruleId) ?? false;
+}
+function expandGlobBraces(glob, limit = 64) {
+  const open = glob.indexOf("{");
+  if (open === -1) return [glob];
+  let depth = 0;
+  const commas = [];
+  let close = -1;
+  for (let i = open; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) {
+      close = i;
+      break;
+    } else if (c === "," && depth === 1) commas.push(i);
+  }
+  if (close === -1) return [glob];
+  if (commas.length === 0) return expandGlobBraces(glob.slice(close + 1), limit).map((t) => glob.slice(0, close + 1) + t);
+  const bounds = [open, ...commas, close];
+  const out = [];
+  for (let k = 0; k + 1 < bounds.length && out.length < limit; k++) {
+    out.push(...expandGlobBraces(glob.slice(0, open) + glob.slice(bounds[k] + 1, bounds[k + 1]) + glob.slice(close + 1), limit));
+  }
+  return out.slice(0, limit);
+}
+function tokenizeGlob(glob) {
+  const tokens = [];
+  for (let i = 0; i < glob.length; ) {
+    const c = glob[i];
+    if (c === "*" && glob[i + 1] === "*") {
+      if (glob[i + 2] === "/") {
+        tokens.push({ t: "segments" });
+        i += 3;
+      } else {
+        tokens.push({ t: "any" });
+        i += 2;
+      }
+    } else if (c === "*") {
+      tokens.push({ t: "star" });
+      i++;
+    } else if (c === "?") {
+      tokens.push({ t: "one" });
+      i++;
+    } else {
+      tokens.push({ t: "lit", c });
+      i++;
+    }
+  }
+  return tokens;
+}
+function matchTokens(tokens, path) {
+  const n = path.length;
+  let next = new Uint8Array(n + 2);
+  let cur = new Uint8Array(n + 2);
+  next[n] = 1;
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const tok = tokens[i];
+    cur.fill(0);
+    let slashAhead = 0;
+    for (let j = n; j >= 0; j--) {
+      const ch = path[j];
+      switch (tok.t) {
+        case "lit":
+          cur[j] = j < n && ch === tok.c ? next[j + 1] : 0;
+          break;
+        case "one":
+          cur[j] = j < n && ch !== "/" ? next[j + 1] : 0;
+          break;
+        case "star":
+          cur[j] = next[j] || (j < n && ch !== "/" ? cur[j + 1] : 0);
+          break;
+        case "any":
+          cur[j] = next[j] || (j < n ? cur[j + 1] : 0);
+          break;
+        case "segments":
+          if (j < n && ch === "/" && next[j + 1]) slashAhead = 1;
+          cur[j] = next[j] || slashAhead;
+          break;
+      }
+    }
+    [next, cur] = [cur, next];
+  }
+  return next[0] === 1;
+}
+var GLOB_CACHE = /* @__PURE__ */ new Map();
+function pathMatchesGlob(path, glob, caseInsensitive = false) {
+  const key = `${caseInsensitive ? "i" : "s"}${glob}`;
+  let alternatives = GLOB_CACHE.get(key);
+  if (!alternatives) {
+    alternatives = expandGlobBraces(caseInsensitive ? glob.toLowerCase() : glob).map(tokenizeGlob);
+    if (GLOB_CACHE.size > 512) GLOB_CACHE.clear();
+    GLOB_CACHE.set(key, alternatives);
+  }
+  const subject = caseInsensitive ? path.toLowerCase() : path;
+  return alternatives.some((tokens) => matchTokens(tokens, subject));
+}
+function isAllowedPath(path, allowlist) {
+  if (!path || !allowlist?.paths?.length) return false;
+  return allowlist.paths.some((g) => pathMatchesGlob(path, g));
+}
+
+// src/shell-paths.ts
+import { lstatSync, readdirSync } from "fs";
+import { homedir } from "os";
+import { basename, dirname, isAbsolute, join, resolve } from "path";
+var DYN = "\0";
+var SEP_CHARS = /* @__PURE__ */ new Set([";", "&", "|", "(", ")", "\n"]);
+function matchParen(s, start) {
+  let depth = 1;
+  let i = start;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "\\") i += 2;
+    else if (c === "'") {
+      const end = s.indexOf("'", i + 1);
+      i = end === -1 ? s.length : end + 1;
+    } else if (c === '"') {
+      i++;
+      while (i < s.length && s[i] !== '"') i += s[i] === "\\" ? 2 : 1;
+      i++;
+    } else if (c === "(") {
+      depth++;
+      i++;
+    } else if (c === ")") {
+      if (--depth === 0) return i + 1;
+      i++;
+    } else i++;
+  }
+  return s.length;
+}
+function matchBacktick(s, start) {
+  let i = start;
+  while (i < s.length && s[i] !== "`") i += s[i] === "\\" ? 2 : 1;
+  return Math.min(i + 1, s.length);
+}
+var VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*/;
+function tokenize(command, cwd) {
+  const st = { commands: [], substitutions: [], dynamic: [], structure: [] };
+  let cur = { words: [], redirects: [], stdinLiteral: false };
+  let word = "";
+  let inWord = false;
+  let glob = false;
+  let brace = false;
+  let pendingRedirect;
+  const heredocs = [];
+  let i = 0;
+  const endWord = () => {
+    if (!inWord) return;
+    const w = { text: word, glob, brace };
+    if (pendingRedirect) {
+      cur.redirects.push({ op: pendingRedirect, target: w });
+      if (pendingRedirect === "<<" || pendingRedirect === "<<-") {
+        heredocs.push({ delim: word.replaceAll(DYN, ""), strip: pendingRedirect === "<<-" });
+        cur.stdinLiteral = true;
+      }
+      if (pendingRedirect === "<<<") cur.stdinLiteral = true;
+      pendingRedirect = void 0;
+    } else cur.words.push(w);
+    word = "";
+    inWord = false;
+    glob = false;
+    brace = false;
+  };
+  const endCommand = () => {
+    endWord();
+    if (cur.words.length > 0 || cur.redirects.length > 0) {
+      st.structure.push({ type: "cmd", index: st.commands.length });
+      st.commands.push(cur);
+    }
+    cur = { words: [], redirects: [], stdinLiteral: false };
+  };
+  const expandVar = (name) => {
+    if (name === "HOME") return homedir();
+    if (name === "PWD") return cwd;
+    st.dynamic.push(`$${name}`);
+    return DYN;
+  };
+  while (i < command.length) {
+    const c = command[i];
+    if (c === "\n" && heredocs.length > 0) {
+      endCommand();
+      i++;
+      for (const { delim, strip } of heredocs.splice(0)) {
+        for (; ; ) {
+          const nl = command.indexOf("\n", i);
+          const line = command.slice(i, nl === -1 ? command.length : nl);
+          i = nl === -1 ? command.length : nl + 1;
+          if ((strip ? line.replace(/^\t+/, "") : line) === delim || nl === -1) break;
+          for (const m of line.matchAll(/\$\(/g)) st.substitutions.push(line.slice(m.index + 2, matchParen(line, m.index + 2) - 1));
+        }
+      }
+      continue;
+    }
+    if (c === " " || c === "	") {
+      endWord();
+      i++;
+    } else if (c === "#" && !inWord) {
+      const nl = command.indexOf("\n", i);
+      i = nl === -1 ? command.length : nl;
+    } else if (c === "\\") {
+      if (command[i + 1] === "\n") {
+        i += 2;
+      } else {
+        word += command[i + 1] ?? "";
+        inWord = true;
+        i += 2;
+      }
+    } else if (c === "'") {
+      const end = command.indexOf("'", i + 1);
+      word += command.slice(i + 1, end === -1 ? command.length : end);
+      inWord = true;
+      i = end === -1 ? command.length : end + 1;
+    } else if (c === '"') {
+      inWord = true;
+      i++;
+      while (i < command.length && command[i] !== '"') {
+        const d = command[i];
+        if (d === "\\" && i + 1 < command.length && '"\\$`\n'.includes(command[i + 1])) {
+          if (command[i + 1] !== "\n") word += command[i + 1];
+          i += 2;
+        } else if (d === "$" && command[i + 1] === "(") {
+          const end = matchParen(command, i + 2);
+          st.substitutions.push(command.slice(i + 2, end - 1));
+          st.dynamic.push("$(\u2026)");
+          word += DYN;
+          i = end;
+        } else if (d === "`") {
+          const end = matchBacktick(command, i + 1);
+          st.substitutions.push(command.slice(i + 1, end - 1));
+          st.dynamic.push("`\u2026`");
+          word += DYN;
+          i = end;
+        } else if (d === "$" && command[i + 1] === "{") {
+          const end = command.indexOf("}", i);
+          word += expandVar(command.slice(i + 2, end === -1 ? command.length : end));
+          i = end === -1 ? command.length : end + 1;
+        } else if (d === "$" && VAR_RE.test(command.slice(i + 1))) {
+          const name = VAR_RE.exec(command.slice(i + 1))[0];
+          word += expandVar(name);
+          i += 1 + name.length;
+        } else {
+          word += d;
+          i++;
+        }
+      }
+      i++;
+    } else if (c === "$" && command[i + 1] === "(") {
+      const arithmetic = command[i + 2] === "(";
+      const end = matchParen(command, i + 2);
+      if (!arithmetic) st.substitutions.push(command.slice(i + 2, end - 1));
+      st.dynamic.push(arithmetic ? "$((\u2026))" : "$(\u2026)");
+      word += DYN;
+      inWord = true;
+      i = end;
+    } else if (c === "$" && command[i + 1] === "{") {
+      const end = command.indexOf("}", i);
+      word += expandVar(command.slice(i + 2, end === -1 ? command.length : end));
+      inWord = true;
+      i = end === -1 ? command.length : end + 1;
+    } else if (c === "$" && VAR_RE.test(command.slice(i + 1))) {
+      const name = VAR_RE.exec(command.slice(i + 1))[0];
+      word += expandVar(name);
+      inWord = true;
+      i += 1 + name.length;
+    } else if (c === "$" && /^[0-9@*#?$!-]/.test(command[i + 1] ?? "")) {
+      st.dynamic.push(`$${command[i + 1]}`);
+      word += DYN;
+      inWord = true;
+      i += 2;
+    } else if (c === "`") {
+      const end = matchBacktick(command, i + 1);
+      st.substitutions.push(command.slice(i + 1, end - 1));
+      st.dynamic.push("`\u2026`");
+      word += DYN;
+      inWord = true;
+      i = end;
+    } else if ((c === "<" || c === ">") && command[i + 1] === "(") {
+      endWord();
+      const end = matchParen(command, i + 2);
+      st.substitutions.push(command.slice(i + 2, end - 1));
+      i = end;
+    } else if (c === "<" || c === ">" || c === "&" && command[i + 1] === ">") {
+      if (inWord && /^\d+$/.test(word)) {
+        word = "";
+        inWord = false;
+      }
+      endWord();
+      const op = /^(?:&>>|&>|<<<|<<-|<<|>>|>\||>&|<&|<>|<|>)/.exec(command.slice(i))[0];
+      i += op.length;
+      if ((op === ">&" || op === "<&") && /^\s*(?:\d+|-)(?=\s|$|[;&|)])/.test(command.slice(i))) {
+        i += /^\s*(?:\d+|-)/.exec(command.slice(i))[0].length;
+        continue;
+      }
+      pendingRedirect = op === ">&" ? ">" : op === "<&" ? "<" : op;
+    } else if (SEP_CHARS.has(c)) {
+      endCommand();
+      if (c === "(") st.structure.push({ type: "open" });
+      else if (c === ")") st.structure.push({ type: "close" });
+      else if (c === "|" && command[i + 1] !== "|") st.structure.push({ type: "pipe" });
+      i += (c === "&" || c === "|" || c === ";") && command[i + 1] === c ? 2 : 1;
+    } else {
+      if (c === "*" || c === "?" || c === "[") glob = true;
+      if (c === "{") brace = true;
+      word += c;
+      inWord = true;
+      i++;
+    }
+  }
+  endCommand();
+  return st;
+}
+function expandBraces(text, limit = 256) {
+  const open = text.indexOf("{");
+  if (open === -1) return [text];
+  let depth = 0;
+  const commas = [];
+  let close = -1;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) {
+      close = i;
+      break;
+    } else if (c === "," && depth === 1) commas.push(i);
+  }
+  if (close === -1) return [text];
+  const head = text.slice(0, open);
+  const tail = text.slice(close + 1);
+  if (commas.length === 0) return expandBraces(tail, limit).map((t) => `${text.slice(0, close + 1)}${t}`);
+  const bounds = [open, ...commas, close];
+  const out = [];
+  for (let k = 0; k + 1 < bounds.length; k++) {
+    for (const t of expandBraces(`${head}${text.slice(bounds[k] + 1, bounds[k + 1])}${tail}`, limit)) {
+      out.push(t);
+      if (out.length >= limit) return out;
+    }
+  }
+  return out;
+}
+function segmentRegex(segment) {
+  let re = "";
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i];
+    if (c === "*") re += "[^/]*";
+    else if (c === "?") re += "[^/]";
+    else if (c === "[") {
+      const end = segment.indexOf("]", i + 2);
+      if (end === -1) re += "\\[";
+      else {
+        re += `[${segment.slice(i + 1, end).replace(/^!/, "^").replaceAll("\\", "\\\\")}]`;
+        i = end;
+      }
+    } else re += c.replace(/[.+^${}()|\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}$`);
+}
+var GLOB_LIMIT = 2e3;
+function expandGlob(absPattern) {
+  const parts = absPattern.split("/").filter((p, idx) => p !== "" || idx === 0);
+  let frontier = [parts[0] === "" ? "/" : parts[0]];
+  for (const part of parts.slice(1)) {
+    const next = [];
+    const isGlob = /[*?[]/.test(part);
+    const re = isGlob ? segmentRegex(part.replaceAll("**", "*")) : void 0;
+    for (const dir of frontier) {
+      if (!re) {
+        next.push(join(dir, part));
+        continue;
+      }
+      let entries;
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of entries) {
+        if (name.startsWith(".") && !part.startsWith(".")) continue;
+        if (re.test(name)) next.push(join(dir, name));
+        if (next.length > GLOB_LIMIT) return { matches: [], overflow: true };
+      }
+    }
+    frontier = next;
+  }
+  return { matches: frontier.filter((p) => exists(p)), overflow: false };
+}
+function exists(p) {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function expandHome(p) {
+  if (p === "~") return homedir();
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  return p;
+}
+var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "env", "time", "nice", "nohup", "command", "builtin", "exec", "timeout", "stdbuf", "ionice", "caffeinate"]);
+var NON_PATH_ARGS = /* @__PURE__ */ new Set([
+  "echo",
+  "printf",
+  "print",
+  "export",
+  "alias",
+  "unalias",
+  "true",
+  "false",
+  "sleep",
+  "kill",
+  "exit",
+  "return",
+  "set",
+  "unset",
+  "read",
+  "type",
+  "which",
+  "hash",
+  "jobs",
+  "wait",
+  "shift",
+  "trap",
+  "ulimit",
+  "umask",
+  "history"
+]);
+var WRITE_ARGS = /* @__PURE__ */ new Set(["touch", "mkdir", "rm", "rmdir", "tee", "truncate", "chmod", "chown", "chgrp", "unlink", "shred"]);
+var LIST_ARGS = /* @__PURE__ */ new Set(["ls", "dir", "stat", "file", "test", "[", "[[", "wc", "realpath", "readlink", "basename", "dirname"]);
+var INTERPRETERS = /^(?:bash|sh|zsh|dash|ksh|fish|python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|pwsh|powershell)$/;
+var INLINE_FLAGS = /* @__PURE__ */ new Set(["-c", "-e", "-p", "-r", "--eval", "--print", "-E", "eval", "-Command"]);
+var EVAL_COMMANDS = /* @__PURE__ */ new Set(["eval", "source", ".", "xargs", "parallel", "watch"]);
+var KEYWORDS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}"]);
+function commandIndex(words) {
+  let k = 0;
+  for (; ; ) {
+    while (k < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k].text) || KEYWORDS.has(words[k].text))) k++;
+    if (k >= words.length || !WRAPPERS.has(basename(words[k].text))) return k;
+    const wrapper = basename(words[k].text);
+    k++;
+    while (k < words.length && (words[k].text.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[k].text))) k++;
+    if (wrapper === "timeout" && k < words.length && /^\d/.test(words[k].text)) k++;
+  }
+}
+function shapeOf(words) {
+  const k = commandIndex(words);
+  if (k >= words.length) return void 0;
+  const cmd = basename(words[k].text);
+  const args = [];
+  const argWords = [];
+  const flags = [];
+  let endOfFlags = false;
+  for (const w of words.slice(k + 1)) {
+    if (!endOfFlags && w.text === "--") {
+      endOfFlags = true;
+      flags.push("--");
+      continue;
+    }
+    if (!endOfFlags && w.text.startsWith("-") && w.text.length > 1) {
+      flags.push(w.text);
+      const eq = w.text.indexOf("=");
+      if (w.text.startsWith("--") && eq > 0) {
+        args.push(w.text.slice(eq + 1));
+        argWords.push({ ...w, text: w.text.slice(eq + 1) });
+      }
+      continue;
+    }
+    args.push(w.text);
+    argWords.push(w);
+  }
+  return { cmd, args, argWords, flags };
+}
+var hasFlag = (flags, short, long) => flags.some((f) => long.includes(f.split("=")[0]) || /^-[A-Za-z]+$/.test(f) && short.some((s) => f.includes(s)));
+var VALUE_FLAGS = {
+  grep: ["-e", "-f", "-m", "-A", "-B", "-C", "--include", "--exclude", "--exclude-dir"],
+  rg: ["-e", "-f", "-g", "-t", "-T", "-m", "-A", "-B", "-C", "--glob", "--type", "--max-count"],
+  head: ["-n", "-c"],
+  tail: ["-n", "-c"],
+  sed: ["-e", "-f"],
+  awk: ["-f", "-v", "-F"],
+  find: [],
+  git: ["-C", "-c"]
+};
+function positionals(words, cmd) {
+  const valued = new Set(VALUE_FLAGS[cmd] ?? []);
+  const pos = [];
+  let dashAt = -1;
+  for (let j = commandIndex(words) + 1; j < words.length; j++) {
+    const w = words[j];
+    const t = w.text;
+    if (dashAt === -1 && t === "--") {
+      dashAt = pos.length;
+      continue;
+    }
+    if (dashAt === -1 && t.startsWith("-") && t.length > 1) {
+      const eq = t.indexOf("=");
+      if (t.startsWith("--") && eq > 0) pos.push({ ...w, text: t.slice(eq + 1) });
+      else if (valued.has(t)) j++;
+      continue;
+    }
+    pos.push(w);
+  }
+  return { pos, dashAt };
+}
+function explicitPath(text) {
+  return text.startsWith("/") || text.startsWith("~") || text.startsWith("./") || text.startsWith("../") || text === "." || text === "..";
+}
+function analyzeShell(command, opts) {
+  const out = { refs: [], dynamic: [], unknownCwd: false };
+  if (Array.isArray(command)) {
+    const [bin, flag, script] = command;
+    if (command.length === 3 && typeof bin === "string" && INTERPRETERS.test(basename(bin)) && /^-[a-z]*c$/.test(String(flag)) && typeof script === "string") {
+      return analyzeShell(script, opts);
+    }
+    return analyzeShell(command.map(quoteArg).join(" "), opts);
+  }
+  analyzeInto(command, opts.cwd, out, 0);
+  out.dynamic = [...new Set(out.dynamic)];
+  return out;
+}
+function quoteArg(a) {
+  return `'${String(a).replaceAll("'", `'\\''`)}'`;
+}
+function analyzeInto(command, startCwd, out, depth) {
+  if (depth > 8) {
+    out.dynamic.push("nested substitution");
+    return;
+  }
+  const st = tokenize(command, startCwd);
+  out.dynamic.push(...st.dynamic);
+  for (const sub of st.substitutions) analyzeInto(sub, startCwd, out, depth + 1);
+  let cwd = startCwd;
+  const stack = [];
+  let inPipeline = false;
+  for (const node of st.structure) {
+    if (node.type === "open") {
+      stack.push(cwd);
+      continue;
+    }
+    if (node.type === "close") {
+      cwd = stack.length > 0 ? stack.pop() : cwd;
+      continue;
+    }
+    if (node.type === "pipe") {
+      inPipeline = true;
+      continue;
+    }
+    const sc = st.commands[node.index];
+    const next = analyzeCommand(sc, cwd, out, inPipeline);
+    inPipeline = false;
+    cwd = next;
+  }
+}
+function resolveWord(w, cwd, out) {
+  if (w.text.includes(DYN)) return void 0;
+  const variants = w.brace ? expandBraces(w.text) : [w.text];
+  const paths = [];
+  for (const v of variants) {
+    const expanded = expandHome(v);
+    if (!isAbsolute(expanded) && cwd === void 0) {
+      out.unknownCwd = true;
+      return void 0;
+    }
+    const abs = resolve(cwd ?? "/", expanded);
+    if (w.glob && /[*?[]/.test(v)) {
+      const g = expandGlob(abs);
+      if (g.overflow) {
+        paths.push(`${DYN}search:${staticPrefixDir(abs)}`);
+      } else paths.push(...g.matches);
+    } else paths.push(abs);
+  }
+  return paths;
+}
+function staticPrefixDir(abs) {
+  const idx = abs.search(/[*?[]/);
+  return idx === -1 ? abs : dirname(`${abs.slice(0, idx)}x`);
+}
+function analyzeCommand(sc, cwd, out, inPipeline) {
+  const shape = shapeOf(sc.words);
+  const cmd = shape?.cmd ?? "";
+  const push = (w, kind, force = false, command = cmd) => {
+    const paths = resolveWord(w, cwd, out);
+    if (!paths) return;
+    for (const p of paths) {
+      if (p.startsWith(`${DYN}search:`)) {
+        out.refs.push({ path: p.slice(`${DYN}search:`.length), kind: "search", raw: w.text, command, explicit: true });
+        continue;
+      }
+      const explicit = force || explicitPath(w.text) || w.glob || exists(p);
+      out.refs.push({ path: p, kind, raw: w.text, command, explicit });
+    }
+  };
+  for (const r of sc.redirects) {
+    if (r.op === "<<" || r.op === "<<-" || r.op === "<<<") continue;
+    const target = r.target.text;
+    if (target.includes(DYN)) {
+      out.dynamic.push("redirection to a computed path");
+      continue;
+    }
+    if (/^\/dev\/(?:null|stdout|stderr|stdin|tty|zero|u?random|fd\/\d+)$/.test(target)) continue;
+    push(r.target, r.op.includes("<") ? "read" : "write", true);
+  }
+  if (!shape) return cwd;
+  if (cmd === "cd" || cmd === "pushd") {
+    if (inPipeline) return cwd;
+    const target = shape.args[0];
+    if (target === void 0) return homedir();
+    if (target === "-" || target.includes(DYN)) {
+      out.dynamic.push(`${cmd} to a computed directory`);
+      return void 0;
+    }
+    const w = shape.argWords[0];
+    const paths = resolveWord(w, cwd, out);
+    return paths?.length === 1 && !paths[0].startsWith(DYN) ? paths[0] : void 0;
+  }
+  if (cmd === "popd") {
+    out.dynamic.push("popd");
+    return void 0;
+  }
+  if (EVAL_COMMANDS.has(cmd)) out.dynamic.push(cmd);
+  if (INTERPRETERS.test(cmd)) {
+    if (shape.flags.some((f) => INLINE_FLAGS.has(f)) || shape.args[0] === "eval")
+      out.dynamic.push(`${cmd} ${shape.flags.find((f) => INLINE_FLAGS.has(f)) ?? "eval"}`);
+    else if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
+  }
+  if (cmd === "find" && shape.flags.some((f) => f === "-exec" || f === "-execdir" || f === "-ok" || f === "-okdir")) out.dynamic.push("find -exec");
+  if (NON_PATH_ARGS.has(cmd)) return cwd;
+  const words = sc.words;
+  const { pos, dashAt } = positionals(words, cmd);
+  const flags = shape.flags;
+  if (cmd === "git") {
+    analyzeGit(pos, dashAt, flags, cwd, out, push);
+    return cwd;
+  }
+  const patternFirst = (cmd === "grep" || cmd === "egrep" || cmd === "fgrep" || cmd === "rg" || cmd === "ag" || cmd === "ack") && !flags.some((f) => f === "-e" || f === "-f" || f.startsWith("--regexp") || f === "--files");
+  const targets = patternFirst ? pos.slice(1) : pos;
+  const recursive = cmd === "rg" || cmd === "ag" || cmd === "ack" || cmd === "fd" || cmd === "fdfind" || cmd === "find" || cmd === "tree" || cmd === "du" || (cmd === "grep" || cmd === "egrep" || cmd === "fgrep") && hasFlag(flags, ["r", "R"], ["--recursive", "--dereference-recursive"]) || cmd === "ls" && hasFlag(flags, ["R"], ["--recursive"]) || (cmd === "zip" || cmd === "rsync" || cmd === "scp" || cmd === "cp") && hasFlag(flags, ["r", "R", "a"], ["--recursive", "--archive"]) || cmd === "tar" && (hasFlag(flags, ["c"], ["--create"]) || /^c/.test(shape.args[0] ?? ""));
+  if (recursive) {
+    const explicitTargets = cmd === "find" ? findRoots(words) : targets;
+    if (explicitTargets.length === 0 && cwd !== void 0) out.refs.push({ path: cwd, kind: "search", raw: ".", command: cmd, explicit: true });
+    else if (explicitTargets.length === 0) out.unknownCwd = true;
+    for (const w of explicitTargets) push(w, "search", cmd !== "tar" && cmd !== "zip");
+    return cwd;
+  }
+  if (LIST_ARGS.has(cmd)) {
+    if (cmd === "ls" && targets.length === 0) {
+      if (cwd !== void 0) out.refs.push({ path: cwd, kind: "list", raw: ".", command: cmd, explicit: true });
+      else out.unknownCwd = true;
+    }
+    for (const w of targets) push(w, "list");
+    return cwd;
+  }
+  if (WRITE_ARGS.has(cmd)) {
+    for (const w of targets) push(w, "write");
+    return cwd;
+  }
+  if (cmd === "cp" || cmd === "mv" || cmd === "ln" || cmd === "install") {
+    for (const [idx, w] of targets.entries()) push(w, idx === targets.length - 1 && targets.length > 1 ? "write" : "read");
+    return cwd;
+  }
+  if (cmd === "sed" && !flags.some((f) => f === "-e" || f === "-f")) {
+    for (const w of targets.slice(1)) push(w, "read");
+    return cwd;
+  }
+  if (cmd === "awk" && !flags.some((f) => f === "-f")) {
+    for (const w of targets.slice(1)) push(w, "read");
+    return cwd;
+  }
+  for (const w of targets) push(w, "read");
+  return cwd;
+}
+function findRoots(words) {
+  const roots = [];
+  let j = commandIndex(words) + 1;
+  while (j < words.length && /^-[HLP]$/.test(words[j].text)) j++;
+  for (; j < words.length; j++) {
+    const t = words[j].text;
+    if (t.startsWith("-") || t === "(" || t === "!") break;
+    roots.push(words[j]);
+  }
+  return roots;
+}
+var GIT_CONTENT = /* @__PURE__ */ new Set(["diff", "show", "log", "grep", "blame", "annotate", "cat-file", "archive", "format-patch", "whatchanged", "stash"]);
+var GIT_NAMES_ONLY = [
+  "--stat",
+  "--name-only",
+  "--name-status",
+  "--numstat",
+  "--shortstat",
+  "--quiet",
+  "--no-patch",
+  "-s",
+  "--oneline",
+  "--summary",
+  "--exit-code",
+  "--dirstat"
+];
+function analyzeGit(pos, dashAt, flags, cwd, out, pushAs) {
+  const sub = pos[0]?.text ?? "";
+  const rest = pos.slice(1);
+  const push = (w, kind, force = false) => pushAs(w, kind, force, `git ${sub}`);
+  for (const w of rest) {
+    const m = /^[^:\s]*:(.+)$/.exec(w.text);
+    if (m && !w.text.includes("://") && (sub === "show" || sub === "cat-file")) push({ ...w, text: m[1] }, "read", true);
+  }
+  if (!GIT_CONTENT.has(sub)) {
+    for (const w of rest) push(w, "list");
+    return;
+  }
+  const namesOnly = flags.some((f) => GIT_NAMES_ONLY.includes(f.split("=")[0]));
+  const logWithoutPatch = (sub === "log" || sub === "whatchanged") && !flags.some((f) => /^(?:-p|-u|--patch|-L.*|--full-diff|-G.*|-S.*)$/.test(f));
+  const stashWithoutPatch = sub === "stash" && !(rest[0]?.text === "show" && flags.some((f) => f === "-p" || f === "--patch"));
+  if (namesOnly && sub !== "grep" || logWithoutPatch || stashWithoutPatch) {
+    for (const w of rest) push(w, "list");
+    return;
+  }
+  const candidates = dashAt !== -1 ? pos.slice(Math.max(dashAt, 1)) : (sub === "grep" ? rest.slice(1) : rest).filter((w) => exists(resolve(cwd ?? "/", expandHome(w.text))));
+  const pathspecs = candidates.filter((w) => !w.text.includes(DYN));
+  if (pathspecs.length === 0) {
+    if (cwd === void 0) out.unknownCwd = true;
+    else out.refs.push({ path: cwd, kind: "search", raw: ".", command: `git ${sub}`, explicit: true });
+    return;
+  }
+  for (const w of pathspecs) push(w, "search", true);
+}
 
 // src/vault/vault.ts
 import { randomBytes } from "crypto";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { homedir as homedir2 } from "os";
+import { join as join2 } from "path";
 
 // src/vault/placeholder.ts
 import { createHmac } from "crypto";
@@ -20,7 +765,7 @@ var PLACEHOLDER_RE = /SECRETGATE_[0-9a-f]{12,16}/g;
 
 // src/vault/vault.ts
 function defaultVaultHome() {
-  return process.env.SECRETGATE_HOME ?? join(homedir(), ".secretgate");
+  return process.env.SECRETGATE_HOME ?? join2(homedir2(), ".secretgate");
 }
 function writeFileAtomic(path, content, mode) {
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
@@ -38,7 +783,7 @@ var Vault = class {
   saltValue;
   constructor(home = defaultVaultHome()) {
     this.home = home;
-    this.vaultPath = join(home, "vault.json");
+    this.vaultPath = join2(home, "vault.json");
   }
   ensureHome() {
     mkdirSync(this.home, { recursive: true, mode: 448 });
@@ -46,7 +791,7 @@ var Vault = class {
   salt() {
     if (this.saltValue) return this.saltValue;
     this.ensureHome();
-    const saltPath = join(this.home, "salt");
+    const saltPath = join2(this.home, "salt");
     try {
       this.saltValue = readFileSync(saltPath, "utf8").trim();
     } catch {
@@ -105,190 +850,6 @@ var Vault = class {
   }
 };
 
-// src/config.ts
-function readJson(path) {
-  try {
-    return JSON.parse(readFileSync2(path, "utf8"));
-  } catch {
-    return void 0;
-  }
-}
-function loadConfig(cwd) {
-  const home = defaultVaultHome();
-  const base = readJson(join2(home, "config.json")) ?? {};
-  const allow = readJson(join2(home, "allowlist.json")) ?? {};
-  const project = cwd ? readJson(join2(cwd, ".secretgate.json")) ?? {} : {};
-  const merged = {
-    sha256: [...allow.sha256 ?? [], ...project.allowlist?.sha256 ?? []],
-    rules: [...allow.rules ?? [], ...project.allowlist?.rules ?? []],
-    paths: [...allow.paths ?? [], ...project.allowlist?.paths ?? []]
-  };
-  return {
-    restoreBash: base.restoreBash === true,
-    hybrid: base.hybrid === "off" ? "off" : "auto",
-    allowlist: merged
-  };
-}
-
-// src/disable.ts
-import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync as closeSync2, mkdirSync as mkdirSync2, openSync as openSync2, readFileSync as readFileSync3, realpathSync, renameSync as renameSync2, writeSync as writeSync2 } from "fs";
-import { basename, dirname, join as join3, resolve, sep } from "path";
-var NOT_DISABLED = { disabled: false };
-var SESSION_INDEX_MAX = 20;
-function disablePath() {
-  return join3(defaultVaultHome(), "disabled.json");
-}
-function sessionIndexPath() {
-  return join3(defaultVaultHome(), "sessions.json");
-}
-function writeFileAtomic2(path, content, mode) {
-  mkdirSync2(defaultVaultHome(), { recursive: true, mode: 448 });
-  const tmp = `${path}.${process.pid}.${randomBytes2(4).toString("hex")}.tmp`;
-  const fd = openSync2(tmp, "w", mode);
-  try {
-    writeSync2(fd, content);
-  } finally {
-    closeSync2(fd);
-  }
-  renameSync2(tmp, path);
-}
-function readJson2(path) {
-  try {
-    return JSON.parse(readFileSync3(path, "utf8"));
-  } catch {
-    return void 0;
-  }
-}
-function emptyDisableFile() {
-  return { version: 1, sessions: {}, paths: {} };
-}
-function readDisableFile() {
-  const parsed = readJson2(disablePath());
-  if (parsed?.version !== 1) return emptyDisableFile();
-  return {
-    version: 1,
-    sessions: isRecord(parsed.sessions) ? parsed.sessions : {},
-    paths: isRecord(parsed.paths) ? parsed.paths : {}
-  };
-}
-function isRecord(v) {
-  return v !== null && typeof v === "object" && !Array.isArray(v);
-}
-function isLive(entry, now) {
-  if (!entry) return false;
-  if (entry.until === null) return true;
-  const until = Date.parse(String(entry.until));
-  return Number.isFinite(until) && until > now;
-}
-function envDisabled() {
-  const raw = (process.env.SECRETGATE_DISABLE ?? "").trim().toLowerCase();
-  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
-}
-function canonical(p) {
-  let head = resolve(p);
-  const tail = [];
-  for (; ; ) {
-    try {
-      return join3(realpathSync(head), ...[...tail].reverse());
-    } catch {
-      const parent = dirname(head);
-      if (parent === head) return resolve(p);
-      tail.push(basename(head));
-      head = parent;
-    }
-  }
-}
-function covers(dir, cwd) {
-  const a = canonical(dir);
-  const b = canonical(cwd);
-  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
-}
-function disableState(ctx = {}) {
-  if (envDisabled()) return { disabled: true, scope: "env" };
-  const now = Date.now();
-  const file = readDisableFile();
-  if (ctx.sessionId) {
-    const entry = file.sessions[ctx.sessionId];
-    if (isLive(entry, now))
-      return { disabled: true, scope: "session", until: entry?.until ?? void 0, target: ctx.sessionId, ...entry?.lifetime ? { lifetime: true } : {} };
-  }
-  if (ctx.cwd) {
-    for (const [dir, entry] of Object.entries(file.paths)) {
-      if (isLive(entry, now) && covers(dir, ctx.cwd)) return { disabled: true, scope: "path", until: entry.until ?? void 0, target: dir };
-    }
-  }
-  return NOT_DISABLED;
-}
-function readSessionIndex() {
-  const parsed = readJson2(sessionIndexPath());
-  if (parsed?.version !== 1 || !isRecord(parsed.sessions)) return {};
-  return parsed.sessions;
-}
-var bySeqDesc = (a, b) => (b[1]?.seq ?? 0) - (a[1]?.seq ?? 0);
-function recordSession(sessionId, cwd) {
-  if (!sessionId || !cwd) return;
-  try {
-    const sessions = readSessionIndex();
-    if (sessions[sessionId]?.cwd === cwd) return;
-    const nextSeq = Math.max(0, ...Object.values(sessions).map((e) => e?.seq ?? 0)) + 1;
-    sessions[sessionId] = { cwd, lastSeen: (/* @__PURE__ */ new Date()).toISOString(), seq: nextSeq };
-    const trimmed = Object.entries(sessions).sort(bySeqDesc).slice(0, SESSION_INDEX_MAX);
-    writeFileAtomic2(sessionIndexPath(), JSON.stringify({ version: 1, sessions: Object.fromEntries(trimmed) }, null, 2), 384);
-  } catch {
-  }
-}
-
-// src/paths.ts
-import { homedir as homedir2 } from "os";
-import { relative, resolve as resolve2 } from "path";
-
-// src/engine/allowlist.ts
-import { createHash } from "crypto";
-function sha256(value) {
-  return createHash("sha256").update(value).digest("hex");
-}
-function isAllowedValue(secret, allowlist) {
-  if (!allowlist?.sha256?.length) return false;
-  const h = sha256(secret);
-  return allowlist.sha256.includes(h);
-}
-function isDisabledRule(ruleId, allowlist) {
-  return allowlist?.rules?.includes(ruleId) ?? false;
-}
-function pathMatchesGlob(path, glob, caseInsensitive = false) {
-  let re = "";
-  let i = 0;
-  while (i < glob.length) {
-    const c = glob[i];
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        if (glob[i + 2] === "/") {
-          re += "(?:.*/)?";
-          i += 3;
-        } else {
-          re += ".*";
-          i += 2;
-        }
-      } else {
-        re += "[^/]*";
-        i++;
-      }
-    } else if (c === "?") {
-      re += "[^/]";
-      i++;
-    } else {
-      re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-      i++;
-    }
-  }
-  return new RegExp(`^(?:${re})$`, caseInsensitive ? "i" : "").test(path);
-}
-function isAllowedPath(path, allowlist) {
-  if (!path || !allowlist?.paths?.length) return false;
-  return allowlist.paths.some((g) => pathMatchesGlob(path, g));
-}
-
 // src/paths.ts
 var SENSITIVE_GLOBS = [
   "**/.env",
@@ -304,52 +865,738 @@ var SENSITIVE_GLOBS = [
   "**/.npmrc",
   "**/.netrc",
   "**/.docker/config.json",
-  "**/credentials.json"
+  "**/credentials.json",
+  "**/.envrc",
+  "**/.dev.vars",
+  "**/.git-credentials",
+  "**/.pgpass",
+  "**/.pypirc",
+  "**/*.p12",
+  "**/*.pfx",
+  "**/*.tfstate",
+  "**/*.tfstate.backup"
 ];
 var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
-function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
-  const normalized = path.replaceAll("\\", "/");
-  const expanded = normalized.startsWith("~/") ? `${homedir2()}/${normalized.slice(2)}` : normalized;
-  const absolute = resolve2(cwd, expanded).replaceAll("\\", "/");
-  if ([normalized, absolute, relative(cwd, absolute).replaceAll("\\", "/")].some((p) => isAllowedPath(p, allowlist))) return void 0;
-  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g, true))) return void 0;
-  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g, true));
+var CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+function canonical(p) {
+  let head = resolve2(expandHome(p));
+  const tail = [];
+  for (; ; ) {
+    try {
+      return join3(realpathSync(head), ...[...tail].reverse());
+    } catch {
+      const parent = dirname2(head);
+      if (parent === head) return resolve2(expandHome(p));
+      tail.push(basename2(head));
+      head = parent;
+    }
+  }
 }
-var READ_COMMANDS = /* @__PURE__ */ new Set([
+function fold(p) {
+  return CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
+}
+function covers(dir, p) {
+  const a = fold(canonical(dir));
+  const b = fold(canonical(p));
+  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
+}
+function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
+  const normalized = expandHome(path.replaceAll("\\", "/"));
+  const absolute2 = resolve2(cwd, normalized).replaceAll("\\", "/");
+  const real = canonical(absolute2).replaceAll("\\", "/");
+  const spellings = [.../* @__PURE__ */ new Set([normalized, absolute2, real])];
+  const resolvedForms = [absolute2, real, relative(cwd, absolute2).replaceAll("\\", "/"), relative(canonical(cwd), real).replaceAll("\\", "/")];
+  if (resolvedForms.some((p) => !p.split("/").includes("..") && isAllowedPath(p, allowlist))) return void 0;
+  const vaultHome = defaultVaultHome();
+  if (covers(join3(vaultHome, "vault.json"), real) || covers(join3(vaultHome, "salt"), real)) return "secretgate vault";
+  for (const p of spellings) {
+    if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(p, g, true))) continue;
+    const hit = SENSITIVE_GLOBS.find((g) => pathMatchesGlob(p, g, true));
+    if (hit) return hit;
+  }
+  return void 0;
+}
+function commandTouchesSensitivePath(command, allowlist, cwd = process.cwd()) {
+  const analysis = analyzeShell(command, { cwd });
+  for (const ref of analysis.refs) {
+    if (ref.kind === "write" || ref.kind === "list") continue;
+    if (sensitivePathMatch(ref.path, allowlist, cwd)) return ref.raw;
+  }
+  return void 0;
+}
+
+// src/config.ts
+function readJsonFile(path) {
+  let raw;
+  try {
+    raw = readFileSync2(path, "utf8");
+  } catch {
+    return { ok: false, missing: true, message: "unreadable" };
+  }
+  try {
+    return { ok: true, value: JSON.parse(raw) };
+  } catch {
+    return { ok: false, missing: false, message: "not valid JSON" };
+  }
+}
+var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
+function strings(v) {
+  return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.length > 0) : [];
+}
+function validateAllowlist(v, where) {
+  if (v === void 0) return {};
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error(`${where} must be an object`);
+  const a = v;
+  for (const key of ["sha256", "rules", "paths"]) {
+    if (a[key] !== void 0 && !isStringArray(a[key])) throw new Error(`${where}.${key} must be an array of non-empty strings`);
+  }
+  return { sha256: a.sha256, rules: a.rules, paths: a.paths };
+}
+function validateScope(v, root, file) {
+  if (v === void 0) return void 0;
+  if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("scope must be an object");
+  const s = v;
+  for (const key of Object.keys(s)) if (!["allow", "deny", "bash"].includes(key)) throw new Error(`scope.${key} is not a known key (allow, deny, bash)`);
+  if (s.allow !== void 0 && !isStringArray(s.allow)) throw new Error("scope.allow must be an array of non-empty glob strings");
+  if (s.deny !== void 0 && !isStringArray(s.deny)) throw new Error("scope.deny must be an array of non-empty glob strings");
+  if (s.bash !== void 0 && s.bash !== "paths" && s.bash !== "strict") throw new Error('scope.bash must be "paths" or "strict"');
+  if (s.allow === void 0 && s.deny === void 0) throw new Error("scope needs an allow or a deny list");
+  return {
+    root,
+    allow: s.allow,
+    deny: s.deny,
+    bash: s.bash ?? "paths",
+    file
+  };
+}
+function projectConfigFiles(cwd) {
+  const files = [];
+  const home = resolve3(homedir3());
+  let dir = resolve3(cwd);
+  for (; ; ) {
+    if (dir === home) break;
+    const file = join4(dir, ".secretgate.json");
+    if (existsSync(file)) files.push(file);
+    if (existsSync(join4(dir, ".git"))) break;
+    const parent = dirname3(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return files;
+}
+function loadConfig(cwd) {
+  const home = defaultVaultHome();
+  const baseRead = readJsonFile(join4(home, "config.json"));
+  const base = baseRead.ok && baseRead.value && typeof baseRead.value === "object" ? baseRead.value : {};
+  const allowRead = readJsonFile(join4(home, "allowlist.json"));
+  const allow = allowRead.ok && allowRead.value && typeof allowRead.value === "object" ? allowRead.value : {};
+  const merged = { sha256: strings(allow.sha256), rules: strings(allow.rules), paths: strings(allow.paths) };
+  const forScan = { sha256: [...merged.sha256], rules: [...merged.rules], paths: [...merged.paths] };
+  const scopes = [];
+  const untrusted = [];
+  let error;
+  const trust = cwd ? readTrust() : {};
+  for (const file of cwd ? projectConfigFiles(cwd) : []) {
+    const read = readJsonFile(file);
+    try {
+      if (!read.ok) throw new Error(read.message);
+      if (read.value === null || typeof read.value !== "object" || Array.isArray(read.value)) throw new Error("must be a JSON object");
+      const project = read.value;
+      const list = validateAllowlist(project.allowlist, "allowlist");
+      const scope = validateScope(project.scope, canonical(dirname3(file)), file);
+      const entries = (list.sha256?.length ?? 0) + (list.rules?.length ?? 0) + (list.paths?.length ?? 0);
+      const targets = trust[canonical(file)] === fileHash(file) ? [merged, forScan] : [forScan];
+      if (entries > 0 && targets.length === 1) untrusted.push(file);
+      for (const t of targets) {
+        t.sha256.push(...list.sha256 ?? []);
+        t.rules.push(...list.rules ?? []);
+        t.paths.push(...list.paths ?? []);
+      }
+      if (scope) scopes.push(scope);
+    } catch (err) {
+      error ??= { file, message: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  return {
+    restoreBash: base.restoreBash === true,
+    hybrid: base.hybrid === "off" ? "off" : "auto",
+    allowlist: merged,
+    scanAllowlist: forScan,
+    untrusted,
+    scopes,
+    ...error ? { error } : {}
+  };
+}
+function trustPath() {
+  return join4(defaultVaultHome(), "trusted.json");
+}
+function fileHash(file) {
+  try {
+    return createHash2("sha256").update(readFileSync2(file)).digest("hex");
+  } catch {
+    return void 0;
+  }
+}
+function readTrust() {
+  const read = readJsonFile(trustPath());
+  if (!read.ok || !read.value || typeof read.value !== "object") return {};
+  const files = read.value.files;
+  return files && typeof files === "object" && !Array.isArray(files) ? files : {};
+}
+
+// src/disable.ts
+import { randomBytes as randomBytes2 } from "crypto";
+import { closeSync as closeSync2, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync3, renameSync as renameSync3, writeSync as writeSync2 } from "fs";
+import { join as join5 } from "path";
+var NOT_DISABLED = { disabled: false };
+var SESSION_INDEX_MAX = 20;
+var MAX_DISABLE_MINUTES = 1440;
+function disablePath() {
+  return join5(defaultVaultHome(), "disabled.json");
+}
+function sessionIndexPath() {
+  return join5(defaultVaultHome(), "sessions.json");
+}
+function writeFileAtomic2(path, content, mode) {
+  mkdirSync3(defaultVaultHome(), { recursive: true, mode: 448 });
+  const tmp = `${path}.${process.pid}.${randomBytes2(4).toString("hex")}.tmp`;
+  const fd = openSync2(tmp, "w", mode);
+  try {
+    writeSync2(fd, content);
+  } finally {
+    closeSync2(fd);
+  }
+  renameSync3(tmp, path);
+}
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync3(path, "utf8"));
+  } catch {
+    return void 0;
+  }
+}
+function emptyDisableFile() {
+  return { version: 1, sessions: {}, paths: {} };
+}
+function readDisableFile() {
+  const parsed = readJson(disablePath());
+  if (parsed?.version !== 1) return emptyDisableFile();
+  return {
+    version: 1,
+    sessions: isRecord(parsed.sessions) ? parsed.sessions : {},
+    paths: isRecord(parsed.paths) ? parsed.paths : {}
+  };
+}
+function isRecord(v) {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+function isLive(entry, now) {
+  if (!entry) return false;
+  if (entry.ceiling !== void 0) {
+    const ceiling = Date.parse(String(entry.ceiling));
+    if (!Number.isFinite(ceiling) || ceiling <= now) return false;
+  }
+  if (entry.until === null) return true;
+  const until = Date.parse(String(entry.until));
+  return Number.isFinite(until) && until > now;
+}
+function prune(file, now) {
+  const keepPaths = Object.fromEntries(Object.entries(file.paths).filter(([, e]) => isLive(e, now)));
+  const live = liveSessionIds();
+  const keepSessions = Object.fromEntries(Object.entries(file.sessions).filter(([id, e]) => isLive(e, now) && !(e.lifetime === true && !live.has(id))));
+  return { version: 1, sessions: keepSessions, paths: keepPaths };
+}
+function liveSessionIds() {
+  return new Set(Object.keys(readSessionIndex()));
+}
+function envDisabled() {
+  const raw = (process.env.SECRETGATE_DISABLE ?? "").trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+function disableState(ctx = {}) {
+  if (envDisabled()) return { disabled: true, scope: "env" };
+  const now = Date.now();
+  const file = readDisableFile();
+  if (ctx.sessionId) {
+    const entry = file.sessions[ctx.sessionId];
+    if (isLive(entry, now))
+      return {
+        disabled: true,
+        scope: "session",
+        until: entry?.until ?? void 0,
+        target: ctx.sessionId,
+        ...entry?.lifetime ? { lifetime: true } : {},
+        ...entry?.liftScope ? { includesScope: true } : {}
+      };
+  }
+  if (ctx.cwd) {
+    for (const [dir, entry] of Object.entries(file.paths)) {
+      if (isLive(entry, now) && covers(dir, ctx.cwd))
+        return { disabled: true, scope: "path", until: entry.until ?? void 0, target: dir, ...entry.liftScope ? { includesScope: true } : {} };
+    }
+  }
+  return NOT_DISABLED;
+}
+function addPause(req) {
+  const now = Date.now();
+  const file = prune(readDisableFile(), now);
+  const lifetime = req.scope === "session" && req.lifetime === true;
+  const until = lifetime || req.minutes === null ? null : new Date(now + Math.min(req.minutes, MAX_DISABLE_MINUTES) * 6e4).toISOString();
+  const entry = req.scope === "session" && req.cwd ? { until, cwd: req.cwd } : { until };
+  if (req.liftScope) entry.liftScope = true;
+  if (lifetime) {
+    entry.lifetime = true;
+    entry.ceiling = new Date(now + MAX_DISABLE_MINUTES * 6e4).toISOString();
+  }
+  file[req.scope === "session" ? "sessions" : "paths"][req.target] = entry;
+  writeFileAtomic2(disablePath(), JSON.stringify(file, null, 2), 384);
+  return until;
+}
+function removePause(scope, target) {
+  const file = prune(readDisableFile(), Date.now());
+  const bucket = file[scope === "session" ? "sessions" : "paths"];
+  const keys = scope === "path" ? Object.keys(bucket).filter((d) => covers(d, target)) : target in bucket ? [target] : [];
+  for (const key of keys) delete bucket[key];
+  writeFileAtomic2(disablePath(), JSON.stringify(file, null, 2), 384);
+  return keys;
+}
+function readSessionIndex() {
+  const parsed = readJson(sessionIndexPath());
+  if (parsed?.version !== 1 || !isRecord(parsed.sessions)) return {};
+  return parsed.sessions;
+}
+var bySeqDesc = (a, b) => (b[1]?.seq ?? 0) - (a[1]?.seq ?? 0);
+function recordSession(sessionId, cwd) {
+  if (!sessionId || !cwd) return;
+  try {
+    const sessions = readSessionIndex();
+    const maxSeq = Math.max(0, ...Object.values(sessions).map((e) => e?.seq ?? 0));
+    if (sessions[sessionId]?.cwd === cwd && sessions[sessionId]?.seq === maxSeq) return;
+    const nextSeq = maxSeq + 1;
+    sessions[sessionId] = { cwd, lastSeen: (/* @__PURE__ */ new Date()).toISOString(), seq: nextSeq };
+    const trimmed = Object.entries(sessions).sort(bySeqDesc).slice(0, SESSION_INDEX_MAX);
+    writeFileAtomic2(sessionIndexPath(), JSON.stringify({ version: 1, sessions: Object.fromEntries(trimmed) }, null, 2), 384);
+  } catch {
+  }
+}
+
+// src/hooks/policy.ts
+import { homedir as homedir5 } from "os";
+import { basename as basename4, dirname as dirname5, join as join7, resolve as resolve5 } from "path";
+
+// src/scope.ts
+import { lstatSync as lstatSync2, statSync } from "fs";
+import { homedir as homedir4 } from "os";
+import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute2, join as join6, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
+var fold2 = (p) => CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
+var toPosix = (p) => p.replaceAll("\\", "/");
+function absolute(path, cwd) {
+  return canonical(resolve4(cwd, expandHome(path)));
+}
+function relToRoot(scope, abs) {
+  const rel = relative2(scope.root, abs);
+  if (rel === "") return "";
+  if (rel.startsWith("..") || isAbsolute2(rel)) {
+    if (!CASE_INSENSITIVE_FS) return void 0;
+    const folded = relative2(fold2(scope.root), fold2(abs));
+    if (folded === "" || folded.startsWith("..") || isAbsolute2(folded)) return folded === "" ? "" : void 0;
+    return toPosix(abs.slice(abs.length - folded.length));
+  }
+  return toPosix(rel);
+}
+function selfAndAncestors(rel) {
+  const parts = rel.split("/");
+  return parts.map((_, i) => parts.slice(0, parts.length - i).join("/"));
+}
+var isAbsoluteGlob = (g) => g.startsWith("/") || g.startsWith("~");
+function globMatchesPath(glob, rel, abs) {
+  const g = toPosix(glob.replace(/^\.\//, ""));
+  const variants = g.endsWith("/**") ? [g, g.slice(0, -3)] : [g];
+  if (isAbsoluteGlob(g)) {
+    const expanded = variants.map((v) => toPosix(canonicalGlobBase(expandHome(v))));
+    const candidates = selfAndAncestors(toPosix(abs).replace(/^\//, "")).map((p) => `/${p}`);
+    return expanded.some((v) => candidates.some((c) => pathMatchesGlob(c, v, CASE_INSENSITIVE_FS)));
+  }
+  if (rel === void 0) return false;
+  if (rel === "") return variants.some((v) => v === "." || v === "**" || v === "");
+  return variants.some((v) => selfAndAncestors(rel).some((c) => pathMatchesGlob(c, v, CASE_INSENSITIVE_FS)));
+}
+function canonicalGlobBase(glob) {
+  const idx = glob.search(/[*?[{]/);
+  if (idx === -1) return canonical(glob);
+  const base = glob.slice(0, idx);
+  const cut = base.lastIndexOf("/");
+  if (cut <= 0) return glob;
+  return `${canonical(base.slice(0, cut))}${glob.slice(cut)}`;
+}
+function staticSegments(glob) {
+  const out = [];
+  for (const seg of toPosix(glob.replace(/^\.\//, "")).split("/")) {
+    if (/[*?[{]/.test(seg) || seg === "") break;
+    out.push(seg);
+  }
+  return out;
+}
+function describe(rel, abs) {
+  return rel === void 0 ? abs : rel === "" ? "the project root" : rel;
+}
+function pathOutOfScope(scope, path, cwd) {
+  const abs = absolute(path, cwd);
+  const rel = relToRoot(scope, abs);
+  const denied = scope.deny?.find((g) => globMatchesPath(g, rel, abs));
+  if (denied) return `'${describe(rel, abs)}' matches scope.deny '${denied}'`;
+  if (!scope.allow) return void 0;
+  if (scope.allow.some((g) => globMatchesPath(g, rel, abs))) return void 0;
+  return rel === void 0 ? `'${abs}' is outside the project root ${scope.root}` : `'${describe(rel, abs)}' is not in scope.allow`;
+}
+function leadsToAllowed(scope, abs) {
+  if (!scope.allow) return true;
+  const rel = relToRoot(scope, abs);
+  return scope.allow.some((g) => {
+    if (isAbsoluteGlob(g)) {
+      const base = canonicalGlobBase(expandHome(g));
+      const idx = base.search(/[*?[{]/);
+      return covers(abs, idx === -1 ? base : dirname4(`${base.slice(0, idx)}x`));
+    }
+    if (rel === void 0) return false;
+    if (rel === "") return true;
+    const prefix = staticSegments(g);
+    const parts = rel.split("/");
+    if (prefix.length < parts.length && toPosix(g).slice(prefix.join("/").length).replace(/^\//, "").startsWith("**")) {
+      return parts.slice(0, prefix.length).every((p, i) => fold2(p) === fold2(prefix[i]));
+    }
+    return parts.length <= prefix.length && parts.every((p, i) => fold2(p) === fold2(prefix[i]));
+  });
+}
+function denyBelow(scope, abs) {
+  const rel = relToRoot(scope, abs);
+  return scope.deny?.find((g) => {
+    if (isAbsoluteGlob(g)) {
+      const base = canonicalGlobBase(expandHome(g));
+      const idx = base.search(/[*?[{]/);
+      const staticDir = idx === -1 ? base : dirname4(`${base.slice(0, idx)}x`);
+      return covers(abs, staticDir) || covers(staticDir, abs);
+    }
+    if (rel === void 0) return false;
+    const prefix = staticSegments(g);
+    if (prefix.length === 0) return true;
+    const parts = rel === "" ? [] : rel.split("/");
+    return parts.length < prefix.length ? parts.every((p, i) => fold2(p) === fold2(prefix[i])) : false;
+  });
+}
+function isDirectory(abs) {
+  try {
+    return statSync(abs).isDirectory();
+  } catch {
+    return false;
+  }
+}
+function exists2(abs) {
+  try {
+    lstatSync2(abs);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function accessViolation(scope, path, cwd, kind) {
+  const out = pathOutOfScope(scope, path, cwd);
+  const abs = absolute(path, cwd);
+  if (kind === "read" || kind === "write") return out;
+  if (kind === "list") {
+    if (!out) return void 0;
+    const rel = relToRoot(scope, abs);
+    if (scope.deny?.some((g) => globMatchesPath(g, rel, abs))) return out;
+    return leadsToAllowed(scope, abs) ? void 0 : out;
+  }
+  if (out) return out;
+  const below = isDirectory(abs) ? denyBelow(scope, abs) : void 0;
+  if (below) return `'${describe(relToRoot(scope, abs), abs)}' contains paths matching scope.deny '${below}'`;
+  return void 0;
+}
+var STATE_ENTRIES = ["config.json", "allowlist.json", "disabled.json", "sessions.json", "trusted.json", "vault.json", "salt", "bin", "stopped-sessions"];
+function isSecretgateState(abs) {
+  const home = defaultVaultHome();
+  return STATE_ENTRIES.some((entry) => covers(join6(home, entry), abs));
+}
+function controlRoots(scope) {
+  const home = homedir4();
+  const codex = process.env.CODEX_HOME ?? join6(home, ".codex");
+  const xdg = process.env.XDG_CONFIG_HOME ?? join6(home, ".config");
+  return [codex, join6(scope.root, ".codex"), join6(xdg, "opencode"), join6(scope.root, ".opencode")];
+}
+function isControlFile(scope, path, cwd) {
+  const abs = absolute(path, cwd);
+  const name = fold2(basename3(abs));
+  if (name === ".secretgate.json") return true;
+  const parent = fold2(basename3(dirname4(abs)));
+  if (parent === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
+  if (name === "opencode.json" || name === "opencode.jsonc") return true;
+  return isSecretgateState(abs) || controlRoots(scope).some((root) => covers(root, abs));
+}
+function controlViolation(scope, path, cwd) {
+  return isControlFile(scope, path, cwd) ? `'${path}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)` : void 0;
+}
+var SAFE_READERS = /* @__PURE__ */ new Set([
   "cat",
   "head",
   "tail",
   "less",
   "more",
   "bat",
-  "xxd",
-  "od",
-  "strings",
-  "hexdump",
-  "nl",
-  "tac",
-  "base64",
-  "sed",
-  "awk",
   "grep",
+  "egrep",
+  "fgrep",
   "rg",
-  "printf",
-  "print"
+  "jq",
+  "wc",
+  "ls",
+  "stat",
+  "file",
+  "diff",
+  "cmp",
+  "nl",
+  "tree",
+  "fd"
 ]);
-function commandTouchesSensitivePath(command, allowlist, cwd) {
-  for (const segment of command.split(/[;\n]|&&|\|\||\||&/)) {
-    const tokens = segment.trim().split(/\s+/);
-    if (tokens.length === 0) continue;
-    const cmd = (tokens[0] ?? "").replace(/^.*\//, "");
-    if (!READ_COMMANDS.has(cmd)) continue;
-    for (const raw of tokens.slice(1)) {
-      if (raw.startsWith(">")) break;
-      const token = raw.replace(/^['"`]+|['"`]+$/g, "");
-      if (token.length < 2 || token.startsWith("-")) continue;
-      const hit = sensitivePathMatch(token, allowlist, cwd);
-      if (hit) return token;
+var GIT_READ_ONLY = /^git (?:diff|show|log|blame|annotate|status|grep|ls-files|cat-file|whatchanged|shortlog|add|commit|check-ignore)$/;
+function searchAdvice(scope) {
+  const target = scope.allow?.map((g) => staticSegments(g).join("/")).find((p) => p.length > 0);
+  return target ? ` \u2014 point it at an in-scope directory explicitly (e.g. ${target}/)` : "";
+}
+function shellViolation(scope, command, cwd, workdir) {
+  const base = workdir ? resolve4(cwd, expandHome(workdir)) : cwd;
+  if (workdir) {
+    const v = accessViolation(scope, base, cwd, "list");
+    if (v) return `working directory ${v}`;
+  }
+  const text = Array.isArray(command) ? command.join(" ") : command;
+  if (/(?:^|[\s;&|(/])secretgate(?:\.mjs)?["']?\s+uninstall\b/.test(text)) return "uninstalling secretgate is not allowed while a scope is active";
+  const analysis = analyzeShell(command, { cwd: base });
+  if (scope.bash === "strict" && analysis.dynamic.length > 0) {
+    return `scope.bash is "strict" and this command uses ${analysis.dynamic.slice(0, 3).join(", ")}, which cannot be checked statically \u2014 spell the paths out`;
+  }
+  if (analysis.unknownCwd) return "this command changes to a directory that cannot be resolved statically, so its relative paths cannot be checked";
+  for (const ref of analysis.refs) {
+    const v = refViolation(scope, ref, base);
+    if (v) return v;
+  }
+  return void 0;
+}
+function refViolation(scope, ref, cwd) {
+  if (isControlFile(scope, ref.path, cwd) && (ref.kind === "write" || !(SAFE_READERS.has(ref.command) || GIT_READ_ONLY.test(ref.command)))) {
+    return `'${ref.raw}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)`;
+  }
+  if (!ref.explicit) return void 0;
+  const v = accessViolation(scope, ref.path, cwd, ref.kind);
+  if (!v) return void 0;
+  if (ref.kind === "search")
+    return `\`${ref.command}\` would read everything under ${ref.raw === "." ? "the working directory" : `'${ref.raw}'`}: ${v}${searchAdvice(scope)}`;
+  return v;
+}
+function searchRootOf(call, cwd) {
+  const root = resolve4(cwd, expandHome(call.searchRoot ?? "."));
+  const pattern = call.pattern ? expandHome(call.pattern) : "";
+  const idx = pattern.search(/[*?[{]/);
+  const prefix = idx === -1 ? "" : pattern.slice(0, idx);
+  const cut = prefix.lastIndexOf("/");
+  return cut === -1 ? root : resolve4(root, prefix.slice(0, cut) || "/");
+}
+function toolCallScopeViolation(scopes, call, cwd) {
+  for (const scope of scopes) {
+    const v = oneScope(scope, call, cwd);
+    if (v) return `secretgate scope (${scope.file}): ${v}.`;
+  }
+  return void 0;
+}
+function oneScope(scope, call, cwd) {
+  switch (call.kind) {
+    case "read":
+      for (const p of call.paths) {
+        const v = accessViolation(scope, p, cwd, isDirectory(absolute(p, cwd)) ? "list" : "read");
+        if (v) return v;
+      }
+      return void 0;
+    case "write":
+    case "patch":
+      for (const p of call.paths) {
+        const v = controlViolation(scope, p, cwd) ?? accessViolation(scope, p, cwd, "write");
+        if (v) return v;
+      }
+      return void 0;
+    case "list":
+      for (const p of call.paths.length > 0 ? call.paths : ["."]) {
+        const v = accessViolation(scope, p, cwd, "list");
+        if (v) return v;
+      }
+      return void 0;
+    case "search": {
+      const root = searchRootOf(call, cwd);
+      return accessViolation(scope, root, cwd, "list");
+    }
+    case "shell":
+      return call.command === void 0 ? void 0 : shellViolation(scope, call.command, cwd, call.workdir);
+    default:
+      for (const p of call.paths) {
+        const abs = resolve4(cwd, expandHome(p));
+        if (!exists2(abs)) continue;
+        const v = accessViolation(scope, p, cwd, isDirectory(abs) ? "list" : "read");
+        if (v) return v;
+      }
+      return void 0;
+  }
+}
+function lineOutOfScope(scopes, line, cwd) {
+  const trimmed = line.trim();
+  if (trimmed === "" || trimmed === "--") return void 0;
+  const candidate = /^(.+?)(?::\d+[:-]|-\d+-|:|$)/.exec(trimmed)?.[1]?.trim();
+  if (!candidate || candidate.length > 4096) return void 0;
+  const abs = resolve4(cwd, expandHome(candidate));
+  if (!exists2(abs)) return void 0;
+  return scopes.some((s) => pathOutOfScope(s, abs, cwd) !== void 0);
+}
+function filterSearchText(scopes, text, cwd) {
+  let dropping = false;
+  const kept = [];
+  for (const line of text.split("\n")) {
+    const indented = /^\s/.test(line) && line.trim() !== "";
+    if (!indented) {
+      const out = lineOutOfScope(scopes, line, cwd);
+      dropping = out === true;
+    }
+    if (!dropping) kept.push(line);
+  }
+  return kept.join("\n");
+}
+function filterSearchOutput(scopes, value, cwd) {
+  if (scopes.length === 0) return { value, changed: false };
+  if (typeof value === "string") {
+    const filtered = filterSearchText(scopes, value, cwd);
+    return { value: filtered, changed: filtered !== value };
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = [];
+    for (const item of value) {
+      if (typeof item === "string" && lineOutOfScope(scopes, item, cwd) === true) {
+        changed = true;
+        continue;
+      }
+      const r = filterSearchOutput(scopes, item, cwd);
+      changed ||= r.changed;
+      next.push(r.value);
+    }
+    return { value: next, changed };
+  }
+  if (value && typeof value === "object") {
+    let changed = false;
+    const next = {};
+    for (const [k, v] of Object.entries(value)) {
+      const r = filterSearchOutput(scopes, v, cwd);
+      changed ||= r.changed;
+      next[k] = r.value;
+    }
+    if (changed && Array.isArray(next.filenames) && typeof next.numFiles === "number") next.numFiles = next.filenames.length;
+    return { value: changed ? next : value, changed };
+  }
+  return { value, changed: false };
+}
+function promptScopeViolation(scopes, prompt, cwd) {
+  if (scopes.length === 0) return void 0;
+  for (const m of prompt.matchAll(/(?:^|[\s(])@("[^"]+"|[^\s,;)'"`]+)/g)) {
+    const raw = m[1].replace(/^"|"$/g, "").replace(/[.:]+$/, "");
+    const explicit = raw.startsWith("/") || raw.startsWith("~") || raw.startsWith("./") || raw.startsWith("../");
+    const abs = resolve4(cwd, expandHome(raw.replace(/#L?\d+(?:-\d+)?$/, "")));
+    if (!explicit && !exists2(abs)) continue;
+    for (const scope of scopes) {
+      const v = accessViolation(scope, abs, cwd, isDirectory(abs) ? "list" : "read");
+      if (v) return `secretgate scope (${scope.file}): @${raw} \u2014 ${v}. Mention an in-scope file instead.`;
     }
   }
+  return void 0;
+}
+
+// src/hooks/policy.ts
+function touchesOnly(call, file, cwd) {
+  if (call.kind !== "read" && call.kind !== "write" && call.kind !== "patch") return false;
+  return call.paths.length > 0 && call.paths.every((p) => canonical(resolve5(cwd, expandHome(p))) === canonical(file));
+}
+function guardedPath(abs, cwd) {
+  const home = homedir5();
+  const name = basename4(abs).toLowerCase();
+  if (name === ".secretgate.json") return true;
+  if (basename4(dirname5(abs)).toLowerCase() === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
+  const codex = process.env.CODEX_HOME ?? join7(home, ".codex");
+  const opencode = join7(process.env.XDG_CONFIG_HOME ?? join7(home, ".config"), "opencode");
+  return isSecretgateState(abs) || covers(join7(codex, "hooks.json"), abs) || covers(join7(codex, "config.toml"), abs) || covers(join7(opencode, "plugin"), abs) || covers(join7(opencode, "opencode.json"), abs) || name === "opencode.json" && covers(cwd, abs);
+}
+var SELF_DISABLE = /(?:^|[\s;&|(/"'`])secretgate(?:\.mjs)?["']?\s+(disable|allow|uninstall|trust|vault\s+clear)\b/;
+function tamperReason(call, cwd) {
+  if (call.kind === "shell" && call.command !== void 0) {
+    const text = Array.isArray(call.command) ? call.command.join(" ") : call.command;
+    const m = SELF_DISABLE.exec(text);
+    if (m) return `this runs \`secretgate ${m[1]}\`, which changes what secretgate protects \u2014 that is your call, not the agent's`;
+    const base = call.workdir ? resolve5(cwd, expandHome(call.workdir)) : cwd;
+    for (const ref of analyzeShell(call.command, { cwd: base }).refs) {
+      if (ref.kind === "write" && guardedPath(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
+    }
+    return void 0;
+  }
+  if (call.kind === "write" || call.kind === "patch") {
+    for (const p of call.paths)
+      if (guardedPath(canonical(resolve5(cwd, expandHome(p))), cwd)) return `this edits '${p}', which configures secretgate or its hooks`;
+  }
+  return void 0;
+}
+function patternLooksSensitive(pattern, allowlist, cwd) {
+  const name = basename4(pattern);
+  for (const probe of [name.replace(/[*?]/g, ""), name.replace(/[*?]/g, "x")]) {
+    if (probe && sensitivePathMatch(probe, allowlist, cwd)) return pattern;
+  }
+  return void 0;
+}
+function sensitiveReason(call, cfg, cwd) {
+  const deny = (target, hit) => `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. If the agent needs a value from it, reference it as an env var instead \u2014 or allow the file with \`secretgate allow --path '${target}'\`.`;
+  switch (call.kind) {
+    case "read":
+    case "other":
+      for (const p of call.paths) {
+        const hit = sensitivePathMatch(p, cfg.allowlist, cwd);
+        if (hit) return deny(p, hit);
+      }
+      return void 0;
+    case "search": {
+      for (const p of call.paths) {
+        const hit = sensitivePathMatch(p, cfg.allowlist, cwd) ?? sensitivePathMatch(join7(p, "x"), cfg.allowlist, cwd);
+        if (hit) return deny(p, hit);
+      }
+      const pattern = call.pattern ? patternLooksSensitive(call.pattern, cfg.allowlist, cwd) : void 0;
+      return pattern ? deny(pattern, "search pattern naming sensitive files") : void 0;
+    }
+    case "shell": {
+      if (call.command === void 0) return void 0;
+      const base = call.workdir ? resolve5(cwd, expandHome(call.workdir)) : cwd;
+      const touched = commandTouchesSensitivePath(call.command, cfg.allowlist, base);
+      return touched ? `secretgate: this command reads '${touched}', which looks sensitive. Its content must not enter the model.` : void 0;
+    }
+    default:
+      return void 0;
+  }
+}
+function preToolPolicy(call, cfg, cwd, opts) {
+  if (cfg.error && !touchesOnly(call, cfg.error.file, cwd)) {
+    return {
+      action: "deny",
+      reason: `secretgate: ${cfg.error.file} is invalid (${cfg.error.message}). Tool calls are refused until it is fixed, because it may declare a scope. Fix the file (the agent may read and edit it).`
+    };
+  }
+  const scope = toolCallScopeViolation(cfg.scopes, call, cwd);
+  if (scope) return { action: "deny", reason: scope };
+  if (opts.disabled) return void 0;
+  const tamper = tamperReason(call, cwd);
+  if (tamper) return { action: "ask", reason: `secretgate: ${tamper}. Approve only if you asked for it.` };
+  const sensitive = sensitiveReason(call, cfg, cwd);
+  if (sensitive) return { action: "deny", reason: sensitive };
   return void 0;
 }
 
@@ -4715,7 +5962,10 @@ var BUILTIN_RULES = [
   // captured group is the PASSWORD; a placeholder-ish value is skipped.
   {
     id: "url-credentials",
-    re: /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]*:([^\s:/@]{3,256})@[^\s]+/dgi,
+    // The scheme is bounded and anchored on a non-scheme character: `\b` fired
+    // after every `.`/`-`, making `x://a.a.a.…` quadratic (6 s on 160 KB), and
+    // the scan deadline is only checked between rules.
+    re: /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]{0,256}:([^\s:/@]{3,256})@[^\s]+/dgi,
     keywords: ["://"],
     allowlists: [],
     post: (secret) => !looksLikePlaceholder(secret),
@@ -4833,7 +6083,7 @@ function scan(text, cfg = {}) {
   }
   const lower = text.toLowerCase();
   const starts = lineStarts(text);
-  const pragmaLines = pragmaAllowedLines(text);
+  const pragmaLines = cfg.pragmas === false ? /* @__PURE__ */ new Set() : pragmaAllowedLines(text);
   const findings = [];
   const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
   for (const rule of COMPILED) {
@@ -4892,7 +6142,7 @@ function dedupe(findings) {
 
 // src/redact.ts
 function redactText(text, vault, source, cfg = {}) {
-  const findings = scan(text, cfg);
+  const findings = scan(text, { ...cfg, pragmas: cfg.pragmas ?? false });
   if (findings.length === 0) return { text, findings, replaced: [] };
   let out = text;
   const replaced = [];
@@ -4932,6 +6182,117 @@ function eventRedactor(vault, source, allowlist) {
   };
 }
 
+// src/hooks/tool-call.ts
+var SHELL = /* @__PURE__ */ new Set(["bash", "shell", "exec", "exec_command", "local_shell", "localshell", "run_command", "container.exec", "unified_exec"]);
+var READ = /* @__PURE__ */ new Set(["read", "read_file", "view", "open_file", "notebookread", "cat"]);
+var WRITE = /* @__PURE__ */ new Set(["write", "write_file", "create_file", "edit", "multiedit", "notebookedit", "str_replace", "str_replace_editor", "edit_file"]);
+var PATCH = /* @__PURE__ */ new Set(["apply_patch", "patch"]);
+var LIST = /* @__PURE__ */ new Set(["ls", "list", "list_dir", "list_directory"]);
+var SEARCH_GLOB = /* @__PURE__ */ new Set(["glob", "find_files", "file_search"]);
+var SEARCH_GREP = /* @__PURE__ */ new Set(["grep", "search", "search_files", "codesearch"]);
+var str = (v) => typeof v === "string" && v.length > 0 ? v : void 0;
+function patchPaths(patch) {
+  const out = [];
+  for (const m of patch.matchAll(/^\*\*\* (?:Add File|Update File|Delete File|Move to): *(.+?) *$/gm)) out.push(m[1]);
+  return out;
+}
+function filePaths(input) {
+  const out = [];
+  for (const key of ["file_path", "filePath", "path", "notebook_path", "notebookPath", "target_file", "file"]) {
+    const v = str(input[key]);
+    if (v) out.push(v);
+  }
+  for (const key of ["paths", "file_paths", "filePaths"]) {
+    if (Array.isArray(input[key])) {
+      for (const v of input[key]) if (str(v)) out.push(v);
+    }
+  }
+  if (Array.isArray(input.edits)) {
+    for (const e of input.edits) if (e && typeof e === "object" && str(e.file_path ?? e.filePath)) out.push(e.file_path ?? e.filePath);
+  }
+  return [...new Set(out)];
+}
+function patchText(input) {
+  for (const key of ["patchText", "patch", "input", "command", "diff"]) {
+    const v = input[key];
+    if (typeof v === "string" && v.includes("*** ")) return v;
+  }
+  return void 0;
+}
+function extractToolCall(toolName, toolInput) {
+  const name = toolName.toLowerCase().replace(/^functions\./, "").replace(/^mcp__.*__/, "");
+  if (typeof toolInput === "string") {
+    if (PATCH.has(name) || toolInput.startsWith("*** Begin Patch")) return { kind: "patch", paths: patchPaths(toolInput) };
+    if (SHELL.has(name)) return { kind: "shell", paths: [], command: toolInput };
+    return { kind: "other", paths: [] };
+  }
+  const input = toolInput && typeof toolInput === "object" ? toolInput : {};
+  if (PATCH.has(name)) {
+    const patch = patchText(input);
+    return { kind: "patch", paths: patch ? patchPaths(patch) : filePaths(input) };
+  }
+  if (SHELL.has(name)) {
+    const cmd = input.cmd ?? input.command;
+    if (typeof cmd === "string" && /^\s*apply_patch\b/.test(cmd)) return { kind: "patch", paths: patchPaths(cmd) };
+    if (Array.isArray(cmd) && cmd[0] === "apply_patch" && typeof cmd[1] === "string") return { kind: "patch", paths: patchPaths(cmd[1]) };
+    const command = typeof cmd === "string" ? cmd : Array.isArray(cmd) ? cmd.map(String) : void 0;
+    return { kind: "shell", paths: [], command, workdir: str(input.workdir) ?? str(input.cwd) };
+  }
+  if (READ.has(name)) return { kind: "read", paths: filePaths(input) };
+  if (WRITE.has(name)) return { kind: "write", paths: filePaths(input) };
+  if (LIST.has(name)) return { kind: "list", paths: filePaths(input) };
+  if (SEARCH_GLOB.has(name) || SEARCH_GREP.has(name)) {
+    const root = str(input.path) ?? str(input.directory) ?? str(input.dir);
+    const pattern = SEARCH_GLOB.has(name) ? str(input.pattern) ?? str(input.glob) : str(input.glob) ?? str(input.include);
+    return { kind: "search", paths: root ? [root] : [], searchRoot: root, pattern };
+  }
+  return { kind: "other", paths: filePaths(input) };
+}
+
+// src/prompt-directive.ts
+var NAME = String.raw`[\`'"]?secretgate[\`'"]?`;
+var COURTESY = String.raw`(?:(?:stp|svp|please|pls|merci|thanks|now|maintenant|ok|okay)[\s,.!]*)*`;
+var TAIL = String.raw`(?:\s+(?:pour|for)\s+(?:cette|ce|this|la|the)\s+(?:session|run|conversation|conv))?(?:\s+(?:stp|svp|please|merci|thanks))?\s*[.!]*`;
+var SCOPE = String.raw`(?:\s+(?:et|and|\+|avec|with|,)\s*(?:le|la|the)?\s*(?:scope|p[ée]rim[èe]tre))?`;
+var DISABLE = new RegExp(
+  String.raw`^${COURTESY}(?:d[ée]sactiv(?:e|er|ez)|coupe(?:r|z)?|mets\s+en\s+pause|disable|turn\s+off|switch\s+off|pause)\s+(?:le\s+|la\s+|the\s+)?${NAME}(${SCOPE})${TAIL}$|^${COURTESY}(?:turn\s+|switch\s+)?${NAME}\s*:?\s*off${TAIL}$`,
+  "i"
+);
+var ENABLE = new RegExp(
+  String.raw`^${COURTESY}(?:r[ée]activ(?:e|er|ez)|rallume(?:r|z)?|enable|re-?enable|turn\s+(?:back\s+)?on|resume)\s+(?:le\s+|la\s+|the\s+)?${NAME}(?:\s+back\s+on)?${TAIL}$|^${COURTESY}(?:turn\s+|switch\s+)?${NAME}\s*:?\s*(?:back\s+)?on${TAIL}$`,
+  "i"
+);
+var SKILL_DISABLE = /^[/$]secretgate\s+(?:disable|off|pause|stop|d[ée]sactiv(?:e|er|ez)?|coupe)(\s+(?:--)?(?:scope|p[ée]rim[èe]tre)|\s+(?:et|and|\+)\s+(?:le\s+|la\s+|the\s+)?(?:scope|p[ée]rim[èe]tre))?\s*[.!]*$/i;
+var SKILL_ENABLE = /^[/$]secretgate\s+(?:enable|on|resume|r[ée]activ(?:e|er|ez)?|rallume)\s*[.!]*$/i;
+function promptDirective(prompt) {
+  for (const raw of prompt.split(/\r?\n/)) {
+    const line = raw.trim().replace(/^(["'`])(.*)\1$/, "$2").trim();
+    if (line.length === 0 || line.length > 120) continue;
+    const skillOff = SKILL_DISABLE.exec(line);
+    if (skillOff) return { action: "disable", liftScope: Boolean(skillOff[1]) };
+    if (SKILL_ENABLE.test(line)) return { action: "enable" };
+    const off = DISABLE.exec(line);
+    if (off) return { action: "disable", liftScope: Boolean(off[1]) };
+    if (ENABLE.test(line)) return { action: "enable" };
+  }
+  return void 0;
+}
+function applyPromptDirective(directive, sessionId, cwd) {
+  if (!sessionId) {
+    return "secretgate: this agent did not report a session id, so it cannot be paused from the conversation \u2014 run `secretgate disable --session` in a terminal instead.";
+  }
+  if (directive.action === "enable") {
+    const cleared = removePause("session", sessionId);
+    return cleared.length > 0 ? "secretgate: re-enabled for this session, at your request. Prompts, tool input and tool output are scanned again." : "secretgate: already active for this session.";
+  }
+  addPause({ scope: "session", target: sessionId, minutes: null, cwd, lifetime: true, liftScope: directive.liftScope });
+  return [
+    "secretgate: DISABLED for this session only, at your request \u2014 prompts, tool input and tool output are no longer scanned until the session ends (24 h at most).",
+    directive.liftScope ? "The project scope is lifted too." : "A project scope, if any, stays enforced (say \u201Cd\xE9sactive secretgate et le scope\u201D to lift it too).",
+    "Say \u201Cr\xE9active secretgate\u201D to turn it back on. A new session is protected automatically."
+  ].join(" ");
+}
+
 // src/adapters/opencode-plugin.ts
 var ALLOW_TAG = "[allow-secret]";
 function mutateStringsInPlace(container, fn) {
@@ -4960,11 +6321,27 @@ function mutateStringsInPlace(container, fn) {
   return pending.length > 0;
 }
 var RESTORE_TOOLS = /* @__PURE__ */ new Set(["write", "edit", "patch", "apply_patch", "multiedit"]);
-var READ_TOOLS = /* @__PURE__ */ new Set(["read", "grep"]);
+function attachedPath(part) {
+  if (typeof part.url === "string" && part.url.startsWith("file:")) {
+    try {
+      return fileURLToPath(part.url);
+    } catch {
+      return void 0;
+    }
+  }
+  if (typeof part.source?.path === "string") return part.source.path;
+  if (part.synthetic && typeof part.text === "string") return /"filePath":\s*"((?:[^"\\]|\\.)*)"/.exec(part.text)?.[1];
+  return void 0;
+}
 var SecretgatePlugin = async (ctx) => {
   const directory = ctx?.directory;
   const cwd = typeof directory === "string" ? directory : process.cwd();
-  const isOff = (sessionId) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : void 0 }).disabled;
+  const offState = (sessionId) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : void 0 });
+  const isOff = (sessionId) => offState(sessionId).disabled;
+  const configFor = (sessionId) => {
+    const cfg = loadConfig(cwd);
+    return offState(sessionId).includesScope ? { ...cfg, scopes: [], error: void 0 } : cfg;
+  };
   return {
     // OpenCode keeps rewritten args in tool history, including failed calls.
     // Redact that history immediately before it is converted to model messages.
@@ -4985,15 +6362,42 @@ var SecretgatePlugin = async (ctx) => {
     "chat.message": async (input, output) => {
       const sessionID = input?.sessionID;
       recordSession(typeof sessionID === "string" ? sessionID : void 0, cwd);
-      if (isOff(sessionID)) return;
       const parts = output?.parts;
       if (!Array.isArray(parts)) return;
-      if (parts.some((p) => typeof p?.text === "string" && p.text.includes(ALLOW_TAG))) return;
+      const said = parts.find(
+        (p) => typeof p?.text === "string" && !p.synthetic && (p.type === void 0 || p.type === "text") && promptDirective(String(p.text))
+      );
+      if (said) {
+        const notice = applyPromptDirective(promptDirective(String(said.text)), typeof sessionID === "string" ? sessionID : void 0, cwd);
+        said.text = `${said.text}
+
+[${notice}]`;
+      }
+      const cfg = configFor(sessionID);
+      if (cfg.scopes.length > 0) {
+        for (const part of parts) {
+          if (!part || typeof part !== "object") continue;
+          const path = attachedPath(part);
+          const why = path ? cfg.scopes.map((s) => accessViolation(s, path, cwd, "read")).find(Boolean) : void 0;
+          if (why) {
+            for (const key of ["url", "filename", "mime", "source"]) delete part[key];
+            part.type = "text";
+            part.text = `[secretgate: an attachment was removed \u2014 ${why}]`;
+            continue;
+          }
+          if (typeof part.text === "string" && !part.synthetic) {
+            const mention = promptScopeViolation(cfg.scopes, part.text, cwd);
+            if (mention) throw new Error(mention);
+          }
+        }
+      }
+      if (isOff(sessionID)) return;
+      const typed = (p) => typeof p?.text === "string" && !p.synthetic && (p.type === void 0 || p.type === "text");
+      const bypass = parts.some((p) => typed(p) && String(p.text).includes(ALLOW_TAG));
       try {
-        const cfg = loadConfig(cwd);
         const vault = new Vault();
         const redact = eventRedactor(vault, "opencode:prompt", cfg.allowlist);
-        const mapped = parts.map((part) => typeof part?.text === "string" ? redact(part.text) : void 0);
+        const mapped = parts.map((part) => typeof part?.text === "string" && !(bypass && typed(part)) ? redact(part.text) : void 0);
         parts.forEach((part, i) => {
           if (mapped[i] !== void 0) part.text = mapped[i];
         });
@@ -5004,22 +6408,12 @@ var SecretgatePlugin = async (ctx) => {
     "tool.execute.before": async (input, output) => {
       const tool = String(input?.tool ?? "").toLowerCase();
       const args = output?.args ?? {};
-      const cfg = loadConfig(cwd);
-      const off = isOff(input?.sessionID);
-      if (!off && READ_TOOLS.has(tool)) {
-        const target = typeof args.filePath === "string" ? args.filePath : typeof args.path === "string" ? args.path : void 0;
-        const hit = target ? sensitivePathMatch(target, cfg.allowlist, cwd) : void 0;
-        if (hit) {
-          throw new Error(
-            `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. Allow it with \`secretgate allow --path '${target}'\` if this is intentional.`
-          );
-        }
-      }
-      if (!off && tool === "bash" && typeof args.command === "string") {
-        const touched = commandTouchesSensitivePath(args.command, cfg.allowlist, cwd);
-        if (touched) {
-          throw new Error(`secretgate: this command touches '${touched}', which looks sensitive; its content must not enter the model.`);
-        }
+      const cfg = configFor(input?.sessionID);
+      const decision = preToolPolicy(extractToolCall(tool, args), cfg, cwd, { disabled: isOff(input?.sessionID) });
+      if (decision) {
+        throw new Error(
+          decision.action === "ask" ? `${decision.reason} OpenCode plugins cannot ask for approval, so this was refused: run it yourself if you meant it.` : decision.reason
+        );
       }
       const restoreThis = RESTORE_TOOLS.has(tool) || tool === "bash" && cfg.restoreBash;
       if (restoreThis) {
@@ -5028,10 +6422,14 @@ var SecretgatePlugin = async (ctx) => {
       }
     },
     "tool.execute.after": async (input, output) => {
-      if (isOff(input?.sessionID)) return;
       const tool = String(input?.tool ?? "").toLowerCase();
       try {
-        const cfg = loadConfig(cwd);
+        const cfg = configFor(input?.sessionID);
+        const kind = extractToolCall(tool, input?.args).kind;
+        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list") && typeof output?.output === "string") {
+          output.output = filterSearchOutput(cfg.scopes, output.output, cwd).value;
+        }
+        if (isOff(input?.sessionID)) return;
         const vault = new Vault();
         mutateStringsInPlace(output, eventRedactor(vault, `opencode:${tool}`, cfg.allowlist));
       } catch {

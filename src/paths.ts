@@ -1,6 +1,10 @@
-import { homedir } from "node:os";
-import { relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { isAllowedPath, pathMatchesGlob, type UserAllowlist } from "./engine/allowlist.js";
+import { analyzeShell, expandHome } from "./shell-paths.js";
+import { defaultVaultHome } from "./vault/vault.js";
+
+export { expandHome } from "./shell-paths.js";
 
 // Files whose CONTENT is assumed sensitive: the firewall denies reading them
 // outright (first line of defense — the secret never even enters a tool
@@ -21,69 +25,92 @@ export const SENSITIVE_GLOBS = [
   "**/.netrc",
   "**/.docker/config.json",
   "**/credentials.json",
+  "**/.envrc",
+  "**/.dev.vars",
+  "**/.git-credentials",
+  "**/.pgpass",
+  "**/.pypirc",
+  "**/*.p12",
+  "**/*.pfx",
+  "**/*.tfstate",
+  "**/*.tfstate.backup",
 ];
 
 // Template/sample files exist to be read — never sensitive.
 export const EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
 
-// Globs above are rooted with `**/` so they match absolute and relative paths
-// alike; `~` is expanded by the caller when needed.
-export function sensitivePathMatch(path: string, allowlist?: UserAllowlist, cwd = process.cwd()): string | undefined {
-  const normalized = path.replaceAll("\\", "/");
-  const expanded = normalized.startsWith("~/") ? `${homedir()}/${normalized.slice(2)}` : normalized;
-  const absolute = resolve(cwd, expanded).replaceAll("\\", "/");
-  if ([normalized, absolute, relative(cwd, absolute).replaceAll("\\", "/")].some((p) => isAllowedPath(p, allowlist))) return undefined;
-  // case-insensitive: on macOS/Windows `.ENV` and `.env` are the SAME file, so
-  // matching case-sensitively would let `Read(".ENV")` / `cat .ENV` slip past.
-  if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(normalized, g, true))) return undefined;
-  return SENSITIVE_GLOBS.find((g) => pathMatchesGlob(normalized, g, true));
+/** macOS and Windows filesystems are case-insensitive by default. */
+export const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+
+// macOS symlinks /tmp and /var under /private, and homes are symlinked on plenty
+// of setups, so resolve() alone makes ONE path look like two — and a symlink
+// named `notes.txt` can point at `.env`. Canonicalize the deepest ancestor that
+// exists and re-append the rest, so paths that do not exist yet (a file about
+// to be written, a directory created later) still compare correctly.
+export function canonical(p: string): string {
+  let head = resolve(expandHome(p));
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(head), ...[...tail].reverse());
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return resolve(expandHome(p));
+      tail.push(basename(head));
+      head = parent;
+    }
+  }
 }
 
-// Commands that print file contents to stdout — the ones that would leak a
-// sensitive file INTO the model. A command that merely WRITES to a sensitive
-// path (`echo x > .env`) does not leak and must not be denied (it's also the
-// restore-on-write target). PostToolUse redaction is the backstop for anything
-// this misses, so we can afford to be precise here.
-const READ_COMMANDS = new Set([
-  "cat",
-  "head",
-  "tail",
-  "less",
-  "more",
-  "bat",
-  "xxd",
-  "od",
-  "strings",
-  "hexdump",
-  "nl",
-  "tac",
-  "base64",
-  "sed",
-  "awk",
-  "grep",
-  "rg",
-  "printf",
-  "print",
-]);
+function fold(p: string): string {
+  return CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
+}
 
-// Best-effort: only deny a Bash command when a recognized READ command
-// references a sensitive path. Splits on shell separators so `foo && cat .env`
-// is caught segment by segment. The agent's own permission rules and
-// PostToolUse redaction are the stronger/backstop layers.
-export function commandTouchesSensitivePath(command: string, allowlist?: UserAllowlist, cwd?: string): string | undefined {
-  for (const segment of command.split(/[;\n]|&&|\|\||\||&/)) {
-    const tokens = segment.trim().split(/\s+/);
-    if (tokens.length === 0) continue;
-    const cmd = (tokens[0] ?? "").replace(/^.*\//, ""); // basename
-    if (!READ_COMMANDS.has(cmd)) continue;
-    for (const raw of tokens.slice(1)) {
-      // stop at a write redirection target — that's not a read
-      if (raw.startsWith(">")) break;
-      const token = raw.replace(/^['"`]+|['"`]+$/g, "");
-      if (token.length < 2 || token.startsWith("-")) continue;
-      const hit = sensitivePathMatch(token, allowlist, cwd);
-      if (hit) return token;
-    }
+/** `dir` covers `p` when it IS p or an ancestor of it. The `sep` guard keeps a
+ *  sibling like `/proj-old` from matching `/proj`. Case-insensitive where the
+ *  filesystem is. */
+export function covers(dir: string, p: string): boolean {
+  const a = fold(canonical(dir));
+  const b = fold(canonical(p));
+  return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
+}
+
+// Globs above are rooted with `**/` so they match absolute and relative paths
+// alike. Every spelling of the path is checked: as written, lexically resolved
+// (`x/../.env`) and canonical (a symlink whose target is `.env`).
+export function sensitivePathMatch(path: string, allowlist?: UserAllowlist, cwd = process.cwd()): string | undefined {
+  const normalized = expandHome(path.replaceAll("\\", "/"));
+  const absolute = resolve(cwd, normalized).replaceAll("\\", "/");
+  const real = canonical(absolute).replaceAll("\\", "/");
+  const spellings = [...new Set([normalized, absolute, real])];
+  // The allowlist sees resolved spellings only: `tests/../.env` must not pass
+  // as `tests/**`.
+  const resolvedForms = [absolute, real, relative(cwd, absolute).replaceAll("\\", "/"), relative(canonical(cwd), real).replaceAll("\\", "/")];
+  if (resolvedForms.some((p) => !p.split("/").includes("..") && isAllowedPath(p, allowlist))) return undefined;
+  // The vault maps every placeholder back to its secret, in clear.
+  const vaultHome = defaultVaultHome();
+  if (covers(join(vaultHome, "vault.json"), real) || covers(join(vaultHome, "salt"), real)) return "secretgate vault";
+  for (const p of spellings) {
+    // case-insensitive: on macOS/Windows `.ENV` and `.env` are the SAME file, so
+    // matching case-sensitively would let `Read(".ENV")` / `cat .ENV` slip past.
+    if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(p, g, true))) continue;
+    const hit = SENSITIVE_GLOBS.find((g) => pathMatchesGlob(p, g, true));
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+// Best-effort: deny a Bash command when it READS a sensitive path — as an
+// argument of any command that prints, copies or sources it, or as an input
+// redirection. A command that merely WRITES to a sensitive path (`echo x >
+// .env`, the restore-on-write target) or lists it (`ls -la .env`) is fine. The
+// shared shell analyser resolves quotes, `cd`, globs (`cat .en*`) and brace
+// lists; PostToolUse redaction is the backstop for what it cannot see.
+export function commandTouchesSensitivePath(command: string | string[], allowlist?: UserAllowlist, cwd = process.cwd()): string | undefined {
+  const analysis = analyzeShell(command, { cwd });
+  for (const ref of analysis.refs) {
+    if (ref.kind === "write" || ref.kind === "list") continue;
+    if (sensitivePathMatch(ref.path, allowlist, cwd)) return ref.raw;
   }
   return undefined;
 }
