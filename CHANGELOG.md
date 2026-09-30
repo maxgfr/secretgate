@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.6.0](https://github.com/maxgfr/secretgate/compare/v1.5.2...v1.6.0) (2026-09-30)
+
+
+### Features
+
+* standalone binary for Homebrew, no Node required ([#7](https://github.com/maxgfr/secretgate/issues/7)) ([76d7479](https://github.com/maxgfr/secretgate/commit/76d74796c122892b6c5035d9e24d223b7397b179))
+
 ## [1.5.2](https://github.com/maxgfr/secretgate/compare/v1.5.1...v1.5.2) (2026-09-30)
 
 
