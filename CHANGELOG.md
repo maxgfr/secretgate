@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.5.0](https://github.com/maxgfr/secretgate/compare/v1.4.1...v1.5.0) (2026-09-30)
+
+
+### Bug Fixes
+
+* act on the branch review, and stop blocking security-fix work on test fixtures ([6d39d61](https://github.com/maxgfr/secretgate/commit/6d39d61f17f38c25a0d42f542928f90ce6c69fa1))
+
+
+### Features
+
+* **scope:** fence agents into part of a repo, and harden every hook path ([cea9af3](https://github.com/maxgfr/secretgate/commit/cea9af3717217872e43363fbe811b8301b72adfe))
+
 ## [1.4.1](https://github.com/maxgfr/secretgate/compare/v1.4.0...v1.4.1) (2026-09-30)
 
 
