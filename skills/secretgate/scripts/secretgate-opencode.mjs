@@ -9,9 +9,905 @@ import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, ren
 import { homedir as homedir3 } from "os";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 
+// node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/scanner.js
+function createScanner(text, ignoreTrivia = false) {
+  const len = text.length;
+  let pos = 0, value = "", tokenOffset = 0, token = 16, lineNumber = 0, lineStartOffset = 0, tokenLineStartOffset = 0, prevTokenLineStartOffset = 0, scanError = 0;
+  function scanHexDigits(count, exact) {
+    let digits = 0;
+    let value2 = 0;
+    while (digits < count || !exact) {
+      let ch = text.charCodeAt(pos);
+      if (ch >= 48 && ch <= 57) {
+        value2 = value2 * 16 + ch - 48;
+      } else if (ch >= 65 && ch <= 70) {
+        value2 = value2 * 16 + ch - 65 + 10;
+      } else if (ch >= 97 && ch <= 102) {
+        value2 = value2 * 16 + ch - 97 + 10;
+      } else {
+        break;
+      }
+      pos++;
+      digits++;
+    }
+    if (digits < count) {
+      value2 = -1;
+    }
+    return value2;
+  }
+  function setPosition(newPosition) {
+    pos = newPosition;
+    value = "";
+    tokenOffset = 0;
+    token = 16;
+    scanError = 0;
+  }
+  function scanNumber() {
+    let start = pos;
+    if (text.charCodeAt(pos) === 48) {
+      pos++;
+    } else {
+      pos++;
+      while (pos < text.length && isDigit(text.charCodeAt(pos))) {
+        pos++;
+      }
+    }
+    if (pos < text.length && text.charCodeAt(pos) === 46) {
+      pos++;
+      if (pos < text.length && isDigit(text.charCodeAt(pos))) {
+        pos++;
+        while (pos < text.length && isDigit(text.charCodeAt(pos))) {
+          pos++;
+        }
+      } else {
+        scanError = 3;
+        return text.substring(start, pos);
+      }
+    }
+    let end = pos;
+    if (pos < text.length && (text.charCodeAt(pos) === 69 || text.charCodeAt(pos) === 101)) {
+      pos++;
+      if (pos < text.length && text.charCodeAt(pos) === 43 || text.charCodeAt(pos) === 45) {
+        pos++;
+      }
+      if (pos < text.length && isDigit(text.charCodeAt(pos))) {
+        pos++;
+        while (pos < text.length && isDigit(text.charCodeAt(pos))) {
+          pos++;
+        }
+        end = pos;
+      } else {
+        scanError = 3;
+      }
+    }
+    return text.substring(start, end);
+  }
+  function scanString() {
+    let result = "", start = pos;
+    while (true) {
+      if (pos >= len) {
+        result += text.substring(start, pos);
+        scanError = 2;
+        break;
+      }
+      const ch = text.charCodeAt(pos);
+      if (ch === 34) {
+        result += text.substring(start, pos);
+        pos++;
+        break;
+      }
+      if (ch === 92) {
+        result += text.substring(start, pos);
+        pos++;
+        if (pos >= len) {
+          scanError = 2;
+          break;
+        }
+        const ch2 = text.charCodeAt(pos++);
+        switch (ch2) {
+          case 34:
+            result += '"';
+            break;
+          case 92:
+            result += "\\";
+            break;
+          case 47:
+            result += "/";
+            break;
+          case 98:
+            result += "\b";
+            break;
+          case 102:
+            result += "\f";
+            break;
+          case 110:
+            result += "\n";
+            break;
+          case 114:
+            result += "\r";
+            break;
+          case 116:
+            result += "	";
+            break;
+          case 117:
+            const ch3 = scanHexDigits(4, true);
+            if (ch3 >= 0) {
+              result += String.fromCharCode(ch3);
+            } else {
+              scanError = 4;
+            }
+            break;
+          default:
+            scanError = 5;
+        }
+        start = pos;
+        continue;
+      }
+      if (ch >= 0 && ch <= 31) {
+        if (isLineBreak(ch)) {
+          result += text.substring(start, pos);
+          scanError = 2;
+          break;
+        } else {
+          scanError = 6;
+        }
+      }
+      pos++;
+    }
+    return result;
+  }
+  function scanNext() {
+    value = "";
+    scanError = 0;
+    tokenOffset = pos;
+    lineStartOffset = lineNumber;
+    prevTokenLineStartOffset = tokenLineStartOffset;
+    if (pos >= len) {
+      tokenOffset = len;
+      return token = 17;
+    }
+    let code = text.charCodeAt(pos);
+    if (isWhiteSpace(code)) {
+      do {
+        pos++;
+        value += String.fromCharCode(code);
+        code = text.charCodeAt(pos);
+      } while (isWhiteSpace(code));
+      return token = 15;
+    }
+    if (isLineBreak(code)) {
+      pos++;
+      value += String.fromCharCode(code);
+      if (code === 13 && text.charCodeAt(pos) === 10) {
+        pos++;
+        value += "\n";
+      }
+      lineNumber++;
+      tokenLineStartOffset = pos;
+      return token = 14;
+    }
+    switch (code) {
+      // tokens: []{}:,
+      case 123:
+        pos++;
+        return token = 1;
+      case 125:
+        pos++;
+        return token = 2;
+      case 91:
+        pos++;
+        return token = 3;
+      case 93:
+        pos++;
+        return token = 4;
+      case 58:
+        pos++;
+        return token = 6;
+      case 44:
+        pos++;
+        return token = 5;
+      // strings
+      case 34:
+        pos++;
+        value = scanString();
+        return token = 10;
+      // comments
+      case 47:
+        const start = pos - 1;
+        if (text.charCodeAt(pos + 1) === 47) {
+          pos += 2;
+          while (pos < len) {
+            if (isLineBreak(text.charCodeAt(pos))) {
+              break;
+            }
+            pos++;
+          }
+          value = text.substring(start, pos);
+          return token = 12;
+        }
+        if (text.charCodeAt(pos + 1) === 42) {
+          pos += 2;
+          const safeLength = len - 1;
+          let commentClosed = false;
+          while (pos < safeLength) {
+            const ch = text.charCodeAt(pos);
+            if (ch === 42 && text.charCodeAt(pos + 1) === 47) {
+              pos += 2;
+              commentClosed = true;
+              break;
+            }
+            pos++;
+            if (isLineBreak(ch)) {
+              if (ch === 13 && text.charCodeAt(pos) === 10) {
+                pos++;
+              }
+              lineNumber++;
+              tokenLineStartOffset = pos;
+            }
+          }
+          if (!commentClosed) {
+            pos++;
+            scanError = 1;
+          }
+          value = text.substring(start, pos);
+          return token = 13;
+        }
+        value += String.fromCharCode(code);
+        pos++;
+        return token = 16;
+      // numbers
+      case 45:
+        value += String.fromCharCode(code);
+        pos++;
+        if (pos === len || !isDigit(text.charCodeAt(pos))) {
+          return token = 16;
+        }
+      // found a minus, followed by a number so
+      // we fall through to proceed with scanning
+      // numbers
+      case 48:
+      case 49:
+      case 50:
+      case 51:
+      case 52:
+      case 53:
+      case 54:
+      case 55:
+      case 56:
+      case 57:
+        value += scanNumber();
+        return token = 11;
+      // literals and unknown symbols
+      default:
+        while (pos < len && isUnknownContentCharacter(code)) {
+          pos++;
+          code = text.charCodeAt(pos);
+        }
+        if (tokenOffset !== pos) {
+          value = text.substring(tokenOffset, pos);
+          switch (value) {
+            case "true":
+              return token = 8;
+            case "false":
+              return token = 9;
+            case "null":
+              return token = 7;
+          }
+          return token = 16;
+        }
+        value += String.fromCharCode(code);
+        pos++;
+        return token = 16;
+    }
+  }
+  function isUnknownContentCharacter(code) {
+    if (isWhiteSpace(code) || isLineBreak(code)) {
+      return false;
+    }
+    switch (code) {
+      case 125:
+      case 93:
+      case 123:
+      case 91:
+      case 34:
+      case 58:
+      case 44:
+      case 47:
+        return false;
+    }
+    return true;
+  }
+  function scanNextNonTrivia() {
+    let result;
+    do {
+      result = scanNext();
+    } while (result >= 12 && result <= 15);
+    return result;
+  }
+  return {
+    setPosition,
+    getPosition: () => pos,
+    scan: ignoreTrivia ? scanNextNonTrivia : scanNext,
+    getToken: () => token,
+    getTokenValue: () => value,
+    getTokenOffset: () => tokenOffset,
+    getTokenLength: () => pos - tokenOffset,
+    getTokenStartLine: () => lineStartOffset,
+    getTokenStartCharacter: () => tokenOffset - prevTokenLineStartOffset,
+    getTokenError: () => scanError
+  };
+}
+function isWhiteSpace(ch) {
+  return ch === 32 || ch === 9;
+}
+function isLineBreak(ch) {
+  return ch === 10 || ch === 13;
+}
+function isDigit(ch) {
+  return ch >= 48 && ch <= 57;
+}
+var CharacterCodes;
+(function(CharacterCodes2) {
+  CharacterCodes2[CharacterCodes2["lineFeed"] = 10] = "lineFeed";
+  CharacterCodes2[CharacterCodes2["carriageReturn"] = 13] = "carriageReturn";
+  CharacterCodes2[CharacterCodes2["space"] = 32] = "space";
+  CharacterCodes2[CharacterCodes2["_0"] = 48] = "_0";
+  CharacterCodes2[CharacterCodes2["_1"] = 49] = "_1";
+  CharacterCodes2[CharacterCodes2["_2"] = 50] = "_2";
+  CharacterCodes2[CharacterCodes2["_3"] = 51] = "_3";
+  CharacterCodes2[CharacterCodes2["_4"] = 52] = "_4";
+  CharacterCodes2[CharacterCodes2["_5"] = 53] = "_5";
+  CharacterCodes2[CharacterCodes2["_6"] = 54] = "_6";
+  CharacterCodes2[CharacterCodes2["_7"] = 55] = "_7";
+  CharacterCodes2[CharacterCodes2["_8"] = 56] = "_8";
+  CharacterCodes2[CharacterCodes2["_9"] = 57] = "_9";
+  CharacterCodes2[CharacterCodes2["a"] = 97] = "a";
+  CharacterCodes2[CharacterCodes2["b"] = 98] = "b";
+  CharacterCodes2[CharacterCodes2["c"] = 99] = "c";
+  CharacterCodes2[CharacterCodes2["d"] = 100] = "d";
+  CharacterCodes2[CharacterCodes2["e"] = 101] = "e";
+  CharacterCodes2[CharacterCodes2["f"] = 102] = "f";
+  CharacterCodes2[CharacterCodes2["g"] = 103] = "g";
+  CharacterCodes2[CharacterCodes2["h"] = 104] = "h";
+  CharacterCodes2[CharacterCodes2["i"] = 105] = "i";
+  CharacterCodes2[CharacterCodes2["j"] = 106] = "j";
+  CharacterCodes2[CharacterCodes2["k"] = 107] = "k";
+  CharacterCodes2[CharacterCodes2["l"] = 108] = "l";
+  CharacterCodes2[CharacterCodes2["m"] = 109] = "m";
+  CharacterCodes2[CharacterCodes2["n"] = 110] = "n";
+  CharacterCodes2[CharacterCodes2["o"] = 111] = "o";
+  CharacterCodes2[CharacterCodes2["p"] = 112] = "p";
+  CharacterCodes2[CharacterCodes2["q"] = 113] = "q";
+  CharacterCodes2[CharacterCodes2["r"] = 114] = "r";
+  CharacterCodes2[CharacterCodes2["s"] = 115] = "s";
+  CharacterCodes2[CharacterCodes2["t"] = 116] = "t";
+  CharacterCodes2[CharacterCodes2["u"] = 117] = "u";
+  CharacterCodes2[CharacterCodes2["v"] = 118] = "v";
+  CharacterCodes2[CharacterCodes2["w"] = 119] = "w";
+  CharacterCodes2[CharacterCodes2["x"] = 120] = "x";
+  CharacterCodes2[CharacterCodes2["y"] = 121] = "y";
+  CharacterCodes2[CharacterCodes2["z"] = 122] = "z";
+  CharacterCodes2[CharacterCodes2["A"] = 65] = "A";
+  CharacterCodes2[CharacterCodes2["B"] = 66] = "B";
+  CharacterCodes2[CharacterCodes2["C"] = 67] = "C";
+  CharacterCodes2[CharacterCodes2["D"] = 68] = "D";
+  CharacterCodes2[CharacterCodes2["E"] = 69] = "E";
+  CharacterCodes2[CharacterCodes2["F"] = 70] = "F";
+  CharacterCodes2[CharacterCodes2["G"] = 71] = "G";
+  CharacterCodes2[CharacterCodes2["H"] = 72] = "H";
+  CharacterCodes2[CharacterCodes2["I"] = 73] = "I";
+  CharacterCodes2[CharacterCodes2["J"] = 74] = "J";
+  CharacterCodes2[CharacterCodes2["K"] = 75] = "K";
+  CharacterCodes2[CharacterCodes2["L"] = 76] = "L";
+  CharacterCodes2[CharacterCodes2["M"] = 77] = "M";
+  CharacterCodes2[CharacterCodes2["N"] = 78] = "N";
+  CharacterCodes2[CharacterCodes2["O"] = 79] = "O";
+  CharacterCodes2[CharacterCodes2["P"] = 80] = "P";
+  CharacterCodes2[CharacterCodes2["Q"] = 81] = "Q";
+  CharacterCodes2[CharacterCodes2["R"] = 82] = "R";
+  CharacterCodes2[CharacterCodes2["S"] = 83] = "S";
+  CharacterCodes2[CharacterCodes2["T"] = 84] = "T";
+  CharacterCodes2[CharacterCodes2["U"] = 85] = "U";
+  CharacterCodes2[CharacterCodes2["V"] = 86] = "V";
+  CharacterCodes2[CharacterCodes2["W"] = 87] = "W";
+  CharacterCodes2[CharacterCodes2["X"] = 88] = "X";
+  CharacterCodes2[CharacterCodes2["Y"] = 89] = "Y";
+  CharacterCodes2[CharacterCodes2["Z"] = 90] = "Z";
+  CharacterCodes2[CharacterCodes2["asterisk"] = 42] = "asterisk";
+  CharacterCodes2[CharacterCodes2["backslash"] = 92] = "backslash";
+  CharacterCodes2[CharacterCodes2["closeBrace"] = 125] = "closeBrace";
+  CharacterCodes2[CharacterCodes2["closeBracket"] = 93] = "closeBracket";
+  CharacterCodes2[CharacterCodes2["colon"] = 58] = "colon";
+  CharacterCodes2[CharacterCodes2["comma"] = 44] = "comma";
+  CharacterCodes2[CharacterCodes2["dot"] = 46] = "dot";
+  CharacterCodes2[CharacterCodes2["doubleQuote"] = 34] = "doubleQuote";
+  CharacterCodes2[CharacterCodes2["minus"] = 45] = "minus";
+  CharacterCodes2[CharacterCodes2["openBrace"] = 123] = "openBrace";
+  CharacterCodes2[CharacterCodes2["openBracket"] = 91] = "openBracket";
+  CharacterCodes2[CharacterCodes2["plus"] = 43] = "plus";
+  CharacterCodes2[CharacterCodes2["slash"] = 47] = "slash";
+  CharacterCodes2[CharacterCodes2["formFeed"] = 12] = "formFeed";
+  CharacterCodes2[CharacterCodes2["tab"] = 9] = "tab";
+})(CharacterCodes || (CharacterCodes = {}));
+
+// node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/string-intern.js
+var cachedSpaces = new Array(20).fill(0).map((_, index) => {
+  return " ".repeat(index);
+});
+var maxCachedValues = 200;
+var cachedBreakLinesWithSpaces = {
+  " ": {
+    "\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+      return "\n" + " ".repeat(index);
+    }),
+    "\r": new Array(maxCachedValues).fill(0).map((_, index) => {
+      return "\r" + " ".repeat(index);
+    }),
+    "\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+      return "\r\n" + " ".repeat(index);
+    })
+  },
+  "	": {
+    "\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+      return "\n" + "	".repeat(index);
+    }),
+    "\r": new Array(maxCachedValues).fill(0).map((_, index) => {
+      return "\r" + "	".repeat(index);
+    }),
+    "\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+      return "\r\n" + "	".repeat(index);
+    })
+  }
+};
+
+// node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/parser.js
+var ParseOptions;
+(function(ParseOptions2) {
+  ParseOptions2.DEFAULT = {
+    allowTrailingComma: false
+  };
+})(ParseOptions || (ParseOptions = {}));
+function parse(text, errors = [], options = ParseOptions.DEFAULT) {
+  let currentProperty = null;
+  let currentParent = [];
+  const previousParents = [];
+  function onValue(value) {
+    if (Array.isArray(currentParent)) {
+      currentParent.push(value);
+    } else if (currentProperty !== null) {
+      currentParent[currentProperty] = value;
+    }
+  }
+  const visitor = {
+    onObjectBegin: () => {
+      const object = {};
+      onValue(object);
+      previousParents.push(currentParent);
+      currentParent = object;
+      currentProperty = null;
+    },
+    onObjectProperty: (name) => {
+      currentProperty = name;
+    },
+    onObjectEnd: () => {
+      currentParent = previousParents.pop();
+    },
+    onArrayBegin: () => {
+      const array = [];
+      onValue(array);
+      previousParents.push(currentParent);
+      currentParent = array;
+      currentProperty = null;
+    },
+    onArrayEnd: () => {
+      currentParent = previousParents.pop();
+    },
+    onLiteralValue: onValue,
+    onError: (error, offset, length) => {
+      errors.push({ error, offset, length });
+    }
+  };
+  visit(text, visitor, options);
+  return currentParent[0];
+}
+function visit(text, visitor, options = ParseOptions.DEFAULT) {
+  const _scanner = createScanner(text, false);
+  const _jsonPath = [];
+  let suppressedCallbacks = 0;
+  function toNoArgVisit(visitFunction) {
+    return visitFunction ? () => suppressedCallbacks === 0 && visitFunction(_scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter()) : () => true;
+  }
+  function toOneArgVisit(visitFunction) {
+    return visitFunction ? (arg) => suppressedCallbacks === 0 && visitFunction(arg, _scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter()) : () => true;
+  }
+  function toOneArgVisitWithPath(visitFunction) {
+    return visitFunction ? (arg) => suppressedCallbacks === 0 && visitFunction(arg, _scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter(), () => _jsonPath.slice()) : () => true;
+  }
+  function toBeginVisit(visitFunction) {
+    return visitFunction ? () => {
+      if (suppressedCallbacks > 0) {
+        suppressedCallbacks++;
+      } else {
+        let cbReturn = visitFunction(_scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter(), () => _jsonPath.slice());
+        if (cbReturn === false) {
+          suppressedCallbacks = 1;
+        }
+      }
+    } : () => true;
+  }
+  function toEndVisit(visitFunction) {
+    return visitFunction ? () => {
+      if (suppressedCallbacks > 0) {
+        suppressedCallbacks--;
+      }
+      if (suppressedCallbacks === 0) {
+        visitFunction(_scanner.getTokenOffset(), _scanner.getTokenLength(), _scanner.getTokenStartLine(), _scanner.getTokenStartCharacter());
+      }
+    } : () => true;
+  }
+  const onObjectBegin = toBeginVisit(visitor.onObjectBegin), onObjectProperty = toOneArgVisitWithPath(visitor.onObjectProperty), onObjectEnd = toEndVisit(visitor.onObjectEnd), onArrayBegin = toBeginVisit(visitor.onArrayBegin), onArrayEnd = toEndVisit(visitor.onArrayEnd), onLiteralValue = toOneArgVisitWithPath(visitor.onLiteralValue), onSeparator = toOneArgVisit(visitor.onSeparator), onComment = toNoArgVisit(visitor.onComment), onError = toOneArgVisit(visitor.onError);
+  const disallowComments = options && options.disallowComments;
+  const allowTrailingComma = options && options.allowTrailingComma;
+  function scanNext() {
+    while (true) {
+      const token = _scanner.scan();
+      switch (_scanner.getTokenError()) {
+        case 4:
+          handleError(
+            14
+            /* ParseErrorCode.InvalidUnicode */
+          );
+          break;
+        case 5:
+          handleError(
+            15
+            /* ParseErrorCode.InvalidEscapeCharacter */
+          );
+          break;
+        case 3:
+          handleError(
+            13
+            /* ParseErrorCode.UnexpectedEndOfNumber */
+          );
+          break;
+        case 1:
+          if (!disallowComments) {
+            handleError(
+              11
+              /* ParseErrorCode.UnexpectedEndOfComment */
+            );
+          }
+          break;
+        case 2:
+          handleError(
+            12
+            /* ParseErrorCode.UnexpectedEndOfString */
+          );
+          break;
+        case 6:
+          handleError(
+            16
+            /* ParseErrorCode.InvalidCharacter */
+          );
+          break;
+      }
+      switch (token) {
+        case 12:
+        case 13:
+          if (disallowComments) {
+            handleError(
+              10
+              /* ParseErrorCode.InvalidCommentToken */
+            );
+          } else {
+            onComment();
+          }
+          break;
+        case 16:
+          handleError(
+            1
+            /* ParseErrorCode.InvalidSymbol */
+          );
+          break;
+        case 15:
+        case 14:
+          break;
+        default:
+          return token;
+      }
+    }
+  }
+  function handleError(error, skipUntilAfter = [], skipUntil = []) {
+    onError(error);
+    if (skipUntilAfter.length + skipUntil.length > 0) {
+      let token = _scanner.getToken();
+      while (token !== 17) {
+        if (skipUntilAfter.indexOf(token) !== -1) {
+          scanNext();
+          break;
+        } else if (skipUntil.indexOf(token) !== -1) {
+          break;
+        }
+        token = scanNext();
+      }
+    }
+  }
+  function parseString(isValue) {
+    const value = _scanner.getTokenValue();
+    if (isValue) {
+      onLiteralValue(value);
+    } else {
+      onObjectProperty(value);
+      _jsonPath.push(value);
+    }
+    scanNext();
+    return true;
+  }
+  function parseLiteral() {
+    switch (_scanner.getToken()) {
+      case 11:
+        const tokenValue = _scanner.getTokenValue();
+        let value = Number(tokenValue);
+        if (isNaN(value)) {
+          handleError(
+            2
+            /* ParseErrorCode.InvalidNumberFormat */
+          );
+          value = 0;
+        }
+        onLiteralValue(value);
+        break;
+      case 7:
+        onLiteralValue(null);
+        break;
+      case 8:
+        onLiteralValue(true);
+        break;
+      case 9:
+        onLiteralValue(false);
+        break;
+      default:
+        return false;
+    }
+    scanNext();
+    return true;
+  }
+  function parseProperty() {
+    if (_scanner.getToken() !== 10) {
+      handleError(3, [], [
+        2,
+        5
+        /* SyntaxKind.CommaToken */
+      ]);
+      return false;
+    }
+    parseString(false);
+    if (_scanner.getToken() === 6) {
+      onSeparator(":");
+      scanNext();
+      if (!parseValue()) {
+        handleError(4, [], [
+          2,
+          5
+          /* SyntaxKind.CommaToken */
+        ]);
+      }
+    } else {
+      handleError(5, [], [
+        2,
+        5
+        /* SyntaxKind.CommaToken */
+      ]);
+    }
+    _jsonPath.pop();
+    return true;
+  }
+  function parseObject() {
+    onObjectBegin();
+    scanNext();
+    let needsComma = false;
+    while (_scanner.getToken() !== 2 && _scanner.getToken() !== 17) {
+      if (_scanner.getToken() === 5) {
+        if (!needsComma) {
+          handleError(4, [], []);
+        }
+        onSeparator(",");
+        scanNext();
+        if (_scanner.getToken() === 2 && allowTrailingComma) {
+          break;
+        }
+      } else if (needsComma) {
+        handleError(6, [], []);
+      }
+      if (!parseProperty()) {
+        handleError(4, [], [
+          2,
+          5
+          /* SyntaxKind.CommaToken */
+        ]);
+      }
+      needsComma = true;
+    }
+    onObjectEnd();
+    if (_scanner.getToken() !== 2) {
+      handleError(7, [
+        2
+        /* SyntaxKind.CloseBraceToken */
+      ], []);
+    } else {
+      scanNext();
+    }
+    return true;
+  }
+  function parseArray() {
+    onArrayBegin();
+    scanNext();
+    let isFirstElement = true;
+    let needsComma = false;
+    while (_scanner.getToken() !== 4 && _scanner.getToken() !== 17) {
+      if (_scanner.getToken() === 5) {
+        if (!needsComma) {
+          handleError(4, [], []);
+        }
+        onSeparator(",");
+        scanNext();
+        if (_scanner.getToken() === 4 && allowTrailingComma) {
+          break;
+        }
+      } else if (needsComma) {
+        handleError(6, [], []);
+      }
+      if (isFirstElement) {
+        _jsonPath.push(0);
+        isFirstElement = false;
+      } else {
+        _jsonPath[_jsonPath.length - 1]++;
+      }
+      if (!parseValue()) {
+        handleError(4, [], [
+          4,
+          5
+          /* SyntaxKind.CommaToken */
+        ]);
+      }
+      needsComma = true;
+    }
+    onArrayEnd();
+    if (!isFirstElement) {
+      _jsonPath.pop();
+    }
+    if (_scanner.getToken() !== 4) {
+      handleError(8, [
+        4
+        /* SyntaxKind.CloseBracketToken */
+      ], []);
+    } else {
+      scanNext();
+    }
+    return true;
+  }
+  function parseValue() {
+    switch (_scanner.getToken()) {
+      case 3:
+        return parseArray();
+      case 1:
+        return parseObject();
+      case 10:
+        return parseString(true);
+      default:
+        return parseLiteral();
+    }
+  }
+  scanNext();
+  if (_scanner.getToken() === 17) {
+    if (options.allowEmptyContent) {
+      return true;
+    }
+    handleError(4, [], []);
+    return false;
+  }
+  if (!parseValue()) {
+    handleError(4, [], []);
+    return false;
+  }
+  if (_scanner.getToken() !== 17) {
+    handleError(9, [], []);
+  }
+  return true;
+}
+
+// node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/main.js
+var ScanError;
+(function(ScanError2) {
+  ScanError2[ScanError2["None"] = 0] = "None";
+  ScanError2[ScanError2["UnexpectedEndOfComment"] = 1] = "UnexpectedEndOfComment";
+  ScanError2[ScanError2["UnexpectedEndOfString"] = 2] = "UnexpectedEndOfString";
+  ScanError2[ScanError2["UnexpectedEndOfNumber"] = 3] = "UnexpectedEndOfNumber";
+  ScanError2[ScanError2["InvalidUnicode"] = 4] = "InvalidUnicode";
+  ScanError2[ScanError2["InvalidEscapeCharacter"] = 5] = "InvalidEscapeCharacter";
+  ScanError2[ScanError2["InvalidCharacter"] = 6] = "InvalidCharacter";
+})(ScanError || (ScanError = {}));
+var SyntaxKind;
+(function(SyntaxKind2) {
+  SyntaxKind2[SyntaxKind2["OpenBraceToken"] = 1] = "OpenBraceToken";
+  SyntaxKind2[SyntaxKind2["CloseBraceToken"] = 2] = "CloseBraceToken";
+  SyntaxKind2[SyntaxKind2["OpenBracketToken"] = 3] = "OpenBracketToken";
+  SyntaxKind2[SyntaxKind2["CloseBracketToken"] = 4] = "CloseBracketToken";
+  SyntaxKind2[SyntaxKind2["CommaToken"] = 5] = "CommaToken";
+  SyntaxKind2[SyntaxKind2["ColonToken"] = 6] = "ColonToken";
+  SyntaxKind2[SyntaxKind2["NullKeyword"] = 7] = "NullKeyword";
+  SyntaxKind2[SyntaxKind2["TrueKeyword"] = 8] = "TrueKeyword";
+  SyntaxKind2[SyntaxKind2["FalseKeyword"] = 9] = "FalseKeyword";
+  SyntaxKind2[SyntaxKind2["StringLiteral"] = 10] = "StringLiteral";
+  SyntaxKind2[SyntaxKind2["NumericLiteral"] = 11] = "NumericLiteral";
+  SyntaxKind2[SyntaxKind2["LineCommentTrivia"] = 12] = "LineCommentTrivia";
+  SyntaxKind2[SyntaxKind2["BlockCommentTrivia"] = 13] = "BlockCommentTrivia";
+  SyntaxKind2[SyntaxKind2["LineBreakTrivia"] = 14] = "LineBreakTrivia";
+  SyntaxKind2[SyntaxKind2["Trivia"] = 15] = "Trivia";
+  SyntaxKind2[SyntaxKind2["Unknown"] = 16] = "Unknown";
+  SyntaxKind2[SyntaxKind2["EOF"] = 17] = "EOF";
+})(SyntaxKind || (SyntaxKind = {}));
+var parse2 = parse;
+var ParseErrorCode;
+(function(ParseErrorCode2) {
+  ParseErrorCode2[ParseErrorCode2["InvalidSymbol"] = 1] = "InvalidSymbol";
+  ParseErrorCode2[ParseErrorCode2["InvalidNumberFormat"] = 2] = "InvalidNumberFormat";
+  ParseErrorCode2[ParseErrorCode2["PropertyNameExpected"] = 3] = "PropertyNameExpected";
+  ParseErrorCode2[ParseErrorCode2["ValueExpected"] = 4] = "ValueExpected";
+  ParseErrorCode2[ParseErrorCode2["ColonExpected"] = 5] = "ColonExpected";
+  ParseErrorCode2[ParseErrorCode2["CommaExpected"] = 6] = "CommaExpected";
+  ParseErrorCode2[ParseErrorCode2["CloseBraceExpected"] = 7] = "CloseBraceExpected";
+  ParseErrorCode2[ParseErrorCode2["CloseBracketExpected"] = 8] = "CloseBracketExpected";
+  ParseErrorCode2[ParseErrorCode2["EndOfFileExpected"] = 9] = "EndOfFileExpected";
+  ParseErrorCode2[ParseErrorCode2["InvalidCommentToken"] = 10] = "InvalidCommentToken";
+  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfComment"] = 11] = "UnexpectedEndOfComment";
+  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfString"] = 12] = "UnexpectedEndOfString";
+  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfNumber"] = 13] = "UnexpectedEndOfNumber";
+  ParseErrorCode2[ParseErrorCode2["InvalidUnicode"] = 14] = "InvalidUnicode";
+  ParseErrorCode2[ParseErrorCode2["InvalidEscapeCharacter"] = 15] = "InvalidEscapeCharacter";
+  ParseErrorCode2[ParseErrorCode2["InvalidCharacter"] = 16] = "InvalidCharacter";
+})(ParseErrorCode || (ParseErrorCode = {}));
+function printParseErrorCode(code) {
+  switch (code) {
+    case 1:
+      return "InvalidSymbol";
+    case 2:
+      return "InvalidNumberFormat";
+    case 3:
+      return "PropertyNameExpected";
+    case 4:
+      return "ValueExpected";
+    case 5:
+      return "ColonExpected";
+    case 6:
+      return "CommaExpected";
+    case 7:
+      return "CloseBraceExpected";
+    case 8:
+      return "CloseBracketExpected";
+    case 9:
+      return "EndOfFileExpected";
+    case 10:
+      return "InvalidCommentToken";
+    case 11:
+      return "UnexpectedEndOfComment";
+    case 12:
+      return "UnexpectedEndOfString";
+    case 13:
+      return "UnexpectedEndOfNumber";
+    case 14:
+      return "InvalidUnicode";
+    case 15:
+      return "InvalidEscapeCharacter";
+    case 16:
+      return "InvalidCharacter";
+  }
+  return "<unknown ParseErrorCode>";
+}
+
 // src/paths.ts
 import { realpathSync } from "fs";
-import { basename as basename2, dirname as dirname2, join as join3, relative, resolve as resolve2, sep } from "path";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
 
 // src/engine/allowlist.ts
 import { createHash } from "crypto";
@@ -113,7 +1009,8 @@ function pathMatchesGlob(path, glob, caseInsensitive = false) {
   const key = `${caseInsensitive ? "i" : "s"}${glob}`;
   let alternatives = GLOB_CACHE.get(key);
   if (!alternatives) {
-    alternatives = expandGlobBraces(caseInsensitive ? glob.toLowerCase() : glob).map(tokenizeGlob);
+    const expanded = expandGlobBraces(caseInsensitive ? glob.toLowerCase() : glob).flatMap((g) => g.endsWith("/**") ? [g, g.slice(0, -3)] : [g]);
+    alternatives = expanded.map(tokenizeGlob);
     if (GLOB_CACHE.size > 512) GLOB_CACHE.clear();
     GLOB_CACHE.set(key, alternatives);
   }
@@ -158,6 +1055,65 @@ function matchBacktick(s, start) {
   let i = start;
   while (i < s.length && s[i] !== "`") i += s[i] === "\\" ? 2 : 1;
   return Math.min(i + 1, s.length);
+}
+function innerSubstitutions(text) {
+  const out = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "$" && text[i + 1] === "(" && text[i + 2] !== "(") {
+      const end = matchParen(text, i + 2);
+      out.push(text.slice(i + 2, end - 1));
+      i = end - 1;
+    } else if (text[i] === "`") {
+      const end = matchBacktick(text, i + 1);
+      out.push(text.slice(i + 1, end - 1));
+      i = end - 1;
+    }
+  }
+  return out;
+}
+var ANSI_ESCAPES = {
+  n: "\n",
+  t: "	",
+  r: "\r",
+  a: "\x07",
+  b: "\b",
+  e: "\x1B",
+  E: "\x1B",
+  f: "\f",
+  v: "\v",
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  "?": "?"
+};
+function ansiC(s, start) {
+  let text = "";
+  let i = start;
+  while (i < s.length && s[i] !== "'") {
+    if (s[i] !== "\\") {
+      text += s[i];
+      i++;
+      continue;
+    }
+    const n = s[i + 1] ?? "";
+    const hex = /^x([0-9a-fA-F]{1,2})/.exec(s.slice(i + 1));
+    const uni = /^[uU]([0-9a-fA-F]{1,8})/.exec(s.slice(i + 1));
+    const oct = /^([0-7]{1,3})/.exec(s.slice(i + 1));
+    if (hex) {
+      text += String.fromCharCode(Number.parseInt(hex[1], 16));
+      i += 1 + hex[0].length;
+    } else if (uni) {
+      text += String.fromCodePoint(Math.min(Number.parseInt(uni[1], 16), 1114111));
+      i += 1 + uni[0].length;
+    } else if (oct) {
+      text += String.fromCharCode(Number.parseInt(oct[1], 8));
+      i += 1 + oct[0].length;
+    } else {
+      text += ANSI_ESCAPES[n] ?? n;
+      i += 2;
+    }
+  }
+  return { text, end: Math.min(i + 1, s.length) };
 }
 var VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*/;
 function tokenize(command, cwd) {
@@ -270,10 +1226,18 @@ function tokenize(command, cwd) {
         }
       }
       i++;
+    } else if (c === "$" && command[i + 1] === "'") {
+      const { text, end } = ansiC(command, i + 2);
+      word += text;
+      inWord = true;
+      i = end;
+    } else if (c === "$" && command[i + 1] === '"') {
+      i++;
     } else if (c === "$" && command[i + 1] === "(") {
       const arithmetic = command[i + 2] === "(";
       const end = matchParen(command, i + 2);
       if (!arithmetic) st.substitutions.push(command.slice(i + 2, end - 1));
+      else st.substitutions.push(...innerSubstitutions(command.slice(i + 3, end - 2)));
       st.dynamic.push(arithmetic ? "$((\u2026))" : "$(\u2026)");
       word += DYN;
       inWord = true;
@@ -318,6 +1282,11 @@ function tokenize(command, cwd) {
         continue;
       }
       pendingRedirect = op === ">&" ? ">" : op === "<&" ? "<" : op;
+    } else if (c === "(" && command[i + 1] === "(" && !inWord && cur.words.length === 0) {
+      endCommand();
+      const end = matchParen(command, i + 1);
+      st.substitutions.push(...innerSubstitutions(command.slice(i + 2, Math.max(i + 2, end - 2))));
+      i = end;
     } else if (SEP_CHARS.has(c)) {
       endCommand();
       if (c === "(") st.structure.push({ type: "open" });
@@ -454,6 +1423,7 @@ var WRITE_ARGS = /* @__PURE__ */ new Set(["touch", "mkdir", "rm", "rmdir", "tee"
 var LIST_ARGS = /* @__PURE__ */ new Set(["ls", "dir", "stat", "file", "test", "[", "[[", "wc", "realpath", "readlink", "basename", "dirname"]);
 var INTERPRETERS = /^(?:bash|sh|zsh|dash|ksh|fish|python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|pwsh|powershell)$/;
 var INLINE_FLAGS = /* @__PURE__ */ new Set(["-c", "-e", "-p", "-r", "--eval", "--print", "-E", "eval", "-Command"]);
+var SHELLS = /^(?:bash|sh|zsh|dash|ksh)$/;
 var EVAL_COMMANDS = /* @__PURE__ */ new Set(["eval", "source", ".", "xargs", "parallel", "watch"]);
 var KEYWORDS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}"]);
 function commandIndex(words) {
@@ -486,7 +1456,7 @@ function shapeOf(words) {
       const eq = w.text.indexOf("=");
       if (w.text.startsWith("--") && eq > 0) {
         args.push(w.text.slice(eq + 1));
-        argWords.push({ ...w, text: w.text.slice(eq + 1) });
+        argWords.push({ ...w, text: w.text.slice(eq + 1), flagValue: true });
       }
       continue;
     }
@@ -504,7 +1474,9 @@ var VALUE_FLAGS = {
   sed: ["-e", "-f"],
   awk: ["-f", "-v", "-F"],
   find: [],
-  git: ["-C", "-c"]
+  git: ["-C", "-c"],
+  // Output files: `openssl genrsa -out server.key` writes, it does not read.
+  openssl: ["-out", "-passout"]
 };
 function positionals(words, cmd) {
   const valued = new Set(VALUE_FLAGS[cmd] ?? []);
@@ -519,7 +1491,7 @@ function positionals(words, cmd) {
     }
     if (dashAt === -1 && t.startsWith("-") && t.length > 1) {
       const eq = t.indexOf("=");
-      if (t.startsWith("--") && eq > 0) pos.push({ ...w, text: t.slice(eq + 1) });
+      if (t.startsWith("--") && eq > 0) pos.push({ ...w, text: t.slice(eq + 1), flagValue: true });
       else if (valued.has(t)) j++;
       continue;
     }
@@ -531,7 +1503,7 @@ function explicitPath(text) {
   return text.startsWith("/") || text.startsWith("~") || text.startsWith("./") || text.startsWith("../") || text === "." || text === "..";
 }
 function analyzeShell(command, opts) {
-  const out = { refs: [], dynamic: [], unknownCwd: false };
+  const out = { refs: [], commands: [], dynamic: [], unknownCwd: false };
   if (Array.isArray(command)) {
     const [bin, flag, script] = command;
     if (command.length === 3 && typeof bin === "string" && INTERPRETERS.test(basename(bin)) && /^-[a-z]*c$/.test(String(flag)) && typeof script === "string") {
@@ -581,6 +1553,15 @@ function resolveWord(w, cwd, out) {
   const variants = w.brace ? expandBraces(w.text) : [w.text];
   const paths = [];
   for (const v of variants) {
+    if (/^~\+(?:\/|$)/.test(v) && cwd !== void 0) {
+      paths.push(resolve(cwd, `.${v.slice(2)}`));
+      continue;
+    }
+    if (/^~[^/]/.test(v)) {
+      out.dynamic.push(v.split("/")[0]);
+      out.unknownCwd = true;
+      return void 0;
+    }
     const expanded = expandHome(v);
     if (!isAbsolute(expanded) && cwd === void 0) {
       out.unknownCwd = true;
@@ -603,7 +1584,12 @@ function staticPrefixDir(abs) {
 function analyzeCommand(sc, cwd, out, inPipeline) {
   const shape = shapeOf(sc.words);
   const cmd = shape?.cmd ?? "";
-  const push = (w, kind, force = false, command = cmd) => {
+  if (sc.words.length > 0) out.commands.push(sc.words.map((w) => w.text));
+  const push = (w, kind, force = false, command = cmd, redirect = false) => {
+    if (/(?:^|\/)\.\.\.$/.test(w.text)) {
+      w = { ...w, text: w.text.replace(/\/?\.\.\.$/, "") || "." };
+      kind = "list";
+    }
     const paths = resolveWord(w, cwd, out);
     if (!paths) return;
     for (const p of paths) {
@@ -612,7 +1598,7 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
         continue;
       }
       const explicit = force || explicitPath(w.text) || w.glob || exists(p);
-      out.refs.push({ path: p, kind, raw: w.text, command, explicit });
+      out.refs.push({ path: p, kind, raw: w.text, command, explicit, ...redirect ? { redirect: true } : {} });
     }
   };
   for (const r of sc.redirects) {
@@ -623,7 +1609,7 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
       continue;
     }
     if (/^\/dev\/(?:null|stdout|stderr|stdin|tty|zero|u?random|fd\/\d+)$/.test(target)) continue;
-    push(r.target, r.op.includes("<") ? "read" : "write", true);
+    push(r.target, r.op.includes("<") ? "read" : "write", true, cmd, true);
   }
   if (!shape) return cwd;
   if (cmd === "cd" || cmd === "pushd") {
@@ -636,7 +1622,9 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     }
     const w = shape.argWords[0];
     const paths = resolveWord(w, cwd, out);
-    return paths?.length === 1 && !paths[0].startsWith(DYN) ? paths[0] : void 0;
+    const next = paths?.length === 1 && !paths[0].startsWith(DYN) ? paths[0] : void 0;
+    if (next) out.refs.push({ path: next, kind: "list", raw: target, command: cmd, explicit: true });
+    return next;
   }
   if (cmd === "popd") {
     out.dynamic.push("popd");
@@ -644,9 +1632,21 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
   }
   if (EVAL_COMMANDS.has(cmd)) out.dynamic.push(cmd);
   if (INTERPRETERS.test(cmd)) {
-    if (shape.flags.some((f) => INLINE_FLAGS.has(f)) || shape.args[0] === "eval")
-      out.dynamic.push(`${cmd} ${shape.flags.find((f) => INLINE_FLAGS.has(f)) ?? "eval"}`);
-    else if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
+    const inline = shape.flags.find((f) => INLINE_FLAGS.has(f) || /^-[a-z]*c$/.test(f));
+    if (inline && SHELLS.test(cmd) && /c$/.test(inline) && shape.args[0] !== void 0 && !shape.args[0].includes(DYN)) {
+      analyzeInto(shape.args[0], cwd ?? "/", out, 1);
+      return cwd;
+    }
+    if (inline || shape.args[0] === "eval") {
+      out.dynamic.push(`${cmd} ${inline ?? "eval"}`);
+      return cwd;
+    }
+    if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
+    else {
+      const script = shape.argWords.find((w) => !w.flagValue);
+      for (const w of shape.argWords) push(w, w === script ? "exec" : "read");
+      return cwd;
+    }
   }
   if (cmd === "find" && shape.flags.some((f) => f === "-exec" || f === "-execdir" || f === "-ok" || f === "-okdir")) out.dynamic.push("find -exec");
   if (NON_PATH_ARGS.has(cmd)) return cwd;
@@ -691,6 +1691,12 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     for (const w of targets.slice(1)) push(w, "read");
     return cwd;
   }
+  if (/^(?:curl|wget|http|https|xh)$/.test(cmd)) {
+    for (const w of sc.words) {
+      const m = /(?:^|=)@(.+)$/.exec(w.text);
+      if (m && !m[1].includes(DYN)) push({ ...w, text: m[1] }, "read", true);
+    }
+  }
   for (const w of targets) push(w, "read");
   return cwd;
 }
@@ -706,20 +1712,8 @@ function findRoots(words) {
   return roots;
 }
 var GIT_CONTENT = /* @__PURE__ */ new Set(["diff", "show", "log", "grep", "blame", "annotate", "cat-file", "archive", "format-patch", "whatchanged", "stash"]);
-var GIT_NAMES_ONLY = [
-  "--stat",
-  "--name-only",
-  "--name-status",
-  "--numstat",
-  "--shortstat",
-  "--quiet",
-  "--no-patch",
-  "-s",
-  "--oneline",
-  "--summary",
-  "--exit-code",
-  "--dirstat"
-];
+var GIT_NAMES_ONLY = ["--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--quiet", "--no-patch", "-s", "--summary", "--dirstat"];
+var GIT_PATCH = /^(?:-p|-u|--patch|--patch-with-stat|--patch-with-raw|-U\d*|--unified(?:=.*)?|--full-diff|-L.*)$/;
 function analyzeGit(pos, dashAt, flags, cwd, out, pushAs) {
   const sub = pos[0]?.text ?? "";
   const rest = pos.slice(1);
@@ -732,8 +1726,9 @@ function analyzeGit(pos, dashAt, flags, cwd, out, pushAs) {
     for (const w of rest) push(w, "list");
     return;
   }
-  const namesOnly = flags.some((f) => GIT_NAMES_ONLY.includes(f.split("=")[0]));
-  const logWithoutPatch = (sub === "log" || sub === "whatchanged") && !flags.some((f) => /^(?:-p|-u|--patch|-L.*|--full-diff|-G.*|-S.*)$/.test(f));
+  const patch = flags.some((f) => GIT_PATCH.test(f));
+  const namesOnly = !patch && flags.some((f) => GIT_NAMES_ONLY.includes(f.split("=")[0]));
+  const logWithoutPatch = (sub === "log" || sub === "whatchanged") && !patch;
   const stashWithoutPatch = sub === "stash" && !(rest[0]?.text === "show" && flags.some((f) => f === "-p" || f === "--patch"));
   if (namesOnly && sub !== "grep" || logWithoutPatch || stashWithoutPatch) {
     for (const w of rest) push(w, "list");
@@ -747,6 +1742,39 @@ function analyzeGit(pos, dashAt, flags, cwd, out, pushAs) {
     return;
   }
   for (const w of pathspecs) push(w, "search", true);
+}
+var JS_RUNTIMES = /^(?:node|nodejs|bun|deno)$/;
+var PACKAGE_RUNNERS = /^(?:npx|pnpx|bunx)$/;
+function secretgateInvocation(argv) {
+  const words = argv.map((text) => ({ text, glob: false, brace: false }));
+  let i = commandIndex(words);
+  const first = argv[i];
+  if (first === void 0) return void 0;
+  const skipFlags = (j) => {
+    while (j < argv.length && argv[j].startsWith("-")) j++;
+    return j;
+  };
+  const sub = (j) => {
+    const k = skipFlags(j);
+    const verb = argv[k];
+    if (verb === void 0) return void 0;
+    const next = argv[skipFlags(k + 1)];
+    return verb === "vault" && next ? `vault ${next}` : verb;
+  };
+  const name = basename(first);
+  if (first.includes(DYN)) {
+    const verb = sub(i + 1);
+    return verb ? `?${verb}` : void 0;
+  }
+  if (name === "secretgate" || name === "secretgate.mjs") return sub(i + 1);
+  if (JS_RUNTIMES.test(name)) {
+    const j = skipFlags(i + 1);
+    return argv[j] !== void 0 && basename(argv[j]) === "secretgate.mjs" ? sub(j + 1) : void 0;
+  }
+  if (PACKAGE_RUNNERS.test(name)) i = skipFlags(i + 1) - 1;
+  else if (/^(?:pnpm|yarn|npm)$/.test(name) && /^(?:exec|dlx|x)$/.test(argv[i + 1] ?? "")) i = skipFlags(i + 2) - 1;
+  else return void 0;
+  return /^secretgate(?:@.*)?$/.test(argv[i + 1] ?? "") ? sub(i + 2) : void 0;
 }
 
 // src/vault/vault.ts
@@ -876,6 +1904,23 @@ var SENSITIVE_GLOBS = [
   "**/*.tfstate",
   "**/*.tfstate.backup"
 ];
+var FIXTURE_DIRS = /* @__PURE__ */ new Set([
+  "test",
+  "tests",
+  "__tests__",
+  "spec",
+  "specs",
+  "fixture",
+  "fixtures",
+  "__fixtures__",
+  "testdata",
+  "test-data",
+  "test_data",
+  "mocks",
+  "__mocks__",
+  "examples",
+  "samples"
+]);
 var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
 var CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
 function canonical(p) {
@@ -909,6 +1954,9 @@ function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
   if (resolvedForms.some((p) => !p.split("/").includes("..") && isAllowedPath(p, allowlist))) return void 0;
   const vaultHome = defaultVaultHome();
   if (covers(join3(vaultHome, "vault.json"), real) || covers(join3(vaultHome, "salt"), real)) return "secretgate vault";
+  const inside = relative(canonical(cwd), real).replaceAll("\\", "/");
+  if (!inside.startsWith("../") && inside !== ".." && !isAbsolute2(inside) && inside.split("/").slice(0, -1).some((seg) => FIXTURE_DIRS.has(seg.toLowerCase())))
+    return void 0;
   for (const p of spellings) {
     if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(p, g, true))) continue;
     const hit = SENSITIVE_GLOBS.find((g) => pathMatchesGlob(p, g, true));
@@ -916,10 +1964,85 @@ function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
   }
   return void 0;
 }
+var CONTENT_COMMANDS = /* @__PURE__ */ new Set([
+  "cat",
+  "head",
+  "tail",
+  "less",
+  "more",
+  "bat",
+  "batcat",
+  "xxd",
+  "od",
+  "strings",
+  "hexdump",
+  "nl",
+  "tac",
+  "base64",
+  "base32",
+  "sed",
+  "awk",
+  "gawk",
+  "grep",
+  "egrep",
+  "fgrep",
+  "rg",
+  "ag",
+  "ack",
+  "printf",
+  "print",
+  "sort",
+  "uniq",
+  "cut",
+  "tr",
+  "jq",
+  "yq",
+  "diff",
+  "cmp",
+  "comm",
+  "paste",
+  "fold",
+  "fmt",
+  "column",
+  "rev",
+  "expand",
+  "unexpand",
+  "iconv",
+  "split",
+  "look",
+  "cp",
+  "install",
+  "dd",
+  "rsync",
+  "scp",
+  "tar",
+  "zip",
+  "gzip",
+  "bzip2",
+  "xz",
+  "zstd",
+  "source",
+  ".",
+  "curl",
+  "wget",
+  "http",
+  "https",
+  "xh",
+  "nc",
+  "ncat",
+  "openssl",
+  "gpg",
+  "vim",
+  "vi",
+  "nano",
+  "emacs"
+]);
+var GIT_CONTENT2 = /^git (?:show|diff|log|blame|annotate|grep|cat-file|archive|format-patch|whatchanged|stash)$/;
 function commandTouchesSensitivePath(command, allowlist, cwd = process.cwd()) {
   const analysis = analyzeShell(command, { cwd });
   for (const ref of analysis.refs) {
-    if (ref.kind === "write" || ref.kind === "list") continue;
+    if (ref.kind === "write" || ref.kind === "list" || ref.kind === "exec") continue;
+    if (!ref.redirect && !CONTENT_COMMANDS.has(ref.command) && !GIT_CONTENT2.test(ref.command)) continue;
     if (sensitivePathMatch(ref.path, allowlist, cwd)) return ref.raw;
   }
   return void 0;
@@ -933,11 +2056,14 @@ function readJsonFile(path) {
   } catch {
     return { ok: false, missing: true, message: "unreadable" };
   }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, missing: false, message: "not valid JSON" };
+  const errors = [];
+  const value = parse2(raw, errors, { allowTrailingComma: true, disallowComments: false });
+  if (errors.length > 0) {
+    const e = errors[0];
+    const line = raw.slice(0, e.offset).split("\n").length;
+    return { ok: false, missing: false, message: `not valid JSON: ${printParseErrorCode(e.error)} at line ${line}` };
   }
+  return { ok: true, value };
 }
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
 function strings(v) {
@@ -956,7 +2082,9 @@ function validateScope(v, root, file) {
   if (v === void 0) return void 0;
   if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("scope must be an object");
   const s = v;
-  for (const key of Object.keys(s)) if (!["allow", "deny", "bash"].includes(key)) throw new Error(`scope.${key} is not a known key (allow, deny, bash)`);
+  for (const key of Object.keys(s))
+    if (!["allow", "deny", "bash", "temp"].includes(key)) throw new Error(`scope.${key} is not a known key (allow, deny, bash, temp)`);
+  if (s.temp !== void 0 && typeof s.temp !== "boolean") throw new Error("scope.temp must be true or false");
   if (s.allow !== void 0 && !isStringArray(s.allow)) throw new Error("scope.allow must be an array of non-empty glob strings");
   if (s.deny !== void 0 && !isStringArray(s.deny)) throw new Error("scope.deny must be an array of non-empty glob strings");
   if (s.bash !== void 0 && s.bash !== "paths" && s.bash !== "strict") throw new Error('scope.bash must be "paths" or "strict"');
@@ -966,6 +2094,7 @@ function validateScope(v, root, file) {
     allow: s.allow,
     deny: s.deny,
     bash: s.bash ?? "paths",
+    temp: s.temp !== false,
     file
   };
 }
@@ -996,7 +2125,9 @@ function loadConfig(cwd) {
   const untrusted = [];
   let error;
   const trust = cwd ? readTrust() : {};
-  for (const file of cwd ? projectConfigFiles(cwd) : []) {
+  const starts = [cwd, process.env.CLAUDE_PROJECT_DIR].filter((d) => typeof d === "string" && d.length > 0);
+  const files = [...new Set(starts.flatMap((d) => projectConfigFiles(d)))];
+  for (const file of cwd ? files : []) {
     const read = readJsonFile(file);
     try {
       if (!read.ok) throw new Error(read.message);
@@ -1179,15 +2310,22 @@ function recordSession(sessionId, cwd) {
   } catch {
   }
 }
+function describeDisable(state) {
+  if (!state.disabled) return "";
+  const where = state.scope === "env" ? "SECRETGATE_DISABLE is set for this process" : state.scope === "session" ? `session ${state.target} is paused` : `directory ${state.target} is paused`;
+  const alsoScope = state.includesScope ? " (project scope lifted too)" : "";
+  const when = state.until ? ` until ${state.until}` : state.lifetime ? " until the session ends (24 h at most)" : state.scope === "env" ? "" : " until re-enabled";
+  return `${where}${when}${alsoScope}`;
+}
 
 // src/hooks/policy.ts
-import { homedir as homedir5 } from "os";
-import { basename as basename4, dirname as dirname5, join as join7, resolve as resolve5 } from "path";
+import { basename as basename4, resolve as resolve5 } from "path";
 
 // src/scope.ts
-import { lstatSync as lstatSync2, statSync } from "fs";
-import { homedir as homedir4 } from "os";
-import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute2, join as join6, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
+import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync } from "fs";
+import { homedir as homedir4, tmpdir } from "os";
+import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute3, join as join6, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
+var isOutside = (rel) => rel === ".." || rel.startsWith(`..${sep2}`) || rel.startsWith("../") || isAbsolute3(rel);
 var fold2 = (p) => CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
 var toPosix = (p) => p.replaceAll("\\", "/");
 function absolute(path, cwd) {
@@ -1196,10 +2334,10 @@ function absolute(path, cwd) {
 function relToRoot(scope, abs) {
   const rel = relative2(scope.root, abs);
   if (rel === "") return "";
-  if (rel.startsWith("..") || isAbsolute2(rel)) {
+  if (isOutside(rel)) {
     if (!CASE_INSENSITIVE_FS) return void 0;
     const folded = relative2(fold2(scope.root), fold2(abs));
-    if (folded === "" || folded.startsWith("..") || isAbsolute2(folded)) return folded === "" ? "" : void 0;
+    if (folded === "" || isOutside(folded)) return folded === "" ? "" : void 0;
     return toPosix(abs.slice(abs.length - folded.length));
   }
   return toPosix(rel);
@@ -1211,15 +2349,14 @@ function selfAndAncestors(rel) {
 var isAbsoluteGlob = (g) => g.startsWith("/") || g.startsWith("~");
 function globMatchesPath(glob, rel, abs) {
   const g = toPosix(glob.replace(/^\.\//, ""));
-  const variants = g.endsWith("/**") ? [g, g.slice(0, -3)] : [g];
   if (isAbsoluteGlob(g)) {
-    const expanded = variants.map((v) => toPosix(canonicalGlobBase(expandHome(v))));
+    const expanded = toPosix(canonicalGlobBase(expandHome(g)));
     const candidates = selfAndAncestors(toPosix(abs).replace(/^\//, "")).map((p) => `/${p}`);
-    return expanded.some((v) => candidates.some((c) => pathMatchesGlob(c, v, CASE_INSENSITIVE_FS)));
+    return candidates.some((c) => pathMatchesGlob(c, expanded, CASE_INSENSITIVE_FS));
   }
   if (rel === void 0) return false;
-  if (rel === "") return variants.some((v) => v === "." || v === "**" || v === "");
-  return variants.some((v) => selfAndAncestors(rel).some((c) => pathMatchesGlob(c, v, CASE_INSENSITIVE_FS)));
+  if (rel === "") return g === "." || g === "**" || g === "";
+  return selfAndAncestors(rel).some((c) => pathMatchesGlob(c, g, CASE_INSENSITIVE_FS));
 }
 function canonicalGlobBase(glob) {
   const idx = glob.search(/[*?[{]/);
@@ -1240,6 +2377,11 @@ function staticSegments(glob) {
 function describe(rel, abs) {
   return rel === void 0 ? abs : rel === "" ? "the project root" : rel;
 }
+var tempRoots;
+function inTempDir(abs) {
+  tempRoots ??= [...new Set([tmpdir(), "/tmp", "/var/tmp"].map((d) => canonical(d)))];
+  return tempRoots.some((t) => covers(t, abs));
+}
 function pathOutOfScope(scope, path, cwd) {
   const abs = absolute(path, cwd);
   const rel = relToRoot(scope, abs);
@@ -1247,6 +2389,7 @@ function pathOutOfScope(scope, path, cwd) {
   if (denied) return `'${describe(rel, abs)}' matches scope.deny '${denied}'`;
   if (!scope.allow) return void 0;
   if (scope.allow.some((g) => globMatchesPath(g, rel, abs))) return void 0;
+  if (rel === void 0 && scope.temp !== false && inTempDir(abs)) return void 0;
   return rel === void 0 ? `'${abs}' is outside the project root ${scope.root}` : `'${describe(rel, abs)}' is not in scope.allow`;
 }
 function leadsToAllowed(scope, abs) {
@@ -1281,8 +2424,42 @@ function denyBelow(scope, abs) {
     const prefix = staticSegments(g);
     if (prefix.length === 0) return true;
     const parts = rel === "" ? [] : rel.split("/");
-    return parts.length < prefix.length ? parts.every((p, i) => fold2(p) === fold2(prefix[i])) : false;
+    const onPrefix = parts.length <= prefix.length && parts.every((p, i) => fold2(p) === fold2(prefix[i]));
+    const hasRest = toPosix(g.replace(/^\.\//, "")).split("/").length > parts.length;
+    if (onPrefix && (parts.length < prefix.length || hasRest)) return true;
+    const rest = toPosix(g).split("/").slice(prefix.length);
+    return parts.length > prefix.length && prefix.every((p, i) => fold2(p) === fold2(parts[i])) && rest.some((seg) => seg.includes("**"));
   });
+}
+var TREE_LIMIT = 2e4;
+function treeViolation(scope, dir) {
+  let seen = 0;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    let entries;
+    try {
+      entries = readdirSync2(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const e of entries) {
+      if (++seen > TREE_LIMIT) {
+        const below = denyBelow(scope, dir);
+        return pathOutOfScope(scope, dir, dir) ?? (below ? `'${describe(relToRoot(scope, dir), dir)}' contains paths matching scope.deny '${below}'` : void 0);
+      }
+      const full = join6(current, e.name);
+      if (e.isDirectory()) {
+        const v = pathOutOfScope(scope, full, dir);
+        if (v && !leadsToAllowed(scope, canonical(full))) return v;
+        stack.push(full);
+      } else {
+        const v = pathOutOfScope(scope, full, dir);
+        if (v) return v;
+      }
+    }
+  }
+  return void 0;
 }
 function isDirectory(abs) {
   try {
@@ -1300,8 +2477,9 @@ function exists2(abs) {
   }
 }
 function accessViolation(scope, path, cwd, kind) {
-  const out = pathOutOfScope(scope, path, cwd);
   const abs = absolute(path, cwd);
+  if ((kind === "read" || kind === "list") && fold2(basename3(abs)) === ".secretgate.json") return void 0;
+  const out = pathOutOfScope(scope, path, cwd);
   if (kind === "read" || kind === "write") return out;
   if (kind === "list") {
     if (!out) return void 0;
@@ -1309,30 +2487,26 @@ function accessViolation(scope, path, cwd, kind) {
     if (scope.deny?.some((g) => globMatchesPath(g, rel, abs))) return out;
     return leadsToAllowed(scope, abs) ? void 0 : out;
   }
-  if (out) return out;
-  const below = isDirectory(abs) ? denyBelow(scope, abs) : void 0;
-  if (below) return `'${describe(relToRoot(scope, abs), abs)}' contains paths matching scope.deny '${below}'`;
-  return void 0;
+  if (!isDirectory(abs)) return out;
+  const v = treeViolation(scope, abs);
+  return v ? `${v}, and it is below '${describe(relToRoot(scope, abs), abs)}'` : void 0;
 }
 var STATE_ENTRIES = ["config.json", "allowlist.json", "disabled.json", "sessions.json", "trusted.json", "vault.json", "salt", "bin", "stopped-sessions"];
 function isSecretgateState(abs) {
   const home = defaultVaultHome();
   return STATE_ENTRIES.some((entry) => covers(join6(home, entry), abs));
 }
-function controlRoots(scope) {
+function isPolicyFile(abs, projectRoot) {
+  const name = fold2(basename3(abs));
+  if (name === ".secretgate.json" || name === "opencode.json" || name === "opencode.jsonc") return true;
+  if (fold2(basename3(dirname4(abs))) === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
   const home = homedir4();
-  const codex = process.env.CODEX_HOME ?? join6(home, ".codex");
-  const xdg = process.env.XDG_CONFIG_HOME ?? join6(home, ".config");
-  return [codex, join6(scope.root, ".codex"), join6(xdg, "opencode"), join6(scope.root, ".opencode")];
+  const roots = [process.env.CODEX_HOME ?? join6(home, ".codex"), join6(process.env.XDG_CONFIG_HOME ?? join6(home, ".config"), "opencode")];
+  if (projectRoot) roots.push(join6(projectRoot, ".codex"), join6(projectRoot, ".opencode"));
+  return isSecretgateState(abs) || roots.some((root) => covers(root, abs));
 }
 function isControlFile(scope, path, cwd) {
-  const abs = absolute(path, cwd);
-  const name = fold2(basename3(abs));
-  if (name === ".secretgate.json") return true;
-  const parent = fold2(basename3(dirname4(abs)));
-  if (parent === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
-  if (name === "opencode.json" || name === "opencode.jsonc") return true;
-  return isSecretgateState(abs) || controlRoots(scope).some((root) => covers(root, abs));
+  return isPolicyFile(absolute(path, cwd), scope.root);
 }
 function controlViolation(scope, path, cwd) {
   return isControlFile(scope, path, cwd) ? `'${path}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)` : void 0;
@@ -1360,9 +2534,13 @@ var SAFE_READERS = /* @__PURE__ */ new Set([
   "fd"
 ]);
 var GIT_READ_ONLY = /^git (?:diff|show|log|blame|annotate|status|grep|ls-files|cat-file|whatchanged|shortlog|add|commit|check-ignore)$/;
-function searchAdvice(scope) {
-  const target = scope.allow?.map((g) => staticSegments(g).join("/")).find((p) => p.length > 0);
-  return target ? ` \u2014 point it at an in-scope directory explicitly (e.g. ${target}/)` : "";
+function searchAdvice(scope, refused) {
+  const refusedRel = relToRoot(scope, canonical(refused));
+  const targets = [...new Set((scope.allow ?? []).map((g) => staticSegments(g).join("/")).filter((p) => p.length > 0 && p !== refusedRel))];
+  const usable = targets.filter((t) => isDirectory(join6(scope.root, t)) && !treeViolation(scope, join6(scope.root, t)));
+  if (usable.length > 0)
+    return ` \u2014 point it at an in-scope directory explicitly (e.g. ${usable.slice(0, 3).map((t) => `${t}/`).join(", ")})`;
+  return " \u2014 narrow it to files or subdirectories that are entirely in scope";
 }
 function shellViolation(scope, command, cwd, workdir) {
   const base = workdir ? resolve4(cwd, expandHome(workdir)) : cwd;
@@ -1370,9 +2548,8 @@ function shellViolation(scope, command, cwd, workdir) {
     const v = accessViolation(scope, base, cwd, "list");
     if (v) return `working directory ${v}`;
   }
-  const text = Array.isArray(command) ? command.join(" ") : command;
-  if (/(?:^|[\s;&|(/])secretgate(?:\.mjs)?["']?\s+uninstall\b/.test(text)) return "uninstalling secretgate is not allowed while a scope is active";
   const analysis = analyzeShell(command, { cwd: base });
+  if (analysis.commands.some((argv) => secretgateInvocation(argv) === "uninstall")) return "uninstalling secretgate is not allowed while a scope is active";
   if (scope.bash === "strict" && analysis.dynamic.length > 0) {
     return `scope.bash is "strict" and this command uses ${analysis.dynamic.slice(0, 3).join(", ")}, which cannot be checked statically \u2014 spell the paths out`;
   }
@@ -1388,10 +2565,20 @@ function refViolation(scope, ref, cwd) {
     return `'${ref.raw}' configures secretgate or the agent and is read-only while a scope is active (edit it yourself outside the agent)`;
   }
   if (!ref.explicit) return void 0;
-  const v = accessViolation(scope, ref.path, cwd, ref.kind);
+  const strict = scope.bash === "strict";
+  let kind;
+  if (ref.kind === "exec") {
+    if (/^secretgate(?:-opencode)?\.mjs$/.test(basename3(ref.path))) return void 0;
+    if (!strict)
+      return scope.deny?.some((g) => globMatchesPath(g, relToRoot(scope, absolute(ref.path, cwd)), absolute(ref.path, cwd))) ? pathOutOfScope(scope, ref.path, cwd) : void 0;
+    kind = "read";
+  } else if (ref.kind === "read" && isDirectory(absolute(ref.path, cwd))) {
+    kind = strict ? "search" : "list";
+  } else kind = ref.kind;
+  const v = accessViolation(scope, ref.path, cwd, kind);
   if (!v) return void 0;
-  if (ref.kind === "search")
-    return `\`${ref.command}\` would read everything under ${ref.raw === "." ? "the working directory" : `'${ref.raw}'`}: ${v}${searchAdvice(scope)}`;
+  if (kind === "search")
+    return `\`${ref.command}\` would read everything under ${ref.raw === "." ? "the working directory" : `'${ref.raw}'`}: ${v}${searchAdvice(scope, ref.path)}`;
   return v;
 }
 function searchRootOf(call, cwd) {
@@ -1446,16 +2633,61 @@ function oneScope(scope, call, cwd) {
       return void 0;
   }
 }
+function entryOutOfScope(scopes, abs, cwd) {
+  const kind = isDirectory(abs) ? "list" : "read";
+  return scopes.some((s) => accessViolation(s, abs, cwd, kind) !== void 0);
+}
+function pathOfLine(line, cwd) {
+  const trimmed = line.trim().replace(/^[-*]\s+/, "");
+  if (trimmed === "" || trimmed === "--" || trimmed.length > 4096) return void 0;
+  const cuts = [trimmed.length];
+  for (const m of trimmed.matchAll(/:|-(?=\d+-)/g)) {
+    cuts.push(m.index);
+    if (cuts.length > 64) break;
+  }
+  for (const cut of cuts.sort((a, b) => b - a)) {
+    const candidate = trimmed.slice(0, cut).trim();
+    if (!candidate) continue;
+    const abs = resolve4(cwd, expandHome(candidate));
+    if (exists2(abs)) return abs;
+  }
+  return void 0;
+}
 function lineOutOfScope(scopes, line, cwd) {
-  const trimmed = line.trim();
-  if (trimmed === "" || trimmed === "--") return void 0;
-  const candidate = /^(.+?)(?::\d+[:-]|-\d+-|:|$)/.exec(trimmed)?.[1]?.trim();
-  if (!candidate || candidate.length > 4096) return void 0;
-  const abs = resolve4(cwd, expandHome(candidate));
-  if (!exists2(abs)) return void 0;
-  return scopes.some((s) => pathOutOfScope(s, abs, cwd) !== void 0);
+  const abs = pathOfLine(line, cwd);
+  return abs === void 0 ? void 0 : entryOutOfScope(scopes, abs, cwd);
+}
+function filterTree(scopes, lines, cwd) {
+  const head = lines.findIndex((l) => l.trim() !== "");
+  if (head === -1) return void 0;
+  const rootText = lines[head].trim().replace(/^[-*]\s+/, "");
+  if (!isAbsolute3(rootText) || !isDirectory(rootText)) return void 0;
+  const kept = lines.slice(0, head + 1);
+  const stack = [{ indent: lines[head].search(/\S/), path: rootText }];
+  let dropBelow;
+  for (const line of lines.slice(head + 1)) {
+    if (line.trim() === "") {
+      kept.push(line);
+      continue;
+    }
+    const indent = line.search(/\S/);
+    if (dropBelow !== void 0 && indent > dropBelow) continue;
+    dropBelow = void 0;
+    while (stack.length > 1 && stack[stack.length - 1].indent >= indent) stack.pop();
+    const name = line.trim().replace(/^[-*]\s+/, "").replace(/\/$/, "");
+    const path = isAbsolute3(name) ? name : join6(stack[stack.length - 1].path, name);
+    if (exists2(path) && entryOutOfScope(scopes, path, cwd)) {
+      dropBelow = indent;
+      continue;
+    }
+    kept.push(line);
+    stack.push({ indent, path });
+  }
+  return kept;
 }
 function filterSearchText(scopes, text, cwd) {
+  const tree = filterTree(scopes, text.split("\n"), cwd);
+  if (tree) return tree.join("\n");
   let dropping = false;
   const kept = [];
   for (const line of text.split("\n")) {
@@ -1478,7 +2710,9 @@ function filterSearchOutput(scopes, value, cwd) {
     let changed = false;
     const next = [];
     for (const item of value) {
-      if (typeof item === "string" && lineOutOfScope(scopes, item, cwd) === true) {
+      const whole = typeof item === "string" ? resolve4(cwd, expandHome(item)) : void 0;
+      const out = whole !== void 0 && exists2(whole) ? entryOutOfScope(scopes, whole, cwd) : typeof item === "string" && lineOutOfScope(scopes, item, cwd) === true;
+      if (out) {
         changed = true;
         continue;
       }
@@ -1508,6 +2742,7 @@ function promptScopeViolation(scopes, prompt, cwd) {
     const explicit = raw.startsWith("/") || raw.startsWith("~") || raw.startsWith("./") || raw.startsWith("../");
     const abs = resolve4(cwd, expandHome(raw.replace(/#L?\d+(?:-\d+)?$/, "")));
     if (!explicit && !exists2(abs)) continue;
+    if (!explicit && !raw.includes("/") && isDirectory(abs)) continue;
     for (const scope of scopes) {
       const v = accessViolation(scope, abs, cwd, isDirectory(abs) ? "list" : "read");
       if (v) return `secretgate scope (${scope.file}): @${raw} \u2014 ${v}. Mention an in-scope file instead.`;
@@ -1521,37 +2756,32 @@ function touchesOnly(call, file, cwd) {
   if (call.kind !== "read" && call.kind !== "write" && call.kind !== "patch") return false;
   return call.paths.length > 0 && call.paths.every((p) => canonical(resolve5(cwd, expandHome(p))) === canonical(file));
 }
-function guardedPath(abs, cwd) {
-  const home = homedir5();
-  const name = basename4(abs).toLowerCase();
-  if (name === ".secretgate.json") return true;
-  if (basename4(dirname5(abs)).toLowerCase() === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
-  const codex = process.env.CODEX_HOME ?? join7(home, ".codex");
-  const opencode = join7(process.env.XDG_CONFIG_HOME ?? join7(home, ".config"), "opencode");
-  return isSecretgateState(abs) || covers(join7(codex, "hooks.json"), abs) || covers(join7(codex, "config.toml"), abs) || covers(join7(opencode, "plugin"), abs) || covers(join7(opencode, "opencode.json"), abs) || name === "opencode.json" && covers(cwd, abs);
-}
-var SELF_DISABLE = /(?:^|[\s;&|(/"'`])secretgate(?:\.mjs)?["']?\s+(disable|allow|uninstall|trust|vault\s+clear)\b/;
+var GUARDED = /* @__PURE__ */ new Set(["disable", "allow", "uninstall", "trust", "vault clear"]);
 function tamperReason(call, cwd) {
   if (call.kind === "shell" && call.command !== void 0) {
-    const text = Array.isArray(call.command) ? call.command.join(" ") : call.command;
-    const m = SELF_DISABLE.exec(text);
-    if (m) return `this runs \`secretgate ${m[1]}\`, which changes what secretgate protects \u2014 that is your call, not the agent's`;
     const base = call.workdir ? resolve5(cwd, expandHome(call.workdir)) : cwd;
-    for (const ref of analyzeShell(call.command, { cwd: base }).refs) {
-      if (ref.kind === "write" && guardedPath(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
+    const analysis = analyzeShell(call.command, { cwd: base });
+    for (const argv of analysis.commands) {
+      const verb = secretgateInvocation(argv);
+      if (verb && GUARDED.has(verb.replace(/^\?/, ""))) {
+        return verb.startsWith("?") ? `this runs a program named by a variable with \`${verb.slice(1)}\` \u2014 it may be secretgate, and changing what secretgate protects is your call, not the agent's` : `this runs \`secretgate ${verb}\`, which changes what secretgate protects \u2014 that is your call, not the agent's`;
+      }
+    }
+    for (const ref of analysis.refs) {
+      if (ref.kind === "write" && isPolicyFile(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
     }
     return void 0;
   }
   if (call.kind === "write" || call.kind === "patch") {
     for (const p of call.paths)
-      if (guardedPath(canonical(resolve5(cwd, expandHome(p))), cwd)) return `this edits '${p}', which configures secretgate or its hooks`;
+      if (isPolicyFile(canonical(resolve5(cwd, expandHome(p))), cwd)) return `this edits '${p}', which configures secretgate or its hooks`;
   }
   return void 0;
 }
-function patternLooksSensitive(pattern, allowlist, cwd) {
+function patternLooksSensitive(pattern, root, allowlist, cwd) {
   const name = basename4(pattern);
   for (const probe of [name.replace(/[*?]/g, ""), name.replace(/[*?]/g, "x")]) {
-    if (probe && sensitivePathMatch(probe, allowlist, cwd)) return pattern;
+    if (probe && sensitivePathMatch(resolve5(cwd, expandHome(root), probe), allowlist, cwd)) return pattern;
   }
   return void 0;
 }
@@ -1566,11 +2796,12 @@ function sensitiveReason(call, cfg, cwd) {
       }
       return void 0;
     case "search": {
+      if (!call.content) return void 0;
       for (const p of call.paths) {
-        const hit = sensitivePathMatch(p, cfg.allowlist, cwd) ?? sensitivePathMatch(join7(p, "x"), cfg.allowlist, cwd);
+        const hit = sensitivePathMatch(p, cfg.allowlist, cwd);
         if (hit) return deny(p, hit);
       }
-      const pattern = call.pattern ? patternLooksSensitive(call.pattern, cfg.allowlist, cwd) : void 0;
+      const pattern = call.pattern ? patternLooksSensitive(call.pattern, call.searchRoot ?? ".", cfg.allowlist, cwd) : void 0;
       return pattern ? deny(pattern, "search pattern naming sensitive files") : void 0;
     }
     case "shell": {
@@ -1587,7 +2818,7 @@ function preToolPolicy(call, cfg, cwd, opts) {
   if (cfg.error && !touchesOnly(call, cfg.error.file, cwd)) {
     return {
       action: "deny",
-      reason: `secretgate: ${cfg.error.file} is invalid (${cfg.error.message}). Tool calls are refused until it is fixed, because it may declare a scope. Fix the file (the agent may read and edit it).`
+      reason: `secretgate: ${cfg.error.file} is invalid (${cfg.error.message}). Tool calls are refused until it is fixed, because it may declare a scope. Fix it yourself, or let the agent edit it (you will be asked to approve).`
     };
   }
   const scope = toolCallScopeViolation(cfg.scopes, call, cwd);
@@ -6198,7 +7429,25 @@ function patchPaths(patch) {
 }
 function filePaths(input) {
   const out = [];
-  for (const key of ["file_path", "filePath", "path", "notebook_path", "notebookPath", "target_file", "file"]) {
+  for (const key of [
+    "file_path",
+    "filePath",
+    "path",
+    "notebook_path",
+    "notebookPath",
+    "target_file",
+    "file",
+    "source",
+    "destination",
+    "src",
+    "dest",
+    "from",
+    "to",
+    "sourcePath",
+    "destinationPath",
+    "old_path",
+    "new_path"
+  ]) {
     const v = str(input[key]);
     if (v) out.push(v);
   }
@@ -6244,7 +7493,7 @@ function extractToolCall(toolName, toolInput) {
   if (SEARCH_GLOB.has(name) || SEARCH_GREP.has(name)) {
     const root = str(input.path) ?? str(input.directory) ?? str(input.dir);
     const pattern = SEARCH_GLOB.has(name) ? str(input.pattern) ?? str(input.glob) : str(input.glob) ?? str(input.include);
-    return { kind: "search", paths: root ? [root] : [], searchRoot: root, pattern };
+    return { kind: "search", paths: root ? [root] : [], searchRoot: root, pattern, content: SEARCH_GREP.has(name) };
   }
   return { kind: "other", paths: filePaths(input) };
 }
@@ -6283,6 +7532,11 @@ function applyPromptDirective(directive, sessionId, cwd) {
   }
   if (directive.action === "enable") {
     const cleared = removePause("session", sessionId);
+    const still = disableState({ sessionId, cwd });
+    if (still.disabled) {
+      const how = still.scope === "env" ? "unset SECRETGATE_DISABLE and restart the agent" : "run `secretgate enable` in a terminal";
+      return `secretgate: ${cleared.length > 0 ? "this session's pause is cleared, but " : ""}secretgate is still DISABLED here \u2014 ${describeDisable(still)}. That pause is not the session's own: ${how}.`;
+    }
     return cleared.length > 0 ? "secretgate: re-enabled for this session, at your request. Prompts, tool input and tool output are scanned again." : "secretgate: already active for this session.";
   }
   addPause({ scope: "session", target: sessionId, minutes: null, cwd, lifetime: true, liftScope: directive.liftScope });
@@ -6338,6 +7592,16 @@ var SecretgatePlugin = async (ctx) => {
   const cwd = typeof directory === "string" ? directory : process.cwd();
   const offState = (sessionId) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : void 0 });
   const isOff = (sessionId) => offState(sessionId).disabled;
+  const client = ctx?.client;
+  const isSubsession = async (sessionId) => {
+    if (typeof sessionId !== "string" || typeof client?.session?.get !== "function") return false;
+    try {
+      const res = await client.session.get({ path: { id: sessionId } });
+      return typeof res?.data?.parentID === "string" && res.data.parentID.length > 0;
+    } catch {
+      return true;
+    }
+  };
   const configFor = (sessionId) => {
     const cfg = loadConfig(cwd);
     return offState(sessionId).includesScope ? { ...cfg, scopes: [], error: void 0 } : cfg;
@@ -6367,7 +7631,11 @@ var SecretgatePlugin = async (ctx) => {
       const said = parts.find(
         (p) => typeof p?.text === "string" && !p.synthetic && (p.type === void 0 || p.type === "text") && promptDirective(String(p.text))
       );
-      if (said) {
+      if (said && await isSubsession(sessionID)) {
+        said.text = `${said.text}
+
+[secretgate: ignored an off-switch in a subagent prompt \u2014 only the user can pause secretgate, in the main session]`;
+      } else if (said) {
         const notice = applyPromptDirective(promptDirective(String(said.text)), typeof sessionID === "string" ? sessionID : void 0, cwd);
         said.text = `${said.text}
 

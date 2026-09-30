@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { UserAllowlist } from "./engine/allowlist.js";
 import { canonical } from "./paths.js";
 import { defaultVaultHome } from "./vault/vault.js";
@@ -26,6 +27,8 @@ export interface ScopeConfig {
   /** Globs that are out of scope even when `allow` matches. */
   deny?: string[];
   bash: BashScopeMode;
+  /** OS temp dirs count as scratch space outside the fence (default true). */
+  temp: boolean;
   /** The config file itself, for messages. */
   file: string;
 }
@@ -48,6 +51,8 @@ export interface SecretgateConfig {
   error?: { file: string; message: string };
 }
 
+// JSON with comments and trailing commas (JSONC), as editors write it — the
+// README examples are commented. Parsed by VS Code's own jsonc-parser.
 function readJsonFile(path: string): { ok: true; value: unknown } | { ok: false; missing: boolean; message: string } {
   let raw: string;
   try {
@@ -55,11 +60,14 @@ function readJsonFile(path: string): { ok: true; value: unknown } | { ok: false;
   } catch {
     return { ok: false, missing: true, message: "unreadable" };
   }
-  try {
-    return { ok: true, value: JSON.parse(raw) };
-  } catch {
-    return { ok: false, missing: false, message: "not valid JSON" };
+  const errors: ParseError[] = [];
+  const value = parseJsonc(raw, errors, { allowTrailingComma: true, disallowComments: false });
+  if (errors.length > 0) {
+    const e = errors[0]!;
+    const line = raw.slice(0, e.offset).split("\n").length;
+    return { ok: false, missing: false, message: `not valid JSON: ${printParseErrorCode(e.error)} at line ${line}` };
   }
+  return { ok: true, value };
 }
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
@@ -85,7 +93,9 @@ function validateScope(v: unknown, root: string, file: string): ScopeConfig | un
   if (v === undefined) return undefined;
   if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("scope must be an object");
   const s = v as Record<string, unknown>;
-  for (const key of Object.keys(s)) if (!["allow", "deny", "bash"].includes(key)) throw new Error(`scope.${key} is not a known key (allow, deny, bash)`);
+  for (const key of Object.keys(s))
+    if (!["allow", "deny", "bash", "temp"].includes(key)) throw new Error(`scope.${key} is not a known key (allow, deny, bash, temp)`);
+  if (s.temp !== undefined && typeof s.temp !== "boolean") throw new Error("scope.temp must be true or false");
   if (s.allow !== undefined && !isStringArray(s.allow)) throw new Error("scope.allow must be an array of non-empty glob strings");
   if (s.deny !== undefined && !isStringArray(s.deny)) throw new Error("scope.deny must be an array of non-empty glob strings");
   if (s.bash !== undefined && s.bash !== "paths" && s.bash !== "strict") throw new Error('scope.bash must be "paths" or "strict"');
@@ -95,6 +105,7 @@ function validateScope(v: unknown, root: string, file: string): ScopeConfig | un
     allow: s.allow as string[] | undefined,
     deny: s.deny as string[] | undefined,
     bash: (s.bash as BashScopeMode | undefined) ?? "paths",
+    temp: s.temp !== false,
     file,
   };
 }
@@ -131,7 +142,12 @@ export function loadConfig(cwd?: string): SecretgateConfig {
   let error: SecretgateConfig["error"];
   const trust = cwd ? readTrust() : {};
 
-  for (const file of cwd ? projectConfigFiles(cwd) : []) {
+  // The agent may `cd` into a nested repository (a submodule, a worktree): the
+  // project it was STARTED in still applies. Claude Code exports that
+  // directory to its hooks as CLAUDE_PROJECT_DIR.
+  const starts = [cwd, process.env.CLAUDE_PROJECT_DIR].filter((d): d is string => typeof d === "string" && d.length > 0);
+  const files = [...new Set(starts.flatMap((d) => projectConfigFiles(d)))];
+  for (const file of cwd ? files : []) {
     const read = readJsonFile(file);
     try {
       if (!read.ok) throw new Error(read.message);
@@ -173,7 +189,7 @@ function trustPath(): string {
   return join(defaultVaultHome(), "trusted.json");
 }
 
-export function fileHash(file: string): string | undefined {
+function fileHash(file: string): string | undefined {
   try {
     return createHash("sha256").update(readFileSync(file)).digest("hex");
   } catch {

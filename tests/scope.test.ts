@@ -25,7 +25,7 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
-const scopeOf = (s: Partial<ScopeConfig>): ScopeConfig => ({ root, bash: "paths", file: join(root, ".secretgate.json"), ...s });
+const scopeOf = (s: Partial<ScopeConfig>): ScopeConfig => ({ root, bash: "paths", temp: true, file: join(root, ".secretgate.json"), ...s });
 const std = () => scopeOf({ allow: ["src/**", "tests/**", "package.json"], deny: ["src/legacy/**"] });
 
 describe("pathOutOfScope", () => {
@@ -89,7 +89,7 @@ describe("accessViolation — listings and searches", () => {
 
   it("a recursive search needs every file below it in scope", () => {
     expect(accessViolation(std(), "src/app", root, "search")).toBeUndefined();
-    expect(accessViolation(std(), "src", root, "search")).toMatch(/contains paths matching scope\.deny/);
+    expect(accessViolation(std(), "src", root, "search")).toMatch(/src\/legacy\/old\.ts' matches scope\.deny/);
     expect(accessViolation(std(), ".", root, "search")).toBeDefined();
   });
 });
@@ -108,8 +108,8 @@ describe("toolCallScopeViolation", () => {
   it("Glob/Grep: denied on unrelated roots, allowed (then filtered) on ancestors", () => {
     expect(check("Glob", { pattern: "**/*.md", path: join(root, "docs") })).toBeDefined();
     expect(check("Grep", { pattern: "x", path: root })).toBeUndefined();
-    expect(check("Glob", { pattern: "../**/*" })).toBeDefined();
     expect(check("Glob", { pattern: "/etc/*" })).toBeDefined();
+    expect(check("Glob", { pattern: "../../../etc/*", path: "/usr/lib" })).toBeDefined();
   });
 
   it("Codex apply_patch and OpenCode patchText paths are checked", () => {
@@ -136,7 +136,8 @@ describe("toolCallScopeViolation", () => {
   it("Bash: recursive reads of a partly out-of-scope tree are denied with advice", () => {
     const r = check("Bash", { command: "grep -rn TODO ." });
     expect(r).toMatch(/would read everything under/);
-    expect(r).toMatch(/src\//);
+    // src/ holds a denied subtree, so the hint offers what is fully in scope.
+    expect(r).toMatch(/e\.g\. tests\//);
     expect(check("Bash", { command: "rg TODO src/app tests" })).toBeUndefined();
     expect(check("Bash", { command: "git diff" })).toBeDefined();
     expect(check("Bash", { command: "git diff -- src/app" })).toBeUndefined();

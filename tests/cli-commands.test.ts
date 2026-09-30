@@ -446,8 +446,8 @@ describe("secretgate scope / trust / disable --scope", () => {
     expect(await run(["scope", "check", "src/x.ts"], ok.io)).toBe(0);
     expect(ok.text()).toMatch(/^in {3}src\/x\.ts/);
     const bad = capture();
-    expect(await run(["scope", "check", "src/x.ts", "../outside"], bad.io)).toBe(1);
-    expect(bad.text()).toMatch(/out {2}\.\.\/outside — .*outside the project root/);
+    expect(await run(["scope", "check", "src/x.ts", "/etc/hosts"], bad.io)).toBe(1);
+    expect(bad.text()).toMatch(/out {2}\/etc\/hosts — .*outside the project root/);
   });
 
   it("`scope` reports an invalid config (exit 2)", async () => {

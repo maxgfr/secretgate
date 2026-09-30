@@ -1,21 +1,20 @@
 import { type EditReport, editJsonFile } from "./json-merge.js";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 
-// Deny rules complement the hooks: they also apply where tool hooks don't fire
-// — notably @file mentions, which inline a file's content WITHOUT firing tool
-// hooks. Kept close to parity with paths.ts SENSITIVE_GLOBS so @file can't pull
-// in a key the hook layer would have denied. .env.example & co stay readable
-// because the hook is the precise, exemption-aware layer (deny globs can't
-// express negation, so we avoid the broad `**/.env.*` here).
+// Deny rules complement the hooks where tool hooks don't fire — notably @file
+// mentions, which inline a file's content WITHOUT firing tool hooks. They are
+// deliberately limited to places where a match is a REAL secret: local env
+// files, credential files in the home directory, tool credential files. A
+// deny rule cannot express exceptions, so project-wide extension globs
+// (`**/*.pem`, `**/*.key`, `**/credentials.json`…) would also refuse the fake
+// keys in test fixtures that security work has to read; those are left to
+// the hook, which exempts fixtures and still redacts their content.
 export const CC_DENY_RULES = [
   "Read(**/.env)",
   "Read(**/.env.local)",
   "Read(**/.env.*.local)",
-  "Read(**/*.pem)",
-  "Read(**/*.key)",
-  "Read(**/id_rsa*)",
-  "Read(**/id_ed25519*)",
-  "Read(**/id_ecdsa*)",
+  "Read(**/.envrc)",
+  "Read(**/.dev.vars)",
   "Read(~/.aws/**)",
   "Read(**/.aws/**)",
   "Read(~/.ssh/**)",
@@ -25,16 +24,23 @@ export const CC_DENY_RULES = [
   "Read(**/.netrc)",
   "Read(**/.npmrc)",
   "Read(**/.docker/config.json)",
-  "Read(**/credentials.json)",
-  "Read(**/.envrc)",
-  "Read(**/.dev.vars)",
   "Read(**/.git-credentials)",
   "Read(**/.pgpass)",
   "Read(**/.pypirc)",
+  "Read(~/.secretgate/vault.json)",
+];
+
+// Rules older versions installed and `init` now removes (they blocked fixtures).
+export const RETIRED_DENY_RULES = [
+  "Read(**/*.pem)",
+  "Read(**/*.key)",
+  "Read(**/id_rsa*)",
+  "Read(**/id_ed25519*)",
+  "Read(**/id_ecdsa*)",
+  "Read(**/credentials.json)",
   "Read(**/*.p12)",
   "Read(**/*.pfx)",
   "Read(**/*.tfstate)",
-  "Read(~/.secretgate/vault.json)",
 ];
 
 // Identifies OUR hook entries regardless of how the CLI is invoked
@@ -93,12 +99,15 @@ export function installClaudeCode({ settingsPath, command }: InstallOptions): Ed
       s.hooks[event] = [...kept, group];
     }
     s.permissions ??= {};
-    const deny: string[] = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
+    // Rules an older secretgate added and no longer ships (e.g. `**/*.pem`,
+    // which blocked test fixtures) are removed — only the ones it owns.
+    const retired = new Set(((previous.deny ?? []) as string[]).filter((r) => !CC_DENY_RULES.includes(r)));
+    const deny: string[] = (Array.isArray(s.permissions.deny) ? s.permissions.deny : []).filter((r: string) => !retired.has(r));
     added.push(...CC_DENY_RULES.filter((r) => !deny.includes(r)));
     s.permissions.deny = [...deny, ...added];
   });
   editJsonFile(ownershipPath, (state) => {
-    state.deny = [...new Set([...(previous.deny ?? []), ...added])];
+    state.deny = [...new Set([...(previous.deny ?? []), ...added])].filter((r) => CC_DENY_RULES.includes(r));
   });
   return report;
 }

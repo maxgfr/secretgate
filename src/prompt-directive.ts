@@ -1,4 +1,4 @@
-import { addPause, removePause } from "./disable.js";
+import { addPause, describeDisable, disableState, removePause } from "./disable.js";
 
 // Turning secretgate off by saying so. The user types "désactive secretgate"
 // (or "disable secretgate") in the conversation and THIS session is paused
@@ -65,6 +65,11 @@ export function applyPromptDirective(directive: PromptDirective, sessionId: stri
   }
   if (directive.action === "enable") {
     const cleared = removePause("session", sessionId);
+    const still = disableState({ sessionId, cwd });
+    if (still.disabled) {
+      const how = still.scope === "env" ? "unset SECRETGATE_DISABLE and restart the agent" : "run `secretgate enable` in a terminal";
+      return `secretgate: ${cleared.length > 0 ? "this session's pause is cleared, but " : ""}secretgate is still DISABLED here — ${describeDisable(still)}. That pause is not the session's own: ${how}.`;
+    }
     return cleared.length > 0
       ? "secretgate: re-enabled for this session, at your request. Prompts, tool input and tool output are scanned again."
       : "secretgate: already active for this session.";

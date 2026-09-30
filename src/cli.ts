@@ -25,7 +25,7 @@ import { isNonSecret, scan, sensitiveFileNameRule } from "./engine/scanner.js";
 import { failClosed, type HookResult, handleClaudeCode } from "./hooks/claude-code.js";
 import { handleCodex } from "./hooks/codex.js";
 import { writeAllow } from "./install/allow-store.js";
-import { claudeCodeMatcherCurrent, installClaudeCode, uninstallClaudeCode } from "./install/claude-code.js";
+import { claudeCodeMatcherCurrent, installClaudeCode, RETIRED_DENY_RULES, uninstallClaudeCode } from "./install/claude-code.js";
 import { CODEX_HOOK_COUNT, codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
 import { SettingsParseError } from "./install/json-merge.js";
 import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
@@ -1061,6 +1061,11 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
     io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}\n`);
     if (wired > 0 && !claudeCodeMatcherCurrent(settings))
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) — run \`secretgate init\` to update\n`);
+    const retired = (Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny : []).filter((r: string) => RETIRED_DENY_RULES.includes(r));
+    if (retired.length > 0)
+      io.stdout(
+        `claude-code ${label}  ${retired.length} old deny rule(s) (${retired.slice(0, 2).join(", ")}…) block test fixtures — run \`secretgate init\` to remove them\n`,
+      );
   }
   io.stdout("claude-code limitation: @file mentions bypass tool hooks; deny rules cover sensitive files, the scope check covers @path in the prompt text.\n");
 

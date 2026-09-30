@@ -120,6 +120,10 @@ for (const agent of agents) {
   const state = join(scratch, "vault");
   const env = {
     ...process.env,
+    // Agents take their project directory from $PWD, which a spawned child
+    // inherits from THIS process unless set: OpenCode would otherwise load
+    // its plugin for the repository running the test, not the fixture.
+    PWD: project,
     SECRETGATE_HOME: state,
     SECRETGATE_DISABLE: "0",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -178,8 +182,19 @@ for (const agent of agents) {
       if (phase === "scope") {
         // One attempt to read a file outside the declared scope, then a plain
         // answer. The file's marker must never appear in any model request.
-        assert(!raw.includes(scopeMarker), `${agent}: OUT-OF-SCOPE FILE CONTENT REACHED MODEL REQUEST`);
-        if (turn++ === 0 && tools.length) {
+        const leak = raw.indexOf(scopeMarker);
+        assert(
+          leak === -1,
+          `${agent}: OUT-OF-SCOPE FILE CONTENT REACHED MODEL REQUEST: …${raw.slice(Math.max(0, leak - 1200), leak).replaceAll(scopeMarker, "[MARKER]")}[MARKER]…`,
+        );
+        // Tool-less requests (OpenCode's title generation) are not turns:
+        // counting one would hand the read to nobody and test nothing.
+        if (!tools.length) {
+          if (agent === "codex") responses(res, body.model);
+          else anthropic(res, body.model);
+          return;
+        }
+        if (turn++ === 0) {
           const name = agent === "claude-code" ? "Read" : agent === "opencode" ? "read" : names.find((n) => n === "exec_command" || n === "shell");
           tool = {
             name,

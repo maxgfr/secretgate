@@ -21,6 +21,8 @@ export interface ShellWord {
   glob: boolean;
   /** Contains an unquoted `{a,b}` list. */
   brace: boolean;
+  /** The value of a `--flag=value` option, not a positional argument. */
+  flagValue?: boolean;
 }
 
 interface Redirect {
@@ -35,7 +37,10 @@ interface SimpleCommand {
   stdinLiteral: boolean;
 }
 
-export type PathRefKind = "read" | "write" | "list" | "search";
+// read: content may be printed · write: created/changed · list: names or
+// metadata only · search: everything below is read · exec: a script an
+// interpreter runs (`node x.js`, `python y.py`).
+export type PathRefKind = "read" | "write" | "list" | "search" | "exec";
 
 export interface PathRef {
   /** Absolute, `~`-expanded, lexically resolved (not realpath'd). */
@@ -50,10 +55,15 @@ export interface PathRef {
    *  ref or a message (`origin/main`): name-based checks (sensitive files)
    *  still look at those, existence-based ones (scope) skip them. */
   explicit: boolean;
+  /** Came from a redirection (`< file`, `> file`), whatever the command. */
+  redirect?: boolean;
 }
 
 export interface ShellAnalysis {
   refs: PathRef[];
+  /** Every simple command, as argv after quote removal (DYN marks unknowns),
+   *  including those run by substitutions. */
+  commands: string[][];
   /** Constructs whose effect cannot be known statically — each a short label. */
   dynamic: string[];
   /** A relative path could not be resolved because `cd` went somewhere unknown. */
@@ -103,6 +113,70 @@ function matchBacktick(s: string, start: number): number {
   let i = start;
   while (i < s.length && s[i] !== "`") i += s[i] === "\\" ? 2 : 1;
   return Math.min(i + 1, s.length);
+}
+
+// Commands run from inside an arithmetic expression: `$(( $(cat x) ))`.
+function innerSubstitutions(text: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "$" && text[i + 1] === "(" && text[i + 2] !== "(") {
+      const end = matchParen(text, i + 2);
+      out.push(text.slice(i + 2, end - 1));
+      i = end - 1;
+    } else if (text[i] === "`") {
+      const end = matchBacktick(text, i + 1);
+      out.push(text.slice(i + 1, end - 1));
+      i = end - 1;
+    }
+  }
+  return out;
+}
+
+const ANSI_ESCAPES: Record<string, string> = {
+  n: "\n",
+  t: "\t",
+  r: "\r",
+  a: "\x07",
+  b: "\b",
+  e: "\x1b",
+  E: "\x1b",
+  f: "\f",
+  v: "\v",
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  "?": "?",
+};
+
+// Decode `$'…'` starting after the opening quote.
+function ansiC(s: string, start: number): { text: string; end: number } {
+  let text = "";
+  let i = start;
+  while (i < s.length && s[i] !== "'") {
+    if (s[i] !== "\\") {
+      text += s[i];
+      i++;
+      continue;
+    }
+    const n = s[i + 1] ?? "";
+    const hex = /^x([0-9a-fA-F]{1,2})/.exec(s.slice(i + 1));
+    const uni = /^[uU]([0-9a-fA-F]{1,8})/.exec(s.slice(i + 1));
+    const oct = /^([0-7]{1,3})/.exec(s.slice(i + 1));
+    if (hex) {
+      text += String.fromCharCode(Number.parseInt(hex[1]!, 16));
+      i += 1 + hex[0].length;
+    } else if (uni) {
+      text += String.fromCodePoint(Math.min(Number.parseInt(uni[1]!, 16), 0x10ffff));
+      i += 1 + uni[0].length;
+    } else if (oct) {
+      text += String.fromCharCode(Number.parseInt(oct[1]!, 8));
+      i += 1 + oct[0].length;
+    } else {
+      text += ANSI_ESCAPES[n] ?? n;
+      i += 2;
+    }
+  }
+  return { text, end: Math.min(i + 1, s.length) };
 }
 
 const VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*/;
@@ -221,10 +295,20 @@ function tokenize(command: string, cwd: string): ParseState {
         }
       }
       i++;
+    } else if (c === "$" && command[i + 1] === "'") {
+      // ANSI-C quoting: `$'.env'`, `$'\x2eenv'` — decode, it is a literal.
+      const { text, end } = ansiC(command, i + 2);
+      word += text;
+      inWord = true;
+      i = end;
+    } else if (c === "$" && command[i + 1] === '"') {
+      // Locale quoting `$"…"` behaves like "…".
+      i++;
     } else if (c === "$" && command[i + 1] === "(") {
       const arithmetic = command[i + 2] === "(";
       const end = matchParen(command, i + 2);
       if (!arithmetic) st.substitutions.push(command.slice(i + 2, end - 1));
+      else st.substitutions.push(...innerSubstitutions(command.slice(i + 3, end - 2)));
       st.dynamic.push(arithmetic ? "$((…))" : "$(…)");
       word += DYN;
       inWord = true;
@@ -272,6 +356,12 @@ function tokenize(command: string, cwd: string): ParseState {
         continue;
       }
       pendingRedirect = op === ">&" ? ">" : op === "<&" ? "<" : op;
+    } else if (c === "(" && command[i + 1] === "(" && !inWord && cur.words.length === 0) {
+      // `(( n = 1 << 2 ))` is arithmetic, not a subshell with a heredoc.
+      endCommand();
+      const end = matchParen(command, i + 1);
+      st.substitutions.push(...innerSubstitutions(command.slice(i + 2, Math.max(i + 2, end - 2))));
+      i = end;
     } else if (SEP_CHARS.has(c)) {
       endCommand();
       if (c === "(") st.structure.push({ type: "open" });
@@ -348,7 +438,7 @@ const GLOB_LIMIT = 2000;
 
 /** Expand a shell glob against the filesystem, bash-style (no dotglob:
  *  `*` never matches a leading `.`). `overflow` when too many matches. */
-export function expandGlob(absPattern: string): { matches: string[]; overflow: boolean } {
+function expandGlob(absPattern: string): { matches: string[]; overflow: boolean } {
   const parts = absPattern.split("/").filter((p, idx) => p !== "" || idx === 0);
   let frontier = [parts[0] === "" ? "/" : parts[0]!];
   for (const part of parts.slice(1)) {
@@ -431,6 +521,7 @@ const LIST_ARGS = new Set(["ls", "dir", "stat", "file", "test", "[", "[[", "wc",
 // Interpreters: in strict mode, inline programs and stdin programs are opaque.
 const INTERPRETERS = /^(?:bash|sh|zsh|dash|ksh|fish|python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|pwsh|powershell)$/;
 const INLINE_FLAGS = new Set(["-c", "-e", "-p", "-r", "--eval", "--print", "-E", "eval", "-Command"]);
+const SHELLS = /^(?:bash|sh|zsh|dash|ksh)$/;
 const EVAL_COMMANDS = new Set(["eval", "source", ".", "xargs", "parallel", "watch"]);
 
 interface CommandShape {
@@ -476,7 +567,7 @@ function shapeOf(words: ShellWord[]): CommandShape | undefined {
       const eq = w.text.indexOf("=");
       if (w.text.startsWith("--") && eq > 0) {
         args.push(w.text.slice(eq + 1));
-        argWords.push({ ...w, text: w.text.slice(eq + 1) });
+        argWords.push({ ...w, text: w.text.slice(eq + 1), flagValue: true });
       }
       continue;
     }
@@ -500,6 +591,8 @@ const VALUE_FLAGS: Record<string, string[]> = {
   awk: ["-f", "-v", "-F"],
   find: [],
   git: ["-C", "-c"],
+  // Output files: `openssl genrsa -out server.key` writes, it does not read.
+  openssl: ["-out", "-passout"],
 };
 
 /** Positional args with the values of known value-taking flags removed;
@@ -518,7 +611,7 @@ function positionals(words: ShellWord[], cmd: string): { pos: ShellWord[]; dashA
     }
     if (dashAt === -1 && t.startsWith("-") && t.length > 1) {
       const eq = t.indexOf("=");
-      if (t.startsWith("--") && eq > 0) pos.push({ ...w, text: t.slice(eq + 1) });
+      if (t.startsWith("--") && eq > 0) pos.push({ ...w, text: t.slice(eq + 1), flagValue: true });
       else if (valued.has(t)) j++;
       continue;
     }
@@ -537,7 +630,7 @@ export interface AnalyzeOptions {
 
 /** Analyse a shell command (string, or Codex-style argv array). */
 export function analyzeShell(command: string | string[], opts: AnalyzeOptions): ShellAnalysis {
-  const out: ShellAnalysis = { refs: [], dynamic: [], unknownCwd: false };
+  const out: ShellAnalysis = { refs: [], commands: [], dynamic: [], unknownCwd: false };
   if (Array.isArray(command)) {
     // Codex `shell` passes argv; `["bash","-lc","<script>"]` is the usual shape.
     const [bin, flag, script] = command;
@@ -592,6 +685,16 @@ function resolveWord(w: ShellWord, cwd: string | undefined, out: ShellAnalysis):
   const variants = w.brace ? expandBraces(w.text) : [w.text];
   const paths: string[] = [];
   for (const v of variants) {
+    // `~+` is $PWD; `~-` ($OLDPWD) and `~user` cannot be resolved here.
+    if (/^~\+(?:\/|$)/.test(v) && cwd !== undefined) {
+      paths.push(resolve(cwd, `.${v.slice(2)}`));
+      continue;
+    }
+    if (/^~[^/]/.test(v)) {
+      out.dynamic.push(v.split("/")[0]!);
+      out.unknownCwd = true;
+      return undefined;
+    }
     const expanded = expandHome(v);
     if (!isAbsolute(expanded) && cwd === undefined) {
       out.unknownCwd = true;
@@ -618,7 +721,13 @@ function staticPrefixDir(abs: string): string {
 function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAnalysis, inPipeline: boolean): string | undefined {
   const shape = shapeOf(sc.words);
   const cmd = shape?.cmd ?? "";
-  const push = (w: ShellWord, kind: PathRefKind, force = false, command = cmd): void => {
+  if (sc.words.length > 0) out.commands.push(sc.words.map((w) => w.text));
+  const push = (w: ShellWord, kind: PathRefKind, force = false, command = cmd, redirect = false): void => {
+    // Go package patterns: `./...` names a tree of packages, not a file.
+    if (/(?:^|\/)\.\.\.$/.test(w.text)) {
+      w = { ...w, text: w.text.replace(/\/?\.\.\.$/, "") || "." };
+      kind = "list";
+    }
     const paths = resolveWord(w, cwd, out);
     if (!paths) return;
     for (const p of paths) {
@@ -627,7 +736,7 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
         continue;
       }
       const explicit = force || explicitPath(w.text) || w.glob || exists(p);
-      out.refs.push({ path: p, kind, raw: w.text, command, explicit });
+      out.refs.push({ path: p, kind, raw: w.text, command, explicit, ...(redirect ? { redirect: true } : {}) });
     }
   };
 
@@ -639,7 +748,7 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
       continue;
     }
     if (/^\/dev\/(?:null|stdout|stderr|stdin|tty|zero|u?random|fd\/\d+)$/.test(target)) continue;
-    push(r.target, r.op.includes("<") ? "read" : "write", true);
+    push(r.target, r.op.includes("<") ? "read" : "write", true, cmd, true);
   }
   if (!shape) return cwd;
 
@@ -654,7 +763,11 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
     }
     const w = shape.argWords[0]!;
     const paths = resolveWord(w, cwd, out);
-    return paths?.length === 1 && !paths[0]!.startsWith(DYN) ? paths[0] : undefined;
+    const next = paths?.length === 1 && !paths[0]!.startsWith(DYN) ? paths[0] : undefined;
+    // Where the shell goes is itself checked (names only), so a `cd` cannot
+    // move the working directory somewhere the policy does not cover.
+    if (next) out.refs.push({ path: next, kind: "list", raw: target, command: cmd, explicit: true });
+    return next;
   }
   if (cmd === "popd") {
     out.dynamic.push("popd");
@@ -664,9 +777,23 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
   // Opaque execution.
   if (EVAL_COMMANDS.has(cmd)) out.dynamic.push(cmd);
   if (INTERPRETERS.test(cmd)) {
-    if (shape.flags.some((f) => INLINE_FLAGS.has(f)) || shape.args[0] === "eval")
-      out.dynamic.push(`${cmd} ${shape.flags.find((f) => INLINE_FLAGS.has(f)) ?? "eval"}`);
-    else if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
+    const inline = shape.flags.find((f) => INLINE_FLAGS.has(f) || /^-[a-z]*c$/.test(f));
+    if (inline && SHELLS.test(cmd) && /c$/.test(inline) && shape.args[0] !== undefined && !shape.args[0].includes(DYN)) {
+      // `bash -c '…'` / `sh -lc '…'`: a shell script we can read — analyse it.
+      analyzeInto(shape.args[0], cwd ?? "/", out, 1);
+      return cwd;
+    }
+    if (inline || shape.args[0] === "eval") {
+      out.dynamic.push(`${cmd} ${inline ?? "eval"}`);
+      return cwd;
+    }
+    if (shape.args.length === 0 || shape.args[0] === "-") out.dynamic.push(`${cmd} reading a program from stdin`);
+    else {
+      // The first positional is the program; it runs, it is not printed.
+      const script = shape.argWords.find((w) => !w.flagValue);
+      for (const w of shape.argWords) push(w, w === script ? "exec" : "read");
+      return cwd;
+    }
   }
   if (cmd === "find" && shape.flags.some((f) => f === "-exec" || f === "-execdir" || f === "-ok" || f === "-okdir")) out.dynamic.push("find -exec");
 
@@ -734,6 +861,13 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
     for (const w of targets.slice(1)) push(w, "read");
     return cwd;
   }
+  // Uploaders take files as `@file` / `name=@file` (`curl -d @.env`).
+  if (/^(?:curl|wget|http|https|xh)$/.test(cmd)) {
+    for (const w of sc.words) {
+      const m = /(?:^|=)@(.+)$/.exec(w.text);
+      if (m && !m[1]!.includes(DYN)) push({ ...w, text: m[1]! }, "read", true);
+    }
+  }
   for (const w of targets) push(w, "read");
   return cwd;
 }
@@ -752,20 +886,9 @@ function findRoots(words: ShellWord[]): ShellWord[] {
 }
 
 const GIT_CONTENT = new Set(["diff", "show", "log", "grep", "blame", "annotate", "cat-file", "archive", "format-patch", "whatchanged", "stash"]);
-const GIT_NAMES_ONLY = [
-  "--stat",
-  "--name-only",
-  "--name-status",
-  "--numstat",
-  "--shortstat",
-  "--quiet",
-  "--no-patch",
-  "-s",
-  "--oneline",
-  "--summary",
-  "--exit-code",
-  "--dirstat",
-];
+const GIT_NAMES_ONLY = ["--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--quiet", "--no-patch", "-s", "--summary", "--dirstat"];
+// Any of these brings the patch back, whatever else is on the line.
+const GIT_PATCH = /^(?:-p|-u|--patch|--patch-with-stat|--patch-with-raw|-U\d*|--unified(?:=.*)?|--full-diff|-L.*)$/;
 
 function analyzeGit(
   pos: ShellWord[],
@@ -789,8 +912,9 @@ function analyzeGit(
     for (const w of rest) push(w, "list");
     return;
   }
-  const namesOnly = flags.some((f) => GIT_NAMES_ONLY.includes(f.split("=")[0]!));
-  const logWithoutPatch = (sub === "log" || sub === "whatchanged") && !flags.some((f) => /^(?:-p|-u|--patch|-L.*|--full-diff|-G.*|-S.*)$/.test(f));
+  const patch = flags.some((f) => GIT_PATCH.test(f));
+  const namesOnly = !patch && flags.some((f) => GIT_NAMES_ONLY.includes(f.split("=")[0]!));
+  const logWithoutPatch = (sub === "log" || sub === "whatchanged") && !patch;
   const stashWithoutPatch = sub === "stash" && !(rest[0]?.text === "show" && flags.some((f) => f === "-p" || f === "--patch"));
   if ((namesOnly && sub !== "grep") || logWithoutPatch || stashWithoutPatch) {
     for (const w of rest) push(w, "list");
@@ -806,4 +930,48 @@ function analyzeGit(
     return;
   }
   for (const w of pathspecs) push(w, "search", true);
+}
+
+// ---------------------------------------------------------------- secretgate itself
+
+const JS_RUNTIMES = /^(?:node|nodejs|bun|deno)$/;
+const PACKAGE_RUNNERS = /^(?:npx|pnpx|bunx)$/;
+
+/**
+ * The secretgate subcommand an argv runs (`["secretgate", "disable"]` →
+ * "disable"; `vault clear` → "vault clear"), recognising `secretgate`,
+ * `node …/secretgate.mjs`, `npx secretgate` and `pnpm exec|dlx secretgate`,
+ * after quote removal (`secretgate 'disable'` is still `disable`). A program
+ * that cannot be known statically (`$SG disable`) yields "?<first arg>".
+ */
+export function secretgateInvocation(argv: string[]): string | undefined {
+  const words = argv.map((text) => ({ text, glob: false, brace: false }));
+  let i = commandIndex(words);
+  const first = argv[i];
+  if (first === undefined) return undefined;
+  const skipFlags = (j: number): number => {
+    while (j < argv.length && argv[j]!.startsWith("-")) j++;
+    return j;
+  };
+  const sub = (j: number): string | undefined => {
+    const k = skipFlags(j);
+    const verb = argv[k];
+    if (verb === undefined) return undefined;
+    const next = argv[skipFlags(k + 1)];
+    return verb === "vault" && next ? `vault ${next}` : verb;
+  };
+  const name = basename(first);
+  if (first.includes(DYN)) {
+    const verb = sub(i + 1);
+    return verb ? `?${verb}` : undefined;
+  }
+  if (name === "secretgate" || name === "secretgate.mjs") return sub(i + 1);
+  if (JS_RUNTIMES.test(name)) {
+    const j = skipFlags(i + 1);
+    return argv[j] !== undefined && basename(argv[j]!) === "secretgate.mjs" ? sub(j + 1) : undefined;
+  }
+  if (PACKAGE_RUNNERS.test(name)) i = skipFlags(i + 1) - 1;
+  else if (/^(?:pnpm|yarn|npm)$/.test(name) && /^(?:exec|dlx|x)$/.test(argv[i + 1] ?? "")) i = skipFlags(i + 2) - 1;
+  else return undefined;
+  return /^secretgate(?:@.*)?$/.test(argv[i + 1] ?? "") ? sub(i + 2) : undefined;
 }

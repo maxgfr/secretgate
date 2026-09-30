@@ -35,8 +35,9 @@ describe("analyzeShell — words and quoting", () => {
   });
 
   it("tracks cd for the commands that follow, and restores it after a subshell", () => {
-    expect(refs("cd private && cat notes.md")).toEqual(["read:private/notes.md"]);
-    expect(refs("(cd private; cat notes.md); cat README")).toEqual(["read:private/notes.md", "read:README"]);
+    // The cd target itself is recorded as a listing: where the shell goes is checked too.
+    expect(refs("cd private && cat notes.md")).toEqual(["list:private", "read:private/notes.md"]);
+    expect(refs("(cd private; cat notes.md); cat README")).toEqual(["list:private", "read:private/notes.md", "read:README"]);
   });
 
   it("treats redirections as paths (read for <, write for >), ignoring fd dups and /dev/null", () => {
@@ -77,7 +78,7 @@ describe("analyzeShell — words and quoting", () => {
 
   it("accepts Codex argv arrays, unwrapping bash -lc scripts", () => {
     expect(refs(["cat", "private/notes.md"])).toEqual(["read:private/notes.md"]);
-    expect(refs(["bash", "-lc", "cd private && cat notes.md"])).toEqual(["read:private/notes.md"]);
+    expect(refs(["bash", "-lc", "cd private && cat notes.md"])).toEqual(["list:private", "read:private/notes.md"]);
   });
 });
 
@@ -124,7 +125,9 @@ describe("analyzeShell — what cannot be known statically", () => {
     expect(dyn("cat `echo x`")).toContain("`…`");
     expect(dyn("cat $FILE")).toContain("$FILE");
     expect(dyn("eval 'cat x'")).toContain("eval");
-    expect(dyn("bash -c 'cat x'")).toContain("bash -c");
+    // A shell script given inline is analysed in place, not treated as opaque.
+    expect(dyn("bash -c 'cat x'")).toEqual([]);
+    expect(refs("bash -c 'cat private/notes.md'")).toEqual(["read:private/notes.md"]);
     expect(dyn("python3 -c 'print(open(\"x\").read())'")).toContain("python3 -c");
     expect(dyn("node -e 'x'")).toContain("node -e");
     expect(dyn("cat src/a.ts")).toEqual([]);

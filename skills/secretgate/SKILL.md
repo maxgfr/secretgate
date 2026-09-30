@@ -47,7 +47,11 @@ into OpenCode's config directory. These survive eviction of the skill cache.
 - Clean operations are silent. A normal Claude pre-tool hook returns `{}` so
   the regular permission flow continues.
 - Sensitive reads are denied, including through shell commands, symlinks and
-  `..` paths. Templates such as `.env.example` stay readable.
+  `..` paths. Templates such as `.env.example` stay readable, and so do files
+  under test directories (`tests/`, `fixtures/`, `testdata/`…): fake keys there
+  are readable for security work, and their content is still redacted.
+- After updating secretgate, run `init` again: it refreshes the hook matcher
+  and drops deny rules older versions installed (`status` flags both).
   `allow --path` exempts matching reads from the hook deny; tool output is still
   scanned. The agent's independent permission rules can still refuse a read.
 
@@ -112,7 +116,8 @@ the repository:
 ```
 
 `deny` wins over `allow`. With `allow`, everything else is out, including paths
-outside the repository. Reads, edits, listings, searches, shell commands, MCP
+outside the repository (OS temp dirs excepted unless `"temp": false`). The file
+accepts comments. Reads, edits, listings, searches, shell commands, MCP
 path arguments and `@path` prompt mentions are checked. `"bash": "strict"` also
 refuses commands whose paths cannot be known statically. While a scope is active,
 the files that define it are read-only for the agent. A pause keeps the scope

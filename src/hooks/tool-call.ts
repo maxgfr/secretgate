@@ -18,6 +18,8 @@ export interface NormalizedToolCall {
   searchRoot?: string;
   /** Glob: the pattern, which may itself carry a directory prefix. */
   pattern?: string;
+  /** Search reads file CONTENT (Grep), not just names (Glob). */
+  content?: boolean;
 }
 
 const SHELL = new Set(["bash", "shell", "exec", "exec_command", "local_shell", "localshell", "run_command", "container.exec", "unified_exec"]);
@@ -39,7 +41,26 @@ export function patchPaths(patch: string): string[] {
 
 function filePaths(input: Record<string, any>): string[] {
   const out: string[] = [];
-  for (const key of ["file_path", "filePath", "path", "notebook_path", "notebookPath", "target_file", "file"]) {
+  // Also move/copy style arguments (`mcp__filesystem__move_file {source, destination}`).
+  for (const key of [
+    "file_path",
+    "filePath",
+    "path",
+    "notebook_path",
+    "notebookPath",
+    "target_file",
+    "file",
+    "source",
+    "destination",
+    "src",
+    "dest",
+    "from",
+    "to",
+    "sourcePath",
+    "destinationPath",
+    "old_path",
+    "new_path",
+  ]) {
     const v = str(input[key]);
     if (v) out.push(v);
   }
@@ -93,7 +114,7 @@ export function extractToolCall(toolName: string, toolInput: unknown): Normalize
     // Glob's `pattern` is a file pattern; Grep's is a content regex, and its
     // file filter is `glob` (Claude Code) / `include` (OpenCode).
     const pattern = SEARCH_GLOB.has(name) ? (str(input.pattern) ?? str(input.glob)) : (str(input.glob) ?? str(input.include));
-    return { kind: "search", paths: root ? [root] : [], searchRoot: root, pattern };
+    return { kind: "search", paths: root ? [root] : [], searchRoot: root, pattern, content: SEARCH_GREP.has(name) };
   }
   // Unknown/MCP tools: still surface anything path-shaped they name.
   return { kind: "other", paths: filePaths(input) };

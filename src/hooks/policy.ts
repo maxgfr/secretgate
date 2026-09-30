@@ -1,9 +1,8 @@
-import { homedir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import type { SecretgateConfig } from "../config.js";
-import { canonical, covers, expandHome, sensitivePathMatch, commandTouchesSensitivePath } from "../paths.js";
-import { isSecretgateState, toolCallScopeViolation } from "../scope.js";
-import { analyzeShell } from "../shell-paths.js";
+import { canonical, commandTouchesSensitivePath, expandHome, sensitivePathMatch } from "../paths.js";
+import { isPolicyFile, toolCallScopeViolation } from "../scope.js";
+import { analyzeShell, secretgateInvocation } from "../shell-paths.js";
 import type { NormalizedToolCall } from "./tool-call.js";
 
 // What happens to a tool call BEFORE it runs, for every host. Order matters:
@@ -25,50 +24,41 @@ function touchesOnly(call: NormalizedToolCall, file: string, cwd: string): boole
   return call.paths.length > 0 && call.paths.every((p) => canonical(resolve(cwd, expandHome(p))) === canonical(file));
 }
 
-// Files whose edit would switch secretgate off or unwire it.
-function guardedPath(abs: string, cwd: string): boolean {
-  const home = homedir();
-  const name = basename(abs).toLowerCase();
-  if (name === ".secretgate.json") return true;
-  if (basename(dirname(abs)).toLowerCase() === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
-  const codex = process.env.CODEX_HOME ?? join(home, ".codex");
-  const opencode = join(process.env.XDG_CONFIG_HOME ?? join(home, ".config"), "opencode");
-  return (
-    isSecretgateState(abs) ||
-    covers(join(codex, "hooks.json"), abs) ||
-    covers(join(codex, "config.toml"), abs) ||
-    covers(join(opencode, "plugin"), abs) ||
-    covers(join(opencode, "opencode.json"), abs) ||
-    (name === "opencode.json" && covers(cwd, abs))
-  );
-}
-
-// `secretgate disable`, `node …/secretgate.mjs allow --rule x`, …
-const SELF_DISABLE = /(?:^|[\s;&|(/"'`])secretgate(?:\.mjs)?["']?\s+(disable|allow|uninstall|trust|vault\s+clear)\b/;
+// Subcommands that change what secretgate protects.
+const GUARDED = new Set(["disable", "allow", "uninstall", "trust", "vault clear"]);
 
 function tamperReason(call: NormalizedToolCall, cwd: string): string | undefined {
   if (call.kind === "shell" && call.command !== undefined) {
-    const text = Array.isArray(call.command) ? call.command.join(" ") : call.command;
-    const m = SELF_DISABLE.exec(text);
-    if (m) return `this runs \`secretgate ${m[1]}\`, which changes what secretgate protects — that is your call, not the agent's`;
     const base = call.workdir ? resolve(cwd, expandHome(call.workdir)) : cwd;
-    for (const ref of analyzeShell(call.command, { cwd: base }).refs) {
-      if (ref.kind === "write" && guardedPath(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
+    const analysis = analyzeShell(call.command, { cwd: base });
+    // Judged on argv after quote removal: `secretgate 'disable'` is caught,
+    // `git commit -m "document secretgate disable"` is not a disable.
+    for (const argv of analysis.commands) {
+      const verb = secretgateInvocation(argv);
+      if (verb && GUARDED.has(verb.replace(/^\?/, ""))) {
+        return verb.startsWith("?")
+          ? `this runs a program named by a variable with \`${verb.slice(1)}\` — it may be secretgate, and changing what secretgate protects is your call, not the agent's`
+          : `this runs \`secretgate ${verb}\`, which changes what secretgate protects — that is your call, not the agent's`;
+      }
+    }
+    for (const ref of analysis.refs) {
+      if (ref.kind === "write" && isPolicyFile(canonical(ref.path), cwd)) return `this command writes '${ref.raw}', which configures secretgate or its hooks`;
     }
     return undefined;
   }
   if (call.kind === "write" || call.kind === "patch") {
     for (const p of call.paths)
-      if (guardedPath(canonical(resolve(cwd, expandHome(p))), cwd)) return `this edits '${p}', which configures secretgate or its hooks`;
+      if (isPolicyFile(canonical(resolve(cwd, expandHome(p))), cwd)) return `this edits '${p}', which configures secretgate or its hooks`;
   }
   return undefined;
 }
 
 // A search pattern that names sensitive files (`Grep {glob: ".env*"}`).
-function patternLooksSensitive(pattern: string, allowlist: SecretgateConfig["allowlist"], cwd: string): string | undefined {
+// Probed inside the searched directory, so a fixtures tree stays searchable.
+function patternLooksSensitive(pattern: string, root: string, allowlist: SecretgateConfig["allowlist"], cwd: string): string | undefined {
   const name = basename(pattern);
   for (const probe of [name.replace(/[*?]/g, ""), name.replace(/[*?]/g, "x")]) {
-    if (probe && sensitivePathMatch(probe, allowlist, cwd)) return pattern;
+    if (probe && sensitivePathMatch(resolve(cwd, expandHome(root), probe), allowlist, cwd)) return pattern;
   }
   return undefined;
 }
@@ -85,12 +75,14 @@ function sensitiveReason(call: NormalizedToolCall, cfg: SecretgateConfig, cwd: s
       }
       return undefined;
     case "search": {
+      // Glob lists names; only a content search (Grep) can print a file.
+      if (!call.content) return undefined;
       for (const p of call.paths) {
-        // A directory like ~/.ssh: anything inside it matches `**/.ssh/**`.
-        const hit = sensitivePathMatch(p, cfg.allowlist, cwd) ?? sensitivePathMatch(join(p, "x"), cfg.allowlist, cwd);
+        // A sensitive directory itself counts: `**/.ssh/**` matches `~/.ssh`.
+        const hit = sensitivePathMatch(p, cfg.allowlist, cwd);
         if (hit) return deny(p, hit);
       }
-      const pattern = call.pattern ? patternLooksSensitive(call.pattern, cfg.allowlist, cwd) : undefined;
+      const pattern = call.pattern ? patternLooksSensitive(call.pattern, call.searchRoot ?? ".", cfg.allowlist, cwd) : undefined;
       return pattern ? deny(pattern, "search pattern naming sensitive files") : undefined;
     }
     case "shell": {
@@ -108,7 +100,7 @@ export function preToolPolicy(call: NormalizedToolCall, cfg: SecretgateConfig, c
   if (cfg.error && !touchesOnly(call, cfg.error.file, cwd)) {
     return {
       action: "deny",
-      reason: `secretgate: ${cfg.error.file} is invalid (${cfg.error.message}). Tool calls are refused until it is fixed, because it may declare a scope. Fix the file (the agent may read and edit it).`,
+      reason: `secretgate: ${cfg.error.file} is invalid (${cfg.error.message}). Tool calls are refused until it is fixed, because it may declare a scope. Fix it yourself, or let the agent edit it (you will be asked to approve).`,
     };
   }
   const scope = toolCallScopeViolation(cfg.scopes, call, cwd);

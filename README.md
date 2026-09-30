@@ -65,7 +65,14 @@ anything per-use.
   `.netrc`, `.git-credentials`, `.pgpass`, `.pypirc`, `*.tfstate`, `.dev.vars`,
   the secretgate vault… are refused outright (`.env.example`/`.sample`/`.template`/`.dist`
   stay readable). Paths are resolved first — `..`, `~`, symlinks and case
-  variants all land on the same file.
+  variants all land on the same file. Files under test directories inside the
+  project (`tests/`, `fixtures/`, `testdata/`, `__mocks__/`, `examples/`…) are
+  **not** denied: fake keys there are what a security fix has to read, and their
+  content is still redacted on the way to the model. In the shell, only
+  commands that print, copy, upload or source a file count as reading it:
+  `node --env-file=.env`, `docker compose --env-file .env`, `mv .env x`,
+  `openssl genrsa -out server.key` are fine; `cat`, `cp`, `curl -d @.env`,
+  `source .env`, `< .env` are not.
 - **Project scope** (optional): a `.secretgate.json` can keep the agent inside
   some directories of the repository — see [Scope](#scope).
 - **Standalone scanner**: `secretgate scan <dir>` (exit 1 on findings) doubles
@@ -95,7 +102,7 @@ past the agent's timeout (which would otherwise fail open).
 
 | Gap | Why | Mitigation |
 |---|---|---|
-| Claude Code `@file` mentions | inlined without firing tool hooks | `permissions.deny` rules (broadened to cover keys, `.aws`, `.ssh`, `credentials.json`, …) block the common sensitive files; with a scope, an out-of-scope `@path` in the prompt text is blocked |
+| Claude Code `@file` mentions | inlined without firing tool hooks | `permissions.deny` rules cover real secret locations (`.env`, `.env.local`, `.envrc`, `~/.ssh`, `~/.aws`, `.netrc`, `.npmrc`, `.git-credentials`, the vault…). They cannot express exceptions, so project-wide `*.pem`/`*.key` rules are deliberately not installed — they would block test fixtures; `init` removes the ones older versions added. With a scope, an out-of-scope `@path` in the prompt text is blocked |
 | Shell commands are analysed, not sandboxed | `$(…)`, variables, `eval`, `python -c` hide paths from any static check | quotes, `cd`, redirections, globs and `x/../y` are resolved; `"bash": "strict"` refuses what cannot be checked; for a hard guarantee add the agent's OS sandbox (Claude Code sandbox, Codex permission profiles) |
 | An agent running as you | it can reach anything your user can, given enough indirection | switching secretgate off from the agent needs your approval (Claude Code) or is refused (Codex, OpenCode); the OS sandbox is the hard boundary |
 | Codex failed/unsupported tool output | `PostToolUse` only fires for successful supported tools; native output rewrite remains unsupported | Bash/apply_patch and successful MCP/local-function results are block-and-replace protected; an MCP result marked as an error can still bypass the post hook |
@@ -204,43 +211,65 @@ to the model. Declare it in the project's `.secretgate.json`:
 
 ```jsonc
 {
+  // comments and trailing commas are fine (JSONC)
   "scope": {
     "allow": ["src/**", "tests/**", "package.json"], // present → everything else is out
     "deny":  ["src/legacy/**"],                       // wins over allow
-    "bash":  "paths"                                  // "paths" (default) | "strict"
+    "bash":  "paths",                                 // "paths" (default) | "strict"
+    "temp":  true                                     // OS temp dirs are scratch space (default)
   }
 }
 ```
 
 - **Root**: the directory holding the `.secretgate.json`. It is found from the
   agent's working directory upwards, up to the repository root, so a session
-  started in `src/` sees it too. If several files declare a scope, all apply.
+  started in `src/` sees it too. The directory the Claude Code session was
+  started in (`CLAUDE_PROJECT_DIR`) is always searched as well, so a `cd` into
+  a submodule or a nested repository does not drop the project's scope. If
+  several files declare a scope, all apply (a path must satisfy each).
 - **Globs** are relative to the root (`*`, `**`, `?`, `{a,b}`); `src` and
   `src/**` both cover the whole directory. Absolute or `~/` globs are allowed.
-  With an `allow` list, anything outside the root is out of scope.
-- **Paths are resolved first**: `~`, `..`, symlinks (a link in `src/` pointing
-  at `secret/` is out), `/var` vs `/private/var`, and case on macOS/Windows.
-- **What is checked**: reads, edits and writes (Read/Edit/Write/MultiEdit/
-  NotebookEdit/`apply_patch`); listings (a directory leading to allowed paths may
-  be listed); Glob/Grep (refused on an unrelated root, results filtered
-  otherwise); every path of every shell command, including `cd`, redirections,
-  globs and `git show HEAD:path`; recursive commands with no in-scope target
-  (`grep -r`, `rg`, `find`, `ls -R`, `tree`, `git diff`/`show`/`log -p` without
-  pathspec) are refused with a hint to target an allowed directory; `@path`
-  mentions in the prompt (Claude Code/Codex block the prompt, OpenCode removes
-  the attachment); MCP tools that name existing paths.
-- **`"bash": "strict"`** additionally refuses commands whose paths cannot be
-  known statically: `$(…)`, backticks, variables, `eval`, `bash -c`,
-  `python -c`, `node -e`, `xargs`, `find -exec`…
-- **The fence cannot be moved from inside**: while a scope is active,
-  `.secretgate.json` (any of them), `.claude/settings*.json`, Codex and OpenCode
-  configuration and secretgate's own state are read-only for the agent.
+  With an `allow` list, anything outside the root is out of scope — except the
+  OS temp dirs (`cmd > /tmp/log; tail /tmp/log`), unless `"temp": false`.
+- **Paths are resolved first**: `~`, `~+`, `..`, symlinks (a link in `src/`
+  pointing at `secret/` is out), `/var` vs `/private/var`, and case on
+  macOS/Windows.
+- **What is checked**:
+  - reads, edits and writes (Read/Edit/Write/MultiEdit/NotebookEdit/`apply_patch`,
+    MCP tools naming existing paths, including move/copy `source`/`destination`);
+  - listings: a directory leading to allowed paths may be listed, and `cd`
+    targets are checked the same way;
+  - Glob/Grep: refused on an unrelated root, results filtered otherwise
+    (Glob lists, grep lines, directory trees);
+  - every path of every shell command — redirections, globs, `$'…'`,
+    `git show HEAD:path`, and `bash -c '…'` scripts, which are analysed in place;
+  - recursive readers (`grep -r`, `rg`, `find`, `ls -R`, `tree`, `tar c`,
+    `git diff`/`show`/`log -p` without pathspec) against the files actually
+    below their target: refused only if one of them is out of scope, with a
+    hint naming a directory that is fully in scope;
+  - `@path` mentions in the prompt (Claude Code/Codex block the prompt,
+    OpenCode removes the attachment). `@docs team` is prose; a directory
+    mention is written `@docs/`.
+- **Normal project work keeps working** in the default `"bash": "paths"` mode:
+  project-wide tools that take a directory (`tsc -p .`, `biome check .`,
+  `go test ./...`) count as listings, and a program an interpreter runs
+  (`node node_modules/x/cli.js`, `python tools/gen.py`) is executed, not
+  printed. `"bash": "strict"` treats both as full reads, and additionally
+  refuses what cannot be checked statically: `$(…)`, backticks, variables,
+  `eval`, `python -c`, `node -e`, `xargs`, `find -exec`…
+- **The fence cannot be moved from inside**: while a scope is active, any
+  `.secretgate.json`, `.claude/settings*.json`, Codex and OpenCode
+  configuration and secretgate's own state are read-only for the agent. The
+  policy stays readable (`cat .secretgate.json`), and secretgate's own CLI
+  (`secretgate scope`, `status`) always runs.
 - **A pause keeps the scope** (it switches off secret scanning, not the
-  boundary): lift it with `secretgate disable --scope` or "désactive secretgate
-  et le scope", or edit `.secretgate.json` yourself.
-- **An invalid `.secretgate.json`** (bad JSON, `"allow": "src/**"`, unknown
-  keys in `scope`…) makes every tool call fail closed, except reading and
-  editing that file, until it is fixed — it might have held a scope.
+  boundary): lift it with `secretgate disable --scope`, `/secretgate disable
+  scope` or "désactive secretgate et le scope", or edit `.secretgate.json`
+  yourself.
+- **An invalid `.secretgate.json`** (broken JSON, `"allow": "src/**"`, unknown
+  keys in `scope`…) makes every tool call fail closed — except reading and
+  editing that file (the edit asks for your approval) — until it is fixed: it
+  might have held a scope.
 
 `secretgate scope` prints the effective scope; `secretgate scope check <path…>`
 exits 1 if any path is outside it (handy in scripts and CI).

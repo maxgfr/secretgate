@@ -133,7 +133,10 @@ export function pathMatchesGlob(path: string, glob: string, caseInsensitive = fa
   const key = `${caseInsensitive ? "i" : "s"}${glob}`;
   let alternatives = GLOB_CACHE.get(key);
   if (!alternatives) {
-    alternatives = expandGlobBraces(caseInsensitive ? glob.toLowerCase() : glob).map(tokenizeGlob);
+    // A trailing `/**` also matches the directory itself (`src/**` ~ `src`), as
+    // in picomatch/minimatch — checked by the differential test.
+    const expanded = expandGlobBraces(caseInsensitive ? glob.toLowerCase() : glob).flatMap((g) => (g.endsWith("/**") ? [g, g.slice(0, -3)] : [g]));
+    alternatives = expanded.map(tokenizeGlob);
     if (GLOB_CACHE.size > 512) GLOB_CACHE.clear();
     GLOB_CACHE.set(key, alternatives);
   }

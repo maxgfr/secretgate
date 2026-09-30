@@ -87,6 +87,18 @@ export const SecretgatePlugin = async (ctx: unknown) => {
   const cwd = typeof directory === "string" ? directory : process.cwd();
   const offState = (sessionId?: unknown) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : undefined });
   const isOff = (sessionId?: unknown): boolean => offState(sessionId).disabled;
+  const client = (ctx as { client?: { session?: { get?: (req: { path: { id: string } }) => Promise<{ data?: { parentID?: unknown } }> } } } | undefined)
+    ?.client;
+  // Fails SAFE: a session that cannot be looked up counts as a subsession.
+  const isSubsession = async (sessionId: unknown): Promise<boolean> => {
+    if (typeof sessionId !== "string" || typeof client?.session?.get !== "function") return false;
+    try {
+      const res = await client.session.get({ path: { id: sessionId } });
+      return typeof res?.data?.parentID === "string" && res.data.parentID.length > 0;
+    } catch {
+      return true;
+    }
+  };
   // Project config for this event; `disable --scope` lifts the scope too.
   const configFor = (sessionId?: unknown): SecretgateConfig => {
     const cfg = loadConfig(cwd);
@@ -121,7 +133,12 @@ export const SecretgatePlugin = async (ctx: unknown) => {
       const said = parts.find(
         (p) => typeof p?.text === "string" && !p.synthetic && (p.type === undefined || p.type === "text") && promptDirective(String(p.text)),
       );
-      if (said) {
+      // A subagent's prompt is written by the model (TaskTool feeds it through
+      // chat.message): only the user's own, top-level session may switch
+      // secretgate off.
+      if (said && (await isSubsession(sessionID))) {
+        said.text = `${said.text}\n\n[secretgate: ignored an off-switch in a subagent prompt — only the user can pause secretgate, in the main session]`;
+      } else if (said) {
         const notice = applyPromptDirective(promptDirective(String(said.text))!, typeof sessionID === "string" ? sessionID : undefined, cwd);
         said.text = `${said.text}\n\n[${notice}]`;
       }
