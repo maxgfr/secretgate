@@ -59,7 +59,7 @@
     "picomatch": "^4.0.7",
     "semantic-release": "^25.0.5",
     "shell-quote": "^1.11.0",
-    "smol-toml": "^1.4.2",
+    "smol-toml": "^1.7.1",
     "tsup": "^8.5.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
