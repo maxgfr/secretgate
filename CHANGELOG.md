@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.6.1](https://github.com/maxgfr/secretgate/compare/v1.6.0...v1.6.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* catch sed -I and gawk inplace edits of policy files, and check pins against the right program ([#8](https://github.com/maxgfr/secretgate/issues/8)) ([d312b3c](https://github.com/maxgfr/secretgate/commit/d312b3c73b2e774c770051f4b11503477f8a5343))
+
 # [1.6.0](https://github.com/maxgfr/secretgate/compare/v1.5.2...v1.6.0) (2026-09-30)
 
 
