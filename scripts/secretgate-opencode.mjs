@@ -1685,7 +1685,7 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     for (const [idx, w] of targets.entries()) push(w, idx === targets.length - 1 && targets.length > 1 ? "write" : "read");
     return cwd;
   }
-  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*i/.test(f) || f.startsWith("--in-place"));
+  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*[iI]/.test(f) || f.startsWith("--in-place"));
   if (cmd === "sed") {
     const files = flags.some((f) => f === "-e" || f === "-f" || f.startsWith("--expression") || f.startsWith("--file")) ? targets : targets.slice(1);
     for (const w of files) push(w, sedInPlace ? "write" : "read");
@@ -1699,10 +1699,9 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     return cwd;
   }
   if (cmd === "awk" || cmd === "gawk") {
-    const words2 = sc.words.map((w) => w.text);
-    const inPlace = words2.some((t, k) => (t === "-i" || t === "--include") && words2[k + 1] === "inplace");
+    const inPlace = sc.words.some((w) => w.text.includes("inplace"));
     const files = flags.some((f) => f === "-f") ? targets : targets.slice(1);
-    for (const w of files) if (w.text !== "inplace") push(w, inPlace ? "write" : "read");
+    for (const w of files) if (!/^inplace(?:\.awk)?$/.test(w.text)) push(w, inPlace ? "write" : "read");
     return cwd;
   }
   if (/^(?:curl|wget|http|https|xh)$/.test(cmd)) {

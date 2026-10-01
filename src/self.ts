@@ -52,14 +52,18 @@ export function commandLine(inv: Invocation): string {
 // exists (that is what the hooks run), else the running program itself.
 export function selfInvocation(ctx: SelfContext = currentContext()): Invocation {
   const form = selfForm(ctx.modulePath);
-  if (form === "binary") {
-    const pinned = pinnedBinaryPath(ctx.home);
-    return { file: existsSync(pinned) ? pinned : ctx.execPath, args: [] };
-  }
-  if (form === "bundle") {
-    const pinned = pinnedBundlePath(ctx.home);
-    return { file: "node", args: [existsSync(pinned) ? pinned : ctx.modulePath] };
-  }
+  const pinned = form === "binary" ? pinnedBinaryPath(ctx.home) : form === "bundle" ? pinnedBundlePath(ctx.home) : undefined;
+  if (pinned && existsSync(pinned)) return form === "binary" ? { file: pinned, args: [] } : { file: "node", args: [pinned] };
+  return runningInvocation(ctx);
+}
+
+// The running program itself, whatever is pinned. For checks that need this
+// version's commands: the pinned copy can be older when `init` did not re-pin
+// it (`init --opencode` wires no hook).
+export function runningInvocation(ctx: SelfContext = currentContext()): Invocation {
+  const form = selfForm(ctx.modulePath);
+  if (form === "binary") return { file: ctx.execPath, args: [] };
+  if (form === "bundle") return { file: "node", args: [ctx.modulePath] };
   return { file: "node", args: [join(dirname(ctx.modulePath), "main.ts")] };
 }
 

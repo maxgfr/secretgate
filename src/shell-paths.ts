@@ -857,8 +857,8 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
     for (const [idx, w] of targets.entries()) push(w, idx === targets.length - 1 && targets.length > 1 ? "write" : "read");
     return cwd;
   }
-  // `sed -i` / `--in-place` rewrites its files; otherwise it prints them.
-  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*i/.test(f) || f.startsWith("--in-place"));
+  // `sed -i` / `-I` (BSD) / `--in-place` rewrites its files; otherwise it prints them.
+  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*[iI]/.test(f) || f.startsWith("--in-place"));
   if (cmd === "sed") {
     const files = flags.some((f) => f === "-e" || f === "-f" || f.startsWith("--expression") || f.startsWith("--file")) ? targets : targets.slice(1);
     for (const w of files) push(w, sedInPlace ? "write" : "read");
@@ -873,11 +873,11 @@ function analyzeCommand(sc: SimpleCommand, cwd: string | undefined, out: ShellAn
     return cwd;
   }
   if (cmd === "awk" || cmd === "gawk") {
-    // gawk `-i inplace` rewrites its files.
-    const words = sc.words.map((w) => w.text);
-    const inPlace = words.some((t, k) => (t === "-i" || t === "--include") && words[k + 1] === "inplace");
+    // gawk's inplace extension rewrites its files, however it is loaded:
+    // `-i inplace`, `-iinplace`, `--include=inplace`, `@include "inplace"`…
+    const inPlace = sc.words.some((w) => w.text.includes("inplace"));
     const files = flags.some((f) => f === "-f") ? targets : targets.slice(1);
-    for (const w of files) if (w.text !== "inplace") push(w, inPlace ? "write" : "read");
+    for (const w of files) if (!/^inplace(?:\.awk)?$/.test(w.text)) push(w, inPlace ? "write" : "read");
     return cwd;
   }
   // Uploaders take files as `@file` / `name=@file` (`curl -d @.env`).
