@@ -450,6 +450,23 @@ describe("secretgate status", () => {
     expect(text()).not.toContain("not pinned yet");
   });
 
+  it("does not ask to refresh an outdated pinned copy that no wired hook runs", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    const bin = join(home, "bin", "secretgate");
+    const bundle = join(home, "bin", "secretgate.mjs");
+    mkdirSync(join(home, "bin"), { recursive: true });
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(bin, "#!/bin/sh\necho 0.0.1\n", { mode: 0o755 });
+    writeFileSync(bundle, 'const VERSION = "0.0.1";\n');
+    const hook = (event: string) => [{ hooks: [{ type: "command", command: `"${bin}" hook claude-code ${event}` }] }];
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: hook("user-prompt-submit") } }));
+    const { io, text } = capture();
+    await run(["status"], io);
+    expect(text()).toContain(`binary    pinned at ${bin} (v0.0.1 — CLI is v`);
+    expect(text()).toContain(`bundle    pinned at ${bundle} (v0.0.1 — no wired hook runs it)`);
+  });
+
   it("shouts when the wired hooks run a program that is gone", async () => {
     process.env.HOME = home;
     process.chdir(work);

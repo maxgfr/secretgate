@@ -307,11 +307,22 @@ describe("GLM review · in-place editors are modifications of policy files", () 
     "sed -i.bak s/a/b/ .secretgate.json",
     "perl -pi -e s/a/b/ .secretgate.json",
     "awk -i inplace 1 .secretgate.json",
+    "sed -I '' s/a/b/ .secretgate.json",
+    "sed -I.bak s/a/b/ ~/.claude/settings.json",
+    "gawk -iinplace 1 ~/.claude/settings.json",
+    "gawk --include=inplace 1 .secretgate.json",
+    "gawk -i inplace.awk 1 .secretgate.json",
+    "gawk '@include \"inplace\"; {print}' .secretgate.json",
     "dd of=.secretgate.json",
     "code ~/.claude/settings.json",
   ])("asks for %s", async (command) => {
     scope(undefined);
     expect(await bash(command)).toBe("ask");
+  });
+
+  it.each(["sed -I '' s/a/b/ .secretgate.json", "gawk -iinplace 1 .secretgate.json"])("a scope keeps its file read-only: %s", async (command) => {
+    scope({ allow: ["**"] });
+    expect(await bash(command)).toBe("deny");
   });
 
   it.each([

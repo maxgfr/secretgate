@@ -2,7 +2,17 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { commandLine, hookProgram, pinSelf, pinnedBinaryPath, pinnedBundlePath, type SelfContext, selfForm, selfInvocation } from "../src/self.js";
+import {
+  commandLine,
+  hookProgram,
+  pinSelf,
+  pinnedBinaryPath,
+  pinnedBundlePath,
+  runningInvocation,
+  type SelfContext,
+  selfForm,
+  selfInvocation,
+} from "../src/self.js";
 
 let dir: string;
 let home: string;
@@ -79,6 +89,18 @@ describe("pinSelf / selfInvocation — bundle form", () => {
     expect(readFileSync(pinnedBundlePath(home), "utf8")).toBe('const VERSION = "1.0.0";');
     expect(existsSync(pinnedBinaryPath(home))).toBe(false);
     expect(selfInvocation(ctx)).toEqual({ file: "node", args: [pinnedBundlePath(home)] });
+  });
+});
+
+describe("runningInvocation", () => {
+  it("runs this program, never an older pinned copy (OpenCode's plugin check)", () => {
+    mkdirSync(join(home, "bin"), { recursive: true });
+    writeFileSync(pinnedBinaryPath(home), "binary v0", { mode: 0o755 });
+    writeFileSync(pinnedBundlePath(home), 'const VERSION = "0.0.1";');
+    const bin = binaryContext();
+    expect(runningInvocation(bin)).toEqual({ file: bin.execPath, args: [] });
+    const bundle = join(dir, "secretgate.mjs");
+    expect(runningInvocation({ modulePath: bundle, execPath: "/usr/bin/node", home })).toEqual({ file: "node", args: [bundle] });
   });
 });
 

@@ -1689,7 +1689,7 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     for (const [idx, w] of targets.entries()) push(w, idx === targets.length - 1 && targets.length > 1 ? "write" : "read");
     return cwd;
   }
-  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*i/.test(f) || f.startsWith("--in-place"));
+  const sedInPlace = cmd === "sed" && flags.some((f) => /^-[a-zA-Z]*[iI]/.test(f) || f.startsWith("--in-place"));
   if (cmd === "sed") {
     const files = flags.some((f) => f === "-e" || f === "-f" || f.startsWith("--expression") || f.startsWith("--file")) ? targets : targets.slice(1);
     for (const w of files) push(w, sedInPlace ? "write" : "read");
@@ -1703,10 +1703,9 @@ function analyzeCommand(sc, cwd, out, inPipeline) {
     return cwd;
   }
   if (cmd === "awk" || cmd === "gawk") {
-    const words2 = sc.words.map((w) => w.text);
-    const inPlace = words2.some((t, k) => (t === "-i" || t === "--include") && words2[k + 1] === "inplace");
+    const inPlace = sc.words.some((w) => w.text.includes("inplace"));
     const files = flags.some((f) => f === "-f") ? targets : targets.slice(1);
-    for (const w of files) if (w.text !== "inplace") push(w, inPlace ? "write" : "read");
+    for (const w of files) if (!/^inplace(?:\.awk)?$/.test(w.text)) push(w, inPlace ? "write" : "read");
     return cwd;
   }
   if (/^(?:curl|wget|http|https|xh)$/.test(cmd)) {
@@ -8664,14 +8663,14 @@ function commandLine(inv) {
 }
 function selfInvocation(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
-  if (form === "binary") {
-    const pinned = pinnedBinaryPath(ctx.home);
-    return { file: existsSync8(pinned) ? pinned : ctx.execPath, args: [] };
-  }
-  if (form === "bundle") {
-    const pinned = pinnedBundlePath(ctx.home);
-    return { file: "node", args: [existsSync8(pinned) ? pinned : ctx.modulePath] };
-  }
+  const pinned = form === "binary" ? pinnedBinaryPath(ctx.home) : form === "bundle" ? pinnedBundlePath(ctx.home) : void 0;
+  if (pinned && existsSync8(pinned)) return form === "binary" ? { file: pinned, args: [] } : { file: "node", args: [pinned] };
+  return runningInvocation(ctx);
+}
+function runningInvocation(ctx = currentContext()) {
+  const form = selfForm(ctx.modulePath);
+  if (form === "binary") return { file: ctx.execPath, args: [] };
+  if (form === "bundle") return { file: "node", args: [ctx.modulePath] };
   return { file: "node", args: [join11(dirname6(ctx.modulePath), "main.ts")] };
 }
 function samePath(a, b) {
@@ -9508,7 +9507,7 @@ function verifyOpencodeBundle(io) {
   try {
     copyFileSync4(plugin, verificationModule);
     const env = { ...process.env, SECRETGATE_HOME: scratch, SECRETGATE_DISABLE: "0" };
-    const self = selfInvocation();
+    const self = runningInvocation();
     execFileSync(self.file, [...self.args, "__verify-opencode", verificationModule], { cwd: scratch, env, stdio: "pipe", timeout: 15e3 });
     io.stdout("  \u2713 opencode: installed plugin passes prompt, MCP and patch-restore checks.\n");
     return true;
@@ -9608,11 +9607,12 @@ function hookCommands(settings, agent) {
   }
   return commands2;
 }
-function reportPinned(io) {
+function reportPinned(hookCommandList, io) {
   const home = defaultVaultHome();
-  const refresh = (v) => v !== VERSION ? ` \u2014 CLI is v${VERSION}, re-run \`secretgate init\` to refresh` : "";
+  const used = new Set(hookCommandList.map(hookProgram));
   const binary = pinnedBinaryPath(home);
   const bundle = pinnedBundlePath(home);
+  const refresh = (v, path) => v === VERSION ? "" : used.size > 0 && !used.has(path) ? " \u2014 no wired hook runs it" : ` \u2014 CLI is v${VERSION}, re-run \`secretgate init\` to refresh`;
   if (existsSync9(binary)) {
     let v = "unknown";
     try {
@@ -9620,12 +9620,12 @@ function reportPinned(io) {
     } catch {
       v = "unknown \u2014 it did not run";
     }
-    io.stdout(`binary    pinned at ${binary} (v${v}${refresh(v)})
+    io.stdout(`binary    pinned at ${binary} (v${v}${refresh(v, binary)})
 `);
   }
   if (existsSync9(bundle)) {
     const v = /VERSION = "([^"]+)"/.exec(readFileSync10(bundle, "utf8"))?.[1] ?? "unknown";
-    io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v)})
+    io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v, bundle)})
 `);
   }
   if (!existsSync9(binary) && !existsSync9(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
@@ -9653,9 +9653,11 @@ async function cmdStatus(_args, io) {
 `);
   }
   if (here.disabled || pauses.length > 0) io.stdout("\n");
-  reportPinned(io);
   const ccScopes = [["global ", claudeSettingsPath(false)]];
   if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
+  const codexHooks = readJsonSafe(join12(codexHome(), "hooks.json"));
+  const codexCommands = hookCommands(codexHooks, "codex");
+  reportPinned([...ccScopes.flatMap(([, path]) => hookCommands(readJsonSafe(path), "claude-code")), ...codexCommands], io);
   for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
     const ccCommands = hookCommands(settings, "claude-code");
@@ -9688,8 +9690,6 @@ async function cmdStatus(_args, io) {
     );
   for (const f of cfg.untrusted) io.stdout(`project   allowlist in ${f} is NOT trusted \u2014 the hooks ignore it until you run \`secretgate trust\`
 `);
-  const codexHooks = readJsonSafe(join12(codexHome(), "hooks.json"));
-  const codexCommands = hookCommands(codexHooks, "codex");
   const codexWired = codexCommands.length;
   const codexState = codexWiringStatus(codexHome());
   const codexFeature = codexState.feature;

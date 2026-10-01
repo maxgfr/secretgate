@@ -31,7 +31,7 @@ import { SettingsParseError } from "./install/json-merge.js";
 import { isSecretgateHook } from "./install/hook-marker.js";
 import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
-import { commandLine, hookProgram, pinSelf, pinnedBinaryPath, pinnedBundlePath, selfInvocation } from "./self.js";
+import { commandLine, hookProgram, pinSelf, pinnedBinaryPath, pinnedBundlePath, runningInvocation, selfInvocation } from "./self.js";
 import { Vault, defaultVaultHome } from "./vault/vault.js";
 import { VERSION } from "./version.js";
 
@@ -964,7 +964,7 @@ function verifyOpencodeBundle(io: Io): boolean {
   try {
     copyFileSync(plugin, verificationModule);
     const env = { ...process.env, SECRETGATE_HOME: scratch, SECRETGATE_DISABLE: "0" };
-    const self = selfInvocation();
+    const self = runningInvocation();
     execFileSync(self.file, [...self.args, "__verify-opencode", verificationModule], { cwd: scratch, env, stdio: "pipe", timeout: 15000 });
     io.stdout("  ✓ opencode: installed plugin passes prompt, MCP and patch-restore checks.\n");
     return true;
@@ -1070,12 +1070,16 @@ function hookCommands(settings: Record<string, any> | undefined, agent: "claude-
 }
 
 // The pinned programs the hooks can run: the binary (version asked, bounded by
-// a timeout) and the Node bundle (version read from its text).
-function reportPinned(io: Io): void {
+// a timeout) and the Node bundle (version read from its text). `init` from the
+// binary leaves an older bundle behind (and vice versa): when wired hooks run the
+// other copy, re-running `init` will not refresh it, so don't ask for that.
+function reportPinned(hookCommandList: string[], io: Io): void {
   const home = defaultVaultHome();
-  const refresh = (v: string): string => (v !== VERSION ? ` — CLI is v${VERSION}, re-run \`secretgate init\` to refresh` : "");
+  const used = new Set(hookCommandList.map(hookProgram));
   const binary = pinnedBinaryPath(home);
   const bundle = pinnedBundlePath(home);
+  const refresh = (v: string, path: string): string =>
+    v === VERSION ? "" : used.size > 0 && !used.has(path) ? " — no wired hook runs it" : ` — CLI is v${VERSION}, re-run \`secretgate init\` to refresh`;
   if (existsSync(binary)) {
     let v = "unknown";
     try {
@@ -1083,11 +1087,11 @@ function reportPinned(io: Io): void {
     } catch {
       v = "unknown — it did not run";
     }
-    io.stdout(`binary    pinned at ${binary} (v${v}${refresh(v)})\n`);
+    io.stdout(`binary    pinned at ${binary} (v${v}${refresh(v, binary)})\n`);
   }
   if (existsSync(bundle)) {
     const v = /VERSION = "([^"]+)"/.exec(readFileSync(bundle, "utf8"))?.[1] ?? "unknown";
-    io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v)})\n`);
+    io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v, bundle)})\n`);
   }
   if (!existsSync(binary) && !existsSync(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
 }
@@ -1116,11 +1120,13 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   }
   if (here.disabled || pauses.length > 0) io.stdout("\n");
 
-  reportPinned(io);
-
   // claude code — from the home directory the "project" path aliases the global file: report it once
   const ccScopes: Array<[string, string]> = [["global ", claudeSettingsPath(false)]];
   if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
+  const codexHooks = readJsonSafe(join(codexHome(), "hooks.json"));
+  const codexCommands = hookCommands(codexHooks, "codex");
+  reportPinned([...ccScopes.flatMap(([, path]) => hookCommands(readJsonSafe(path), "claude-code")), ...codexCommands], io);
+
   for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
     const ccCommands = hookCommands(settings, "claude-code");
@@ -1151,8 +1157,6 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   for (const f of cfg.untrusted) io.stdout(`project   allowlist in ${f} is NOT trusted — the hooks ignore it until you run \`secretgate trust\`\n`);
 
   // codex
-  const codexHooks = readJsonSafe(join(codexHome(), "hooks.json"));
-  const codexCommands = hookCommands(codexHooks, "codex");
   const codexWired = codexCommands.length;
   const codexState = codexWiringStatus(codexHome());
   const codexFeature = codexState.feature;
