@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.6.3](https://github.com/maxgfr/secretgate/compare/v1.6.2...v1.6.3) (2026-10-11)
+
+
+### Bug Fixes
+
+* **scope:** restate search counts after filtering, honour OPENCODE_CONFIG_DIR ([49e3c4f](https://github.com/maxgfr/secretgate/commit/49e3c4f4c2552831855b7c6b398bb4294813b631))
+
 ## [1.6.2](https://github.com/maxgfr/secretgate/compare/v1.6.1...v1.6.2) (2026-10-11)
 
 
