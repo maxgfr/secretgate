@@ -8,8 +8,10 @@ import { FAKE } from "./fixtures/fake-tokens.js";
 
 let home: string;
 let work: string;
-// These tests run inside Claude Code too, which exports its own session id.
-const hostSession = process.env.CLAUDE_CODE_SESSION_ID;
+// These tests run inside Claude Code too, which exports its own session id, and
+// on CI runners that export XDG_CONFIG_HOME (where OpenCode's config resolves).
+const hostEnvKeys = ["CLAUDE_CODE_SESSION_ID", "XDG_CONFIG_HOME", "OPENCODE_CONFIG_DIR"] as const;
+const hostEnv = Object.fromEntries(hostEnvKeys.map((k) => [k, process.env[k]]));
 
 function capture(stdin = "") {
   const out: string[] = [];
@@ -29,14 +31,16 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "secretgate-home-"));
   work = mkdtempSync(join(tmpdir(), "secretgate-work-"));
   process.env.SECRETGATE_HOME = home;
-  delete process.env.CLAUDE_CODE_SESSION_ID;
+  for (const k of hostEnvKeys) delete process.env[k];
 });
 
 afterEach(() => {
   delete process.env.SECRETGATE_HOME;
   delete process.env.SECRETGATE_DISABLE;
-  if (hostSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
-  else process.env.CLAUDE_CODE_SESSION_ID = hostSession;
+  for (const k of hostEnvKeys) {
+    if (hostEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = hostEnv[k];
+  }
   rmSync(home, { recursive: true, force: true });
   rmSync(work, { recursive: true, force: true });
 });
@@ -472,18 +476,14 @@ describe("secretgate status", () => {
     process.chdir(work);
     const ocDir = join(work, "oc-config");
     process.env.OPENCODE_CONFIG_DIR = ocDir;
-    try {
-      expect(await run(["install", "--opencode"], capture().io)).toBe(0);
-      expect(existsSync(join(ocDir, "plugin", "secretgate.js"))).toBe(true);
-      expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
-      const { io, text } = capture();
-      await run(["status"], io);
-      expect(text()).toContain(`opencode  wired (plugin file)  ${ocDir}`);
-      expect(await run(["uninstall", "--opencode"], capture().io)).toBe(0);
-      expect(existsSync(join(ocDir, "plugin", "secretgate.js"))).toBe(false);
-    } finally {
-      delete process.env.OPENCODE_CONFIG_DIR;
-    }
+    expect(await run(["install", "--opencode"], capture().io)).toBe(0);
+    expect(existsSync(join(ocDir, "plugin", "secretgate.js"))).toBe(true);
+    expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
+    const { io, text } = capture();
+    await run(["status"], io);
+    expect(text()).toContain(`opencode  wired (plugin file)  ${ocDir}`);
+    expect(await run(["uninstall", "--opencode"], capture().io)).toBe(0);
+    expect(existsSync(join(ocDir, "plugin", "secretgate.js"))).toBe(false);
   });
 
   it("does not ask to refresh an outdated pinned copy that no wired hook runs", async () => {

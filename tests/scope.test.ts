@@ -8,11 +8,15 @@ import { accessViolation, filterSearchOutput, isControlFile, pathOutOfScope, pro
 
 let root: string;
 let home: string;
+// Agent config locations the policy-file check reads; CI runners export XDG_CONFIG_HOME.
+const hostEnvKeys = ["XDG_CONFIG_HOME", "OPENCODE_CONFIG_DIR", "CODEX_HOME"] as const;
+const hostEnv = Object.fromEntries(hostEnvKeys.map((k) => [k, process.env[k]]));
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "secretgate-scope-")));
   home = mkdtempSync(join(tmpdir(), "secretgate-scope-home-"));
   process.env.SECRETGATE_HOME = home;
+  for (const k of hostEnvKeys) delete process.env[k];
   mkdirSync(join(root, ".git"));
   for (const d of ["src/legacy", "src/app", "tests", "docs", "secret"]) mkdirSync(join(root, d), { recursive: true });
   for (const f of ["src/app/main.ts", "src/legacy/old.ts", "tests/a.test.ts", "docs/guide.md", "secret/plan.md", "package.json"])
@@ -21,6 +25,10 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.SECRETGATE_HOME;
+  for (const k of hostEnvKeys) {
+    if (hostEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = hostEnv[k];
+  }
   rmSync(root, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -168,11 +176,7 @@ describe("toolCallScopeViolation", () => {
     const plugin = join(ocDir, "plugin", "secretgate.js");
     expect(isControlFile(scopeOf({ allow: ["**"] }), plugin, root)).toBe(false);
     process.env.OPENCODE_CONFIG_DIR = ocDir;
-    try {
-      expect(isControlFile(scopeOf({ allow: ["**"] }), plugin, root)).toBe(true);
-    } finally {
-      delete process.env.OPENCODE_CONFIG_DIR;
-    }
+    expect(isControlFile(scopeOf({ allow: ["**"] }), plugin, root)).toBe(true);
   });
 });
 
