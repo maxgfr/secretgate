@@ -36,6 +36,27 @@ it("preserves large image data while redacting adjacent MCP text", () => {
   expect(result.content[1]!.text).toMatch(/^SECRETGATE_/);
 });
 
+it("preserves OpenCode 2 image reads: base64 `content` and `data:` uris", () => {
+  const base64 = "A".repeat(SCAN_CAP + 1);
+  const output = {
+    output: { type: "file", content: base64, encoding: "base64", mime: "image/png" },
+    content: [{ type: "file", uri: `data:image/png;base64,${base64}`, mime: "image/png" }],
+  };
+  const result = mapStrings(output, eventRedactor(new Vault(), "test", {}), isBinaryField).value as typeof output;
+  expect(result.output.content === base64).toBe(true);
+  expect(result.content[0]!.uri === output.content[0]!.uri).toBe(true);
+});
+
+it("still scans utf8 or non-image `content` and text data uris", () => {
+  const output = {
+    utf8: { content: FAKE.githubPat, encoding: "utf8", mime: "image/png" },
+    text: { content: FAKE.awsKeyId, encoding: "base64", mime: "text/plain" },
+    uri: `data:text/plain,${FAKE.slackBotToken}`,
+  };
+  const result = JSON.stringify(mapStrings(output, eventRedactor(new Vault(), "test", {}), isBinaryField).value);
+  for (const token of [FAKE.githubPat, FAKE.awsKeyId, FAKE.slackBotToken]) expect(result.includes(token)).toBe(false);
+});
+
 it("does not exempt arbitrary base64 keys or text data URLs", () => {
   const output = { base64: FAKE.awsKeyId, url: `data:text/plain,${FAKE.githubPat}` };
   const result = mapStrings(output, eventRedactor(new Vault(), "test", {}), isBinaryField).value;

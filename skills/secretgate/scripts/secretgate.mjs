@@ -7629,7 +7629,8 @@ function preToolPolicy(call, cfg, cwd, opts) {
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
 function isBinaryField(key, value, parent) {
-  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || key === "url" && typeof value === "string" && /^data:(image|audio)\//.test(value);
+  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
+  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
 }
 function eventRedactor(vault, source, allowlist) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;

@@ -88,11 +88,23 @@ function attachedPath(part: PromptPart): string | undefined {
 // OpenCode 1 passes `{ directory, client }`; OpenCode 2 exposes the same facts
 // on the plugin context (`ctx.location.directory`, `ctx.session`), which
 // `v1ContextView` below translates before handing it here.
-async function buildHooks(ctx: unknown) {
+function projectState(ctx: unknown) {
   const directory = (ctx as { directory?: unknown } | undefined)?.directory;
   const cwd = typeof directory === "string" ? directory : process.cwd();
   const offState = (sessionId?: unknown) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : undefined });
   const isOff = (sessionId?: unknown): boolean => offState(sessionId).disabled;
+  // Project config for this event; `disable --scope` lifts the scope too.
+  const configFor = (sessionId?: unknown): SecretgateConfig => {
+    const cfg = loadConfig(cwd);
+    return offState(sessionId).includesScope ? { ...cfg, scopes: [], error: undefined } : cfg;
+  };
+  return { cwd, isOff, configFor };
+}
+
+const WITHHELD = "[secretgate withheld this tool output: scan failed or output exceeded the scan budget]";
+
+async function buildHooks(ctx: unknown) {
+  const { cwd, isOff, configFor } = projectState(ctx);
   const client = (ctx as { client?: { session?: { get?: (req: { path: { id: string } }) => Promise<{ data?: { parentID?: unknown } }> } } } | undefined)
     ?.client;
   // Fails SAFE: a session that cannot be looked up — no session API, or the
@@ -108,11 +120,6 @@ async function buildHooks(ctx: unknown) {
     } catch {
       return true;
     }
-  };
-  // Project config for this event; `disable --scope` lifts the scope too.
-  const configFor = (sessionId?: unknown): SecretgateConfig => {
-    const cfg = loadConfig(cwd);
-    return offState(sessionId).includesScope ? { ...cfg, scopes: [], error: undefined } : cfg;
   };
   return {
     // OpenCode keeps rewritten args in tool history, including failed calls.
@@ -236,7 +243,7 @@ async function buildHooks(ctx: unknown) {
         const vault = new Vault();
         mutateStringsInPlace(output, eventRedactor(vault, `opencode:${tool}`, cfg.allowlist));
       } catch {
-        const notice = "[secretgate withheld this tool output: scan failed or output exceeded the scan budget]";
+        const notice = WITHHELD;
         if (!output || typeof output !== "object") throw new Error(notice);
         const mcp = "content" in output;
         for (const key of Object.keys(output)) delete (output as Record<string, unknown>)[key];
@@ -280,6 +287,22 @@ function v1ContextView(ctx: V2Context): unknown {
   };
 }
 
+// An OpenCode 2 search/list result: the model reads the text parts of
+// `content`; `output` is the structured entry list (grep `{entry: {path}}`,
+// glob `{path}`, relative to the project).
+function filterListingResult(scopes: SecretgateConfig["scopes"], result: Record<string, any>, cwd: string): void {
+  for (const part of Array.isArray(result.content) ? result.content : []) {
+    if (part?.type === "text" && typeof part.text === "string") part.text = filterSearchOutput(scopes, part.text, cwd).value as string;
+  }
+  if (!Array.isArray(result.output)) return;
+  result.output = result.output.filter((item: any) => {
+    const entry = item?.entry ?? item;
+    if (typeof entry?.path !== "string") return true;
+    const kind = entry.type === "directory" ? "list" : "read";
+    return !scopes.some((s) => accessViolation(s, entry.path, cwd, kind));
+  });
+}
+
 const SecretgatePlugin = {
   id: "secretgate",
   // OpenCode 1: return the legacy hook map.
@@ -288,12 +311,29 @@ const SecretgatePlugin = {
   },
   // OpenCode 2: register hooks on the domains that own the operation. Each
   // registration adapts the V2 event into the (input, output) call the shared
-  // implementation expects.
+  // implementation expects, except tool results (see execute.after).
   async setup(ctx: V2Context) {
-    const hooks = await buildHooks(v1ContextView(ctx));
+    const view = v1ContextView(ctx);
+    const hooks = await buildHooks(view);
+    const { cwd, isOff, configFor } = projectState(view);
 
+    // The context messages are AI-SDK shaped: no per-message info, and tool
+    // history lives in `tool-call` / `tool-result` content parts. Present each
+    // message the way the transform implementation sees it, the real parts
+    // wrapped as V1 tool parts so the redaction mutates them in place.
     await ctx.session.hook("context", async (event) => {
-      await hooks["experimental.chat.messages.transform"]({}, { messages: event?.messages });
+      const messages: Array<{ content?: unknown }> = Array.isArray(event?.messages) ? event.messages : [];
+      await hooks["experimental.chat.messages.transform"](
+        {},
+        {
+          messages: messages.map((message) => ({
+            info: { sessionID: event?.sessionID },
+            parts: (Array.isArray(message?.content) ? message.content : [])
+              .filter((part) => part?.type === "tool-call" || part?.type === "tool-result")
+              .map((part) => ({ type: "tool", state: part })),
+          })),
+        },
+      );
     });
 
     await ctx.session.hook("prompt", async (event) => {
@@ -330,13 +370,35 @@ const SecretgatePlugin = {
     });
 
     await ctx.tool.hook("execute.before", async (event) => {
-      await hooks["tool.execute.before"]({ tool: event?.tool, sessionID: event?.sessionID ?? event?.input?.sessionID }, { args: event?.input ?? {} });
+      // OpenCode 2 names its shell tool `shell`; the implementation knows it as
+      // `bash` (same policy, and `restoreBash` applies to it).
+      const tool = String(event?.tool ?? "").toLowerCase() === "shell" ? "bash" : event?.tool;
+      await hooks["tool.execute.before"]({ tool, sessionID: event?.sessionID }, { args: event?.input ?? {} });
     });
 
+    // The result shape differs from V1 — `content` text parts are what the
+    // model reads, `output` is structured — so scope and withhold are adapted
+    // here; redaction still reaches every nested string.
     await ctx.tool.hook("execute.after", async (event) => {
       // Failed executions carry no result to redact; the error path is untouched.
       if (event?.status !== "completed") return;
-      await hooks["tool.execute.after"]({ tool: event?.tool, sessionID: event?.sessionID ?? event?.input?.sessionID, args: event?.input }, event.result);
+      const result = event.result;
+      if (!result || typeof result !== "object") throw new Error(WITHHELD);
+      const tool = String(event?.tool ?? "").toLowerCase();
+      try {
+        const cfg = configFor(event?.sessionID);
+        const kind = extractToolCall(tool, event?.input).kind;
+        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list")) filterListingResult(cfg.scopes, result, cwd);
+        if (isOff(event?.sessionID)) return;
+        mutateStringsInPlace(result, eventRedactor(new Vault(), `opencode:${tool}`, cfg.allowlist));
+      } catch {
+        // Keep `output`'s type for consumers of the structured result.
+        const output = result.output;
+        for (const key of Object.keys(result)) delete result[key];
+        result.content = [{ type: "text", text: WITHHELD }];
+        result.output = Array.isArray(output) ? [] : output && typeof output === "object" ? {} : WITHHELD;
+        result.metadata = {};
+      }
     });
   },
 };

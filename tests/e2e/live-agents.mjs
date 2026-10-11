@@ -172,6 +172,8 @@ for (const agent of agents) {
           : [])
       ).flatMap((t) => (t.type === "namespace" ? t.tools.map((x) => ({ ...x, namespace: t.name })) : [t]));
       const names = tools.map((t) => t.name);
+      // OpenCode 2's file tools take `path`; OpenCode 1's took `filePath`.
+      const fileArg = (name) => (tools.find((t) => t.name === name)?.input_schema?.properties?.path ? "path" : "filePath");
       let tool;
       if (phase === "skill") {
         // The pause is applied by the prompt hook; the model just answers.
@@ -202,7 +204,7 @@ for (const agent of agents) {
               agent === "claude-code"
                 ? { file_path: join(project, "private", "notes.txt") }
                 : agent === "opencode"
-                  ? { filePath: join(project, "private", "notes.txt") }
+                  ? { [fileArg(name)]: join(project, "private", "notes.txt") }
                   : name === "exec_command"
                     ? { cmd: "cat private/notes.txt" }
                     : { command: ["cat", "private/notes.txt"] },
@@ -236,7 +238,7 @@ for (const agent of agents) {
               : agent === "claude-code"
                 ? { file_path: join(project, "ci-values.txt") }
                 : agent === "opencode"
-                  ? { filePath: join(project, "ci-values.txt") }
+                  ? { [fileArg(name)]: join(project, "ci-values.txt") }
                   : name === "exec_command"
                     ? { cmd: "cat ci-values.txt" }
                     : { command: ["cat", "ci-values.txt"] },
@@ -257,7 +259,7 @@ for (const agent of agents) {
             args:
               agent === "claude-code"
                 ? { file_path: join(project, "copy.txt"), content: `CI_TOKEN=${placeholder}\n` }
-                : { filePath: join(project, "copy.txt"), content: `CI_TOKEN=${placeholder}\n` },
+                : { [fileArg("write")]: join(project, "copy.txt"), content: `CI_TOKEN=${placeholder}\n` },
           };
       }
       if (agent === "codex") responses(res, body.model, tool);
