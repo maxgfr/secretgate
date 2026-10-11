@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.6.2](https://github.com/maxgfr/secretgate/compare/v1.6.1...v1.6.2) (2026-10-11)
+
+
+### Bug Fixes
+
+* **opencode:** support the OpenCode 2 plugin API ([#9](https://github.com/maxgfr/secretgate/issues/9)) ([9b71a40](https://github.com/maxgfr/secretgate/commit/9b71a40d50bda5345c1b7ec614f06698e1697bfe))
+
 ## [1.6.1](https://github.com/maxgfr/secretgate/compare/v1.6.0...v1.6.1) (2026-10-01)
 
 
