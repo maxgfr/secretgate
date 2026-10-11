@@ -7461,7 +7461,8 @@ function restorePlaceholders(text, vault) {
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
 function isBinaryField(key, value, parent) {
-  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || key === "url" && typeof value === "string" && /^data:(image|audio)\//.test(value);
+  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
+  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
 }
 function eventRedactor(vault, source, allowlist) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
@@ -7648,11 +7649,20 @@ function attachedPath(part) {
   if (part.synthetic && typeof part.text === "string") return /"filePath":\s*"((?:[^"\\]|\\.)*)"/.exec(part.text)?.[1];
   return void 0;
 }
-var SecretgatePlugin = async (ctx) => {
+function projectState(ctx) {
   const directory = ctx?.directory;
   const cwd = typeof directory === "string" ? directory : process.cwd();
   const offState = (sessionId) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : void 0 });
   const isOff = (sessionId) => offState(sessionId).disabled;
+  const configFor = (sessionId) => {
+    const cfg = loadConfig(cwd);
+    return offState(sessionId).includesScope ? { ...cfg, scopes: [], error: void 0 } : cfg;
+  };
+  return { cwd, isOff, configFor };
+}
+var WITHHELD = "[secretgate withheld this tool output: scan failed or output exceeded the scan budget]";
+async function buildHooks(ctx) {
+  const { cwd, isOff, configFor } = projectState(ctx);
   const client = ctx?.client;
   const isSubsession = async (sessionId) => {
     if (typeof sessionId !== "string") return false;
@@ -7663,10 +7673,6 @@ var SecretgatePlugin = async (ctx) => {
     } catch {
       return true;
     }
-  };
-  const configFor = (sessionId) => {
-    const cfg = loadConfig(cwd);
-    return offState(sessionId).includesScope ? { ...cfg, scopes: [], error: void 0 } : cfg;
   };
   return {
     // OpenCode keeps rewritten args in tool history, including failed calls.
@@ -7771,7 +7777,7 @@ var SecretgatePlugin = async (ctx) => {
         const vault = new Vault();
         mutateStringsInPlace(output, eventRedactor(vault, `opencode:${tool}`, cfg.allowlist));
       } catch {
-        const notice = "[secretgate withheld this tool output: scan failed or output exceeded the scan budget]";
+        const notice = WITHHELD;
         if (!output || typeof output !== "object") throw new Error(notice);
         const mcp = "content" in output;
         for (const key of Object.keys(output)) delete output[key];
@@ -7786,7 +7792,108 @@ var SecretgatePlugin = async (ctx) => {
       }
     }
   };
+}
+function v1ContextView(ctx) {
+  return {
+    directory: ctx?.location?.directory,
+    client: {
+      session: {
+        get: async ({ path }) => ({ data: await ctx.session.get({ sessionID: path.id }) })
+      }
+    }
+  };
+}
+function filterListingResult(scopes, result, cwd) {
+  for (const part of Array.isArray(result.content) ? result.content : []) {
+    if (part?.type === "text" && typeof part.text === "string") part.text = filterSearchOutput(scopes, part.text, cwd).value;
+  }
+  if (!Array.isArray(result.output)) return;
+  result.output = result.output.filter((item) => {
+    const entry = item?.entry ?? item;
+    if (typeof entry?.path !== "string") return true;
+    const kind = entry.type === "directory" ? "list" : "read";
+    return !scopes.some((s) => accessViolation(s, entry.path, cwd, kind));
+  });
+}
+var SecretgatePlugin = {
+  id: "secretgate",
+  // OpenCode 1: return the legacy hook map.
+  async server(ctx) {
+    return buildHooks(ctx);
+  },
+  // OpenCode 2: register hooks on the domains that own the operation. Each
+  // registration adapts the V2 event into the (input, output) call the shared
+  // implementation expects, except tool results (see execute.after).
+  async setup(ctx) {
+    const view = v1ContextView(ctx);
+    const hooks = await buildHooks(view);
+    const { cwd, isOff, configFor } = projectState(view);
+    await ctx.session.hook("context", async (event) => {
+      const messages = Array.isArray(event?.messages) ? event.messages : [];
+      await hooks["experimental.chat.messages.transform"](
+        {},
+        {
+          messages: messages.map((message) => ({
+            info: { sessionID: event?.sessionID },
+            parts: (Array.isArray(message?.content) ? message.content : []).filter((part) => part?.type === "tool-call" || part?.type === "tool-result").map((part) => ({ type: "tool", state: part }))
+          }))
+        }
+      );
+    });
+    await ctx.session.hook("prompt", async (event) => {
+      const prompt = event && typeof event === "object" ? event.prompt ?? {} : {};
+      const files = Array.isArray(prompt.files) ? prompt.files : [];
+      const original = typeof prompt.text === "string" ? prompt.text : "";
+      const parts = [{ type: "text", text: original }];
+      for (const file of files) {
+        parts.push({ type: "file", url: file?.uri, filename: file?.filename, mime: file?.mime });
+      }
+      await hooks["chat.message"]({ sessionID: event?.sessionID }, { parts });
+      const kept = [];
+      const notes = [];
+      for (let i = 0; i < files.length; i++) {
+        const draft = files[i];
+        if (!draft) continue;
+        const part = parts[1 + i];
+        if (part?.type === "file") kept.push(draft);
+        else if (typeof part?.text === "string") notes.push(part.text);
+      }
+      let text = typeof parts[0]?.text === "string" ? parts[0].text : original;
+      if (notes.length > 0) text = `${text}
+
+${notes.join("\n\n")}`;
+      if (typeof prompt.text === "string") prompt.text = text;
+      if (files.length > 0) prompt.files = kept;
+      if (text !== original) {
+        for (const file of kept) delete file.mention;
+      }
+    });
+    await ctx.tool.hook("execute.before", async (event) => {
+      const tool = String(event?.tool ?? "").toLowerCase() === "shell" ? "bash" : event?.tool;
+      await hooks["tool.execute.before"]({ tool, sessionID: event?.sessionID }, { args: event?.input ?? {} });
+    });
+    await ctx.tool.hook("execute.after", async (event) => {
+      if (event?.status !== "completed") return;
+      const result = event.result;
+      if (!result || typeof result !== "object") throw new Error(WITHHELD);
+      const tool = String(event?.tool ?? "").toLowerCase();
+      try {
+        const cfg = configFor(event?.sessionID);
+        const kind = extractToolCall(tool, event?.input).kind;
+        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list")) filterListingResult(cfg.scopes, result, cwd);
+        if (isOff(event?.sessionID)) return;
+        mutateStringsInPlace(result, eventRedactor(new Vault(), `opencode:${tool}`, cfg.allowlist));
+      } catch {
+        const output = result.output;
+        for (const key of Object.keys(result)) delete result[key];
+        result.content = [{ type: "text", text: WITHHELD }];
+        result.output = Array.isArray(output) ? [] : output && typeof output === "object" ? {} : WITHHELD;
+        result.metadata = {};
+      }
+    });
+  }
 };
+var opencode_plugin_default = SecretgatePlugin;
 export {
-  SecretgatePlugin
+  opencode_plugin_default as default
 };

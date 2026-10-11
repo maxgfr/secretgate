@@ -116,17 +116,18 @@ describe.skipIf(!existsSync(BUNDLE))("bundle e2e", () => {
     expect(s2.permissions?.deny ?? []).not.toContain("Read(**/.env)");
   });
 
-  it("the OpenCode plugin bundle exports ONLY functions (OpenCode rejects non-function exports)", async () => {
+  it("the OpenCode plugin bundle exports ONLY the plugin definition (loaders treat extra exports as plugins)", async () => {
     // Regression: exporting a version string alongside the plugin made OpenCode
-    // fail to load it entirely ("Plugin export is not a function").
+    // 1 fail to load it entirely ("Plugin export is not a function"). OpenCode 2
+    // loads default.setup, OpenCode 1 (>= 1.18.29) loads default.server.
     const pluginBundle = join(__dirname, "..", "..", "scripts", "secretgate-opencode.mjs");
     const mod = await import(pluginBundle);
-    const exports = Object.entries(mod).filter(([k]) => k !== "default");
-    expect(exports.length).toBeGreaterThan(0);
-    for (const [name, val] of exports) {
-      expect(typeof val, `export ${name} must be a function`).toBe("function");
-    }
-    expect(typeof (mod as any).SecretgatePlugin).toBe("function");
+    const extra = Object.entries(mod).filter(([k]) => k !== "default");
+    expect(extra).toEqual([]);
+    const plugin = (mod as any).default;
+    expect(plugin.id).toBe("secretgate");
+    expect(typeof plugin.setup).toBe("function");
+    expect(typeof plugin.server).toBe("function");
   });
 
   it("runs when invoked through a SYMLINKED path (macOS /tmp, symlinked homes)", async () => {

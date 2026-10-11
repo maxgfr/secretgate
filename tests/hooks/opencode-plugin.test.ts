@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SecretgatePlugin } from "../../src/adapters/opencode-plugin.js";
+import SecretgatePlugin from "../../src/adapters/opencode-plugin.js";
 import { setTrust } from "../../src/config.js";
 import { addPause, disableState, sessionForCwd } from "../../src/disable.js";
 import { Vault } from "../../src/vault/vault.js";
@@ -14,7 +14,7 @@ let hooks: Record<string, (input: any, output: any) => Promise<void>>;
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "secretgate-oc-"));
   process.env.SECRETGATE_HOME = home;
-  hooks = (await SecretgatePlugin({ project: {}, directory: home })) as any;
+  hooks = (await SecretgatePlugin.server({ project: {}, directory: home })) as any;
 });
 
 afterEach(() => {
@@ -248,7 +248,7 @@ describe("scope + conversational off switch (OpenCode)", () => {
     writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
     // A real OpenCode passes its client; every session here is top-level.
     const client = { session: { get: async () => ({ data: {} }) } };
-    oc = (await SecretgatePlugin({ directory: proj, client })) as any;
+    oc = (await SecretgatePlugin.server({ directory: proj, client })) as any;
   });
 
   afterEach(() => rmSync(proj, { recursive: true, force: true }));
@@ -286,5 +286,244 @@ describe("scope + conversational off switch (OpenCode)", () => {
     expect(parts[0].text).toContain(FAKE.githubPat);
     expect(parts[0].text).toMatch(/DISABLED for this session only/);
     expect(disableState({ sessionId: "o2" }).disabled).toBe(true);
+  });
+});
+
+// OpenCode 2 registers hooks through the plugin context; a stub context lets
+// these tests drive exactly the callbacks OpenCode would invoke.
+describe("OpenCode 2 setup — adapted events", () => {
+  let registered: Record<string, (event: any) => Promise<void>>;
+
+  beforeEach(async () => {
+    registered = {};
+    const ctx = {
+      location: { directory: home, project: { id: "p1", directory: home, canonical: home } },
+      session: {
+        hook: async (name: string, callback: (event: any) => Promise<void>) => {
+          registered[name] = callback;
+        },
+        // A root session: no parentID.
+        get: async ({ sessionID }: { sessionID: string }) => ({ id: sessionID, projectID: "p1", model: {}, cost: 0, tokens: {}, time: {}, location: {} }),
+      },
+      tool: {
+        hook: async (name: string, callback: (event: any) => Promise<void>) => {
+          registered[name] = callback;
+        },
+      },
+    };
+    await SecretgatePlugin.setup(ctx as any);
+    expect(Object.keys(registered).sort()).toEqual(["context", "execute.after", "execute.before", "prompt"]);
+  });
+
+  it("redacts the prompt draft in place, like chat.message did", async () => {
+    const prompt: any = { text: `deploy with ${FAKE.githubPat} please`, files: [] };
+    await registered.prompt!({ sessionID: "v2a", messageID: "m1", prompt, delivery: "steer" });
+    expect(prompt.text).not.toContain(FAKE.githubPat);
+    expect(prompt.text).toMatch(/SECRETGATE_[0-9a-f]{12,16}/);
+    const placeholder = prompt.text.match(/SECRETGATE_[0-9a-f]{12,16}/)![0];
+    expect(new Vault().secretFor(placeholder)).toBe(FAKE.githubPat);
+  });
+
+  it("drops sensitive attachments from the draft and notes the removal", async () => {
+    writeFileSync(join(home, ".env"), "TOKEN=1\n");
+    const prompt: any = { text: "please read this", files: [{ uri: `file://${home}/.env`, mention: 7 }] };
+    await registered.prompt!({ sessionID: "v2b", prompt });
+    expect(prompt.files).toHaveLength(0);
+    expect(prompt.text).toMatch(/attachment was removed/);
+  });
+
+  it("drops @mention offsets when the text is rewritten (they no longer match)", async () => {
+    const prompt: any = { text: `run ${FAKE.githubPat}`, files: [{ uri: `file://${home}/notes.md`, mention: 4 }] };
+    writeFileSync(join(home, "notes.md"), "safe\n");
+    await registered.prompt!({ sessionID: "v2c", prompt });
+    expect(prompt.files).toHaveLength(1);
+    expect("mention" in prompt.files[0]).toBe(false);
+  });
+
+  // OpenCode 2.0.26 hands AI-SDK messages: content parts, no per-message info.
+  const contextEvent = (sessionID: string, input: Record<string, unknown>, value: string) => ({
+    sessionID,
+    model: {},
+    system: [],
+    options: {},
+    agent: "build",
+    tools: {},
+    messages: [
+      { id: "m1", role: "user", content: [{ type: "text", text: "copy the token" }], metadata: {} },
+      {
+        id: "m2",
+        role: "assistant",
+        content: [
+          { type: "text", text: "Reading it." },
+          { type: "tool-call", id: "toolu_1", name: "write", input, providerExecuted: false },
+        ],
+      },
+      { role: "tool", content: [{ type: "tool-result", id: "toolu_1", name: "write", result: { type: "text", value }, providerExecuted: false }] },
+    ],
+  });
+
+  it("redacts tool-call input and tool-result values in the context messages, in place", async () => {
+    const input = { path: "copy.txt", content: new Vault().recordSecret(FAKE.githubPat, "github-pat", "test") };
+    await registered["execute.before"]!({ tool: "write", sessionID: "v2d", agent: "build", messageID: "m2", id: "toolu_1", input });
+    expect(input.content).toBe(FAKE.githubPat);
+    const event = contextEvent("v2d", input, `write failed: ${FAKE.githubPat}`);
+    const call = event.messages[1]!.content[1] as any;
+    const toolResult = event.messages[2]!.content[0] as any;
+    await registered.context!(event);
+    expect(JSON.stringify(event.messages).includes(FAKE.githubPat)).toBe(false);
+    expect(call.input).toBe(input); // same objects — the host keeps its references
+    expect(input.content).toMatch(/^SECRETGATE_/);
+    expect(toolResult.result.value).toMatch(/^write failed: SECRETGATE_/);
+    // A paused session's history is left alone.
+    addPause({ scope: "session", target: "v2off", minutes: 60 });
+    const paused = contextEvent("v2off", { path: "copy.txt", content: FAKE.githubPat }, FAKE.githubPat);
+    await registered.context!(paused);
+    expect(JSON.stringify(paused.messages)).toContain(FAKE.githubPat);
+  });
+
+  it("refuses reading .env through the real read input ({path})", async () => {
+    await expect(registered["execute.before"]!({ tool: "read", sessionID: "v2e", input: { path: ".env" } })).rejects.toThrow(/sensitive/);
+    await expect(registered["execute.before"]!({ tool: "shell", sessionID: "v2e", input: { command: "cat ~/.ssh/id_rsa" } })).rejects.toThrow(/sensitive/);
+  });
+
+  it("redacts a shell result's content and structured output; failures pass untouched", async () => {
+    const leak = `TOKEN=${FAKE.slackBotToken}\n`;
+    const result: any = {
+      output: { exit: 0, truncated: false, output: leak, status: "completed" },
+      content: [{ type: "text", text: leak }],
+      metadata: { status: "completed", truncated: false, exit: 0 },
+    };
+    const content = result.content;
+    await registered["execute.after"]!({ tool: "shell", sessionID: "v2e", status: "completed", input: { command: "cat x" }, result });
+    expect(result.content).toBe(content);
+    expect(result.content[0].text).toMatch(/^TOKEN=SECRETGATE_/);
+    expect(result.output.output).toMatch(/^TOKEN=SECRETGATE_/);
+    expect(result.output.exit).toBe(0);
+    const failed: any = { output: { output: leak }, content: [{ type: "text", text: leak }] };
+    await registered["execute.after"]!({ tool: "shell", sessionID: "v2e", status: "error", input: { command: "cat x" }, result: failed });
+    expect(failed.content[0].text).toContain(FAKE.slackBotToken);
+  });
+
+  it("withholds an unscannable result with a notice the model reads, dropping the structured output", async () => {
+    const big = "x".repeat(2 * 1024 * 1024 + 1) + FAKE.githubPat;
+    const result: any = { output: { exit: 0, output: big }, content: [{ type: "text", text: big }], metadata: { exit: 0 } };
+    await registered["execute.after"]!({ tool: "shell", sessionID: "v2e", status: "completed", input: { command: "cat big" }, result });
+    expect(JSON.stringify(result).includes(FAKE.githubPat)).toBe(false);
+    expect(result.content).toEqual([{ type: "text", text: expect.stringMatching(/withheld/) }]);
+    expect(result.output).toEqual({});
+    expect(result.metadata).toEqual({});
+    // The structured output keeps its type; only a string output carries the notice.
+    const listing: any = { output: [{ path: big }], content: [{ type: "text", text: big }] };
+    await registered["execute.after"]!({ tool: "glob", sessionID: "v2e", status: "completed", input: { pattern: "**/*" }, result: listing });
+    expect(listing.output).toEqual([]);
+    const text: any = { output: big, content: [{ type: "text", text: big }] };
+    await registered["execute.after"]!({ tool: "shell", sessionID: "v2e", status: "completed", input: { command: "cat big" }, result: text });
+    expect(text.output).toMatch(/withheld/);
+  });
+
+  it("fails closed on a completed result that is not an object", async () => {
+    await expect(
+      registered["execute.after"]!({ tool: "shell", sessionID: "v2e", status: "completed", input: { command: "cat x" }, result: "raw" }),
+    ).rejects.toThrow(/withheld/);
+  });
+
+  // Real OpenCode 2.0.26 shapes for `read` of a PNG.
+  it("passes a base64 image read through untouched, in the result and in later context", async () => {
+    const base64 = `iVBORw0K${"A".repeat(2 * 1024 * 1024)}`;
+    const imageParts = () => [
+      { type: "text", text: "Image read successfully" },
+      { type: "file", uri: `data:image/png;base64,${base64}`, mime: "image/png", name: "img.png" },
+    ];
+    const result: any = {
+      output: { type: "file", uri: `file://${home}/img.png`, name: "img.png", content: base64, encoding: "base64", mime: "image/png" },
+      content: imageParts(),
+      metadata: { truncated: false },
+    };
+    const before = JSON.stringify(result);
+    await registered["execute.after"]!({ tool: "read", sessionID: "v2i", status: "completed", input: { path: "img.png" }, result });
+    expect(JSON.stringify(result) === before).toBe(true);
+    const event = {
+      sessionID: "v2i",
+      messages: [{ role: "tool", content: [{ type: "tool-result", id: "t1", name: "read", result: { type: "content", value: imageParts() } }] }],
+    };
+    await expect(registered.context!(event)).resolves.toBeUndefined();
+    // A text file read (utf8) is still scanned.
+    const textRead: any = {
+      output: { type: "file", uri: `file://${home}/a.txt`, name: "a.txt", content: `TOKEN=${FAKE.githubPat}`, encoding: "utf8", mime: "text/plain" },
+      content: [{ type: "text", text: "read" }],
+    };
+    await registered["execute.after"]!({ tool: "read", sessionID: "v2i", status: "completed", input: { path: "a.txt" }, result: textRead });
+    expect(textRead.output.content).toMatch(/^TOKEN=SECRETGATE_/);
+  });
+
+  it("restores placeholders in the real write input ({path, content})", async () => {
+    const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
+    const input = { path: "out.txt", content: `TOKEN=${placeholder}\n` };
+    await registered["execute.before"]!({ tool: "write", sessionID: "v2f", input });
+    expect(input.content).toBe(`TOKEN=${FAKE.githubPat}\n`);
+  });
+
+  it("restores inside the `shell` tool when restoreBash is enabled", async () => {
+    writeFileSync(join(home, "config.json"), JSON.stringify({ restoreBash: true }));
+    const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
+    const input = { command: `deploy --token ${placeholder}` };
+    await registered["execute.before"]!({ tool: "shell", sessionID: "v2g", input });
+    expect(input.command).toBe(`deploy --token ${FAKE.githubPat}`);
+  });
+});
+
+describe("OpenCode 2 setup — scope filtering of search results", () => {
+  let proj: string;
+  let registered: Record<string, (event: any) => Promise<void>>;
+
+  beforeEach(async () => {
+    proj = realpathSync(mkdtempSync(join(tmpdir(), "secretgate-oc2-proj-")));
+    mkdirSync(join(proj, ".git"));
+    mkdirSync(join(proj, "src"));
+    mkdirSync(join(proj, "docs"));
+    writeFileSync(join(proj, "src", "a.ts"), "hello world\n");
+    writeFileSync(join(proj, "docs", "b.md"), "hello world\n");
+    writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
+    registered = {};
+    const hook = async (name: string, callback: (event: any) => Promise<void>) => {
+      registered[name] = callback;
+    };
+    const ctx = {
+      location: { directory: proj, project: { id: "p1", directory: proj, canonical: proj } },
+      session: { hook, get: async () => ({ id: "s1", projectID: "p1" }) },
+      tool: { hook },
+    };
+    await SecretgatePlugin.setup(ctx as any);
+  });
+
+  afterEach(() => rmSync(proj, { recursive: true, force: true }));
+
+  it("drops out-of-scope grep matches from the content text and the output array", async () => {
+    const match = (path: string) => ({ entry: { path, type: "file" }, line: 1, offset: 0, text: "hello world\n", submatches: [] });
+    const result: any = {
+      output: [match("src/a.ts"), match("docs/b.md")],
+      content: [
+        { type: "text", text: `Found 2 matches\n${join(proj, "src/a.ts")}:\n  Line 1: hello world\n\n${join(proj, "docs/b.md")}:\n  Line 1: hello world\n` },
+      ],
+      metadata: { matches: 2, truncated: false },
+    };
+    await registered["execute.after"]!({ tool: "grep", sessionID: "s1", status: "completed", input: { pattern: "hello" }, result });
+    expect(result.output.map((m: any) => m.entry.path)).toEqual(["src/a.ts"]);
+    expect(result.content[0].text).toContain(join(proj, "src/a.ts"));
+    expect(result.content[0].text).not.toContain("docs/b.md");
+  });
+
+  it("drops out-of-scope glob entries from the content text and the output array", async () => {
+    const result: any = {
+      output: [
+        { path: "src/a.ts", type: "file" },
+        { path: "docs/b.md", type: "file" },
+      ],
+      content: [{ type: "text", text: `${join(proj, "src/a.ts")}\n${join(proj, "docs/b.md")}` }],
+      metadata: { count: 2, truncated: false },
+    };
+    await registered["execute.after"]!({ tool: "glob", sessionID: "s1", status: "completed", input: { pattern: "**/*" }, result });
+    expect(result.output).toEqual([{ path: "src/a.ts", type: "file" }]);
+    expect(result.content[0].text).toBe(join(proj, "src/a.ts"));
   });
 });

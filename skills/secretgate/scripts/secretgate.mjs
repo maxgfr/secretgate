@@ -7629,7 +7629,8 @@ function preToolPolicy(call, cfg, cwd, opts) {
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
 function isBinaryField(key, value, parent) {
-  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || key === "url" && typeof value === "string" && /^data:(image|audio)\//.test(value);
+  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
+  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
 }
 function eventRedactor(vault, source, allowlist) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
@@ -9480,8 +9481,11 @@ async function cmdVerifyOpencode(args, io) {
     return 2;
   }
   try {
-    const { SecretgatePlugin } = await import(pathToFileURL(resolve7(file)).href);
-    const hooks = await SecretgatePlugin({ directory: process.cwd() });
+    const plugin = (await import(pathToFileURL(resolve7(file)).href)).default;
+    if (typeof plugin?.setup !== "function" || typeof plugin?.server !== "function" || typeof plugin?.id !== "string") {
+      throw new Error("plugin does not export an { id, setup, server } definition");
+    }
+    const hooks = await plugin.server({ directory: process.cwd() });
     const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
     const prompt = { parts: [{ text: fake }] };
     await hooks["chat.message"]({}, prompt);
@@ -9493,6 +9497,28 @@ async function cmdVerifyOpencode(args, io) {
     const patch = { patchText: token };
     await hooks["tool.execute.before"]({ tool: "apply_patch" }, { args: patch });
     if (patch.patchText !== fake) throw new Error("patch restore failed");
+    const registered = {};
+    const ctx = {
+      location: { directory: process.cwd() },
+      session: {
+        hook: async (name, callback) => {
+          registered[name] = callback;
+        },
+        get: async () => ({})
+      },
+      tool: {
+        hook: async (name, callback) => {
+          registered[name] = callback;
+        }
+      }
+    };
+    await plugin.setup(ctx);
+    const promptV2 = { text: fake, files: [] };
+    await registered.prompt({ sessionID: "verify", prompt: promptV2 });
+    if (!String(promptV2.text).startsWith("SECRETGATE_")) throw new Error("prompt redaction failed (OpenCode 2 path)");
+    const resultV2 = { content: [{ type: "text", text: fake }] };
+    await registered["execute.after"]({ tool: "mcp_verify", status: "completed", input: {}, result: resultV2 });
+    if (JSON.stringify(resultV2).includes(fake)) throw new Error("MCP redaction failed (OpenCode 2 path)");
   } catch (err) {
     io.stderr(`opencode verification failed: ${err instanceof Error ? err.message : String(err)}
 `);
