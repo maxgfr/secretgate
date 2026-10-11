@@ -2547,6 +2547,7 @@ function isPolicyFile(abs, projectRoot) {
   if (fold2(basename3(dirname4(abs))) === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
   const home = homedir4();
   const roots = [process.env.CODEX_HOME ?? join6(home, ".codex"), join6(process.env.XDG_CONFIG_HOME ?? join6(home, ".config"), "opencode")];
+  if (process.env.OPENCODE_CONFIG_DIR) roots.push(process.env.OPENCODE_CONFIG_DIR);
   if (projectRoot) roots.push(join6(projectRoot, ".codex"), join6(projectRoot, ".opencode"));
   return isSecretgateState(abs) || roots.some((root) => covers(root, abs));
 }
@@ -2738,12 +2739,42 @@ function filterTree(scopes, lines, cwd) {
   }
   return kept;
 }
+function searchTextCounts(text, cwd) {
+  let matches = 0;
+  const files = /* @__PURE__ */ new Set();
+  for (const line of text.split("\n")) {
+    if (/^\s+Line \d+:/.test(line)) matches++;
+    else if (!/^\s/.test(line)) {
+      const abs = pathOfLine(line, cwd);
+      if (abs === void 0) continue;
+      files.add(abs);
+      if (/:\d+:/.test(line)) matches++;
+    }
+  }
+  return { matches, files: files.size };
+}
+function restateCounts(lines, cwd) {
+  const { matches, files } = searchTextCounts(lines.join("\n"), cwd);
+  const out = [];
+  for (const line of lines) {
+    const header = /^Found \d+ (matches|files?)\b(.*)$/.exec(line);
+    if (header) {
+      if (header[2].trim() !== "") continue;
+      if (header[1] === "matches") out.push(matches > 0 ? `Found ${matches} matches` : "No matches found");
+      else out.push(files > 0 ? `Found ${files} ${files === 1 ? "file" : "files"}` : "No files found");
+      continue;
+    }
+    out.push(line.replace(/^\(Results are truncated: showing first \d+ /, `(Results are truncated: showing first ${matches > 0 ? matches : files} `));
+  }
+  return out;
+}
 function filterSearchText(scopes, text, cwd) {
-  const tree = filterTree(scopes, text.split("\n"), cwd);
+  const lines = text.split("\n");
+  const tree = filterTree(scopes, lines, cwd);
   if (tree) return tree.join("\n");
   let dropping = false;
   const kept = [];
-  for (const line of text.split("\n")) {
+  for (const line of lines) {
     const indented = /^\s/.test(line) && line.trim() !== "";
     if (!indented) {
       const out = lineOutOfScope(scopes, line, cwd);
@@ -2751,7 +2782,7 @@ function filterSearchText(scopes, text, cwd) {
     }
     if (!dropping) kept.push(line);
   }
-  return kept.join("\n");
+  return (kept.length < lines.length ? restateCounts(kept, cwd) : kept).join("\n");
 }
 function filterSearchOutput(scopes, value, cwd) {
   if (scopes.length === 0) return { value, changed: false };
@@ -7771,7 +7802,12 @@ async function buildHooks(ctx) {
         const cfg = configFor(input?.sessionID);
         const kind = extractToolCall(tool, input?.args).kind;
         if (cfg.scopes.length > 0 && (kind === "search" || kind === "list") && typeof output?.output === "string") {
-          output.output = filterSearchOutput(cfg.scopes, output.output, cwd).value;
+          const filtered = filterSearchOutput(cfg.scopes, output.output, cwd);
+          output.output = filtered.value;
+          if (filtered.changed && kind === "search") {
+            const counts = searchTextCounts(output.output, cwd);
+            restateMetadataCounts(output.metadata, counts.matches, counts.files);
+          }
         }
         if (isOff(input?.sessionID)) return;
         const vault = new Vault();
@@ -7803,17 +7839,25 @@ function v1ContextView(ctx) {
     }
   };
 }
-function filterListingResult(scopes, result, cwd) {
+function restateMetadataCounts(metadata, matches, files) {
+  if (!metadata || typeof metadata !== "object") return;
+  const m = metadata;
+  if (typeof m.matches === "number") m.matches = matches;
+  if (typeof m.count === "number") m.count = files;
+}
+function filterListingResult(scopes, result, cwd, search) {
   for (const part of Array.isArray(result.content) ? result.content : []) {
     if (part?.type === "text" && typeof part.text === "string") part.text = filterSearchOutput(scopes, part.text, cwd).value;
   }
   if (!Array.isArray(result.output)) return;
+  const before = result.output.length;
   result.output = result.output.filter((item) => {
     const entry = item?.entry ?? item;
     if (typeof entry?.path !== "string") return true;
     const kind = entry.type === "directory" ? "list" : "read";
     return !scopes.some((s) => accessViolation(s, entry.path, cwd, kind));
   });
+  if (search && result.output.length < before) restateMetadataCounts(result.metadata, result.output.length, result.output.length);
 }
 var SecretgatePlugin = {
   id: "secretgate",
@@ -7880,7 +7924,7 @@ ${notes.join("\n\n")}`;
       try {
         const cfg = configFor(event?.sessionID);
         const kind = extractToolCall(tool, event?.input).kind;
-        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list")) filterListingResult(cfg.scopes, result, cwd);
+        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list")) filterListingResult(cfg.scopes, result, cwd, kind === "search");
         if (isOff(event?.sessionID)) return;
         mutateStringsInPlace(result, eventRedactor(new Vault(), `opencode:${tool}`, cfg.allowlist));
       } catch {

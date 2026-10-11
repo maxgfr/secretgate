@@ -162,6 +162,18 @@ describe("toolCallScopeViolation", () => {
     expect(check("Bash", { command: "node ~/.secretgate/bin/secretgate.mjs uninstall --all" }, s)).toMatch(/uninstall/);
     expect(isControlFile(s, join(home, "disabled.json"), root)).toBe(true);
   });
+
+  it("the OpenCode plugin under OPENCODE_CONFIG_DIR is a policy file too", () => {
+    const ocDir = join(home, "oc-config");
+    const plugin = join(ocDir, "plugin", "secretgate.js");
+    expect(isControlFile(scopeOf({ allow: ["**"] }), plugin, root)).toBe(false);
+    process.env.OPENCODE_CONFIG_DIR = ocDir;
+    try {
+      expect(isControlFile(scopeOf({ allow: ["**"] }), plugin, root)).toBe(true);
+    } finally {
+      delete process.env.OPENCODE_CONFIG_DIR;
+    }
+  });
 });
 
 describe("filterSearchOutput", () => {
@@ -172,12 +184,30 @@ describe("filterSearchOutput", () => {
     expect(r.changed).toBe(true);
     expect(r.value).toEqual({ filenames: [join(root, "src/app/main.ts")], numFiles: 1 });
     const grep = `src/app/main.ts:1:x\ndocs/guide.md:1:x\nsecret/plan.md-2-x\n--\nFound 3 files`;
-    expect(filterSearchOutput(s, grep, root).value).toBe("src/app/main.ts:1:x\n--\nFound 3 files");
+    expect(filterSearchOutput(s, grep, root).value).toBe("src/app/main.ts:1:x\n--\nFound 1 file");
   });
 
   it("drops OpenCode-style indented match lines under an out-of-scope header", () => {
     const text = `Found 2 matches\n${join(root, "docs/guide.md")}:\n  Line 1: x\n${join(root, "src/app/main.ts")}:\n  Line 1: x`;
-    expect(filterSearchOutput([std()], text, root).value).toBe(`Found 2 matches\n${join(root, "src/app/main.ts")}:\n  Line 1: x`);
+    expect(filterSearchOutput([std()], text, root).value).toBe(`Found 1 matches\n${join(root, "src/app/main.ts")}:\n  Line 1: x`);
+  });
+
+  it("restates counts from the kept lines so they do not reveal out-of-scope matches", () => {
+    const [main, guide] = [join(root, "src/app/main.ts"), join(root, "docs/guide.md")];
+    const note = (n: number) => `(Results are truncated: showing first ${n} results. Consider using a more specific path or pattern.)`;
+    // OpenCode grep, truncated: header and note both carry the shown count.
+    const grep = `Found 3 matches\n${guide}:\n  Line 1: x\n  Line 2: x\n\n${main}:\n  Line 1: x\n\n${note(3)}`;
+    expect(filterSearchOutput([std()], grep, root).value).toBe(`Found 1 matches\n\n${main}:\n  Line 1: x\n\n${note(1)}`);
+    // OpenCode glob: no header, only the truncation note.
+    expect(filterSearchOutput([std()], `${main}\n${guide}\n\n${note(2)}`, root).value).toBe(`${main}\n\n${note(1)}`);
+    // Every match out of scope: say so the way the host does.
+    expect(filterSearchOutput([std()], `Found 1 matches\n${guide}:\n  Line 1: x`, root).value).toBe("No matches found");
+    // A header with a total that cannot be recomputed is dropped.
+    expect(filterSearchOutput([std()], `Found 250 matches (showing first 100)\n${guide}:\n  Line 1: x\n${main}:\n  Line 1: x`, root).value).toBe(
+      `${main}:\n  Line 1: x`,
+    );
+    // Nothing filtered: the host's text is left untouched.
+    expect(filterSearchOutput([std()], `Found 9 matches\n${main}:\n  Line 1: x`, root).value).toBe(`Found 9 matches\n${main}:\n  Line 1: x`);
   });
 });
 

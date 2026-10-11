@@ -7,11 +7,12 @@ import { extractToolCall } from "../hooks/tool-call.js";
 import { applyPromptDirective, promptDirective } from "../prompt-directive.js";
 import { sensitivePathMatch } from "../paths.js";
 import { restorePlaceholders } from "../redact.js";
-import { accessViolation, filterSearchOutput, promptScopeViolation } from "../scope.js";
+import { accessViolation, filterSearchOutput, promptScopeViolation, searchTextCounts } from "../scope.js";
 import { Vault } from "../vault/vault.js";
 
 // OpenCode plugin — bundled standalone as scripts/secretgate-opencode.mjs and
-// installed into ~/.config/opencode/plugin/secretgate.js. OpenCode's hook
+// installed into <config>/plugin/secretgate.js (<config> = $OPENCODE_CONFIG_DIR,
+// else ~/.config/opencode). OpenCode's hook
 // contract honors IN-PLACE mutations of the objects it passes (verified in
 // opencode's session/tools.ts): mutate `parts[i].text`, `output.args.<prop>`
 // and `output.output` — never reassign whole objects. Unlike Claude Code,
@@ -237,7 +238,12 @@ async function buildHooks(ctx: unknown) {
         // glob/grep/list over a partly in-scope tree: drop out-of-scope entries.
         const kind = extractToolCall(tool, input?.args).kind;
         if (cfg.scopes.length > 0 && (kind === "search" || kind === "list") && typeof output?.output === "string") {
-          output.output = filterSearchOutput(cfg.scopes, output.output, cwd).value as string;
+          const filtered = filterSearchOutput(cfg.scopes, output.output, cwd);
+          output.output = filtered.value as string;
+          if (filtered.changed && kind === "search") {
+            const counts = searchTextCounts(output.output, cwd);
+            restateMetadataCounts(output.metadata, counts.matches, counts.files);
+          }
         }
         if (isOff(input?.sessionID)) return;
         const vault = new Vault();
@@ -287,20 +293,31 @@ function v1ContextView(ctx: V2Context): unknown {
   };
 }
 
+// Search metadata (grep `{matches}`, glob `{count}`) still giving the
+// pre-filter total would reveal that out-of-scope matches exist.
+function restateMetadataCounts(metadata: unknown, matches: number, files: number): void {
+  if (!metadata || typeof metadata !== "object") return;
+  const m = metadata as Record<string, unknown>;
+  if (typeof m.matches === "number") m.matches = matches;
+  if (typeof m.count === "number") m.count = files;
+}
+
 // An OpenCode 2 search/list result: the model reads the text parts of
 // `content`; `output` is the structured entry list (grep `{entry: {path}}`,
-// glob `{path}`, relative to the project).
-function filterListingResult(scopes: SecretgateConfig["scopes"], result: Record<string, any>, cwd: string): void {
+// one per match; glob `{path}`; relative to the project).
+function filterListingResult(scopes: SecretgateConfig["scopes"], result: Record<string, any>, cwd: string, search: boolean): void {
   for (const part of Array.isArray(result.content) ? result.content : []) {
     if (part?.type === "text" && typeof part.text === "string") part.text = filterSearchOutput(scopes, part.text, cwd).value as string;
   }
   if (!Array.isArray(result.output)) return;
+  const before = result.output.length;
   result.output = result.output.filter((item: any) => {
     const entry = item?.entry ?? item;
     if (typeof entry?.path !== "string") return true;
     const kind = entry.type === "directory" ? "list" : "read";
     return !scopes.some((s) => accessViolation(s, entry.path, cwd, kind));
   });
+  if (search && result.output.length < before) restateMetadataCounts(result.metadata, result.output.length, result.output.length);
 }
 
 const SecretgatePlugin = {
@@ -388,7 +405,7 @@ const SecretgatePlugin = {
       try {
         const cfg = configFor(event?.sessionID);
         const kind = extractToolCall(tool, event?.input).kind;
-        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list")) filterListingResult(cfg.scopes, result, cwd);
+        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list")) filterListingResult(cfg.scopes, result, cwd, kind === "search");
         if (isOff(event?.sessionID)) return;
         mutateStringsInPlace(result, eventRedactor(new Vault(), `opencode:${tool}`, cfg.allowlist));
       } catch {

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -448,6 +448,42 @@ describe("secretgate status", () => {
     await run(["status"], io);
     expect(text()).toContain(`binary    pinned at ${bin} (v0.0.1 — CLI is v`);
     expect(text()).not.toContain("not pinned yet");
+  });
+
+  it("asks for a pinned program only when a hook that runs one is wired (not for OpenCode alone)", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    mkdirSync(join(home, ".config", "opencode", "plugin"), { recursive: true });
+    writeFileSync(join(home, ".config", "opencode", "plugin", "secretgate.js"), "// SecretgatePlugin\n");
+    const oc = capture();
+    await run(["status"], oc.io);
+    expect(oc.text()).toContain("opencode  wired (plugin file)");
+    expect(oc.text()).not.toContain("not pinned yet");
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const hook = [{ hooks: [{ type: "command", command: "secretgate hook claude-code user-prompt-submit" }] }];
+    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: hook } }));
+    const cc = capture();
+    await run(["status"], cc.io);
+    expect(cc.text()).toContain("bundle    not pinned yet (run `secretgate init`)");
+  });
+
+  it("installs, reports and uninstalls the OpenCode plugin under OPENCODE_CONFIG_DIR", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    const ocDir = join(work, "oc-config");
+    process.env.OPENCODE_CONFIG_DIR = ocDir;
+    try {
+      expect(await run(["install", "--opencode"], capture().io)).toBe(0);
+      expect(existsSync(join(ocDir, "plugin", "secretgate.js"))).toBe(true);
+      expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
+      const { io, text } = capture();
+      await run(["status"], io);
+      expect(text()).toContain(`opencode  wired (plugin file)  ${ocDir}`);
+      expect(await run(["uninstall", "--opencode"], capture().io)).toBe(0);
+      expect(existsSync(join(ocDir, "plugin", "secretgate.js"))).toBe(false);
+    } finally {
+      delete process.env.OPENCODE_CONFIG_DIR;
+    }
   });
 
   it("does not ask to refresh an outdated pinned copy that no wired hook runs", async () => {

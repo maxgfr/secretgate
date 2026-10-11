@@ -273,6 +273,17 @@ describe("scope + conversational off switch (OpenCode)", () => {
     expect(parts[0].url).toBeUndefined();
   });
 
+  it("restates the grep match count in the output text and metadata", async () => {
+    const out = {
+      output: `Found 2 matches\n${join(proj, "src/a.ts")}:\n  Line 1: x\n\n${join(proj, "docs/b.md")}:\n  Line 1: x`,
+      title: "x",
+      metadata: { matches: 2, truncated: false },
+    };
+    await oc["tool.execute.after"]!({ tool: "grep", args: { pattern: "x" } }, out);
+    expect(out.output).toBe(`Found 1 matches\n${join(proj, "src/a.ts")}:\n  Line 1: x\n`);
+    expect(out.metadata).toEqual({ matches: 1, truncated: false });
+  });
+
   it("`/secretgate disable` then `/secretgate enable` round-trip", async () => {
     await oc["chat.message"]!({ sessionID: "o3" }, { parts: [{ type: "text", text: "/secretgate disable" }] });
     expect(disableState({ sessionId: "o3" }).disabled).toBe(true);
@@ -511,6 +522,9 @@ describe("OpenCode 2 setup — scope filtering of search results", () => {
     expect(result.output.map((m: any) => m.entry.path)).toEqual(["src/a.ts"]);
     expect(result.content[0].text).toContain(join(proj, "src/a.ts"));
     expect(result.content[0].text).not.toContain("docs/b.md");
+    // The counts must not reveal that an out-of-scope match existed.
+    expect(result.content[0].text).toMatch(/^Found 1 matches\n/);
+    expect(result.metadata).toEqual({ matches: 1, truncated: false });
   });
 
   it("drops out-of-scope glob entries from the content text and the output array", async () => {
@@ -525,5 +539,6 @@ describe("OpenCode 2 setup — scope filtering of search results", () => {
     await registered["execute.after"]!({ tool: "glob", sessionID: "s1", status: "completed", input: { pattern: "**/*" }, result });
     expect(result.output).toEqual([{ path: "src/a.ts", type: "file" }]);
     expect(result.content[0].text).toBe(join(proj, "src/a.ts"));
+    expect(result.metadata).toEqual({ count: 1, truncated: false });
   });
 });

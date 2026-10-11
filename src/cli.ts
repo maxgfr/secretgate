@@ -1120,7 +1120,9 @@ function reportPinned(hookCommandList: string[], io: Io): void {
     const v = /VERSION = "([^"]+)"/.exec(readFileSync(bundle, "utf8"))?.[1] ?? "unknown";
     io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v, bundle)})\n`);
   }
-  if (!existsSync(binary) && !existsSync(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
+  // Only Claude Code and Codex hooks run the pinned copy; the OpenCode plugin is
+  // self-contained, so an OpenCode-only install has nothing to pin.
+  if (hookCommandList.length > 0 && !existsSync(binary) && !existsSync(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
 }
 
 // A hook whose program is gone fails on every event — for most hosts that is

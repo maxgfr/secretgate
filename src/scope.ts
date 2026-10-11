@@ -264,6 +264,8 @@ export function isPolicyFile(abs: string, projectRoot?: string): boolean {
   if (fold(basename(dirname(abs))) === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
   const home = homedir();
   const roots = [process.env.CODEX_HOME ?? join(home, ".codex"), join(process.env.XDG_CONFIG_HOME ?? join(home, ".config"), "opencode")];
+  // OpenCode loads plugins from OPENCODE_CONFIG_DIR too (where `install` puts ours when it is set).
+  if (process.env.OPENCODE_CONFIG_DIR) roots.push(process.env.OPENCODE_CONFIG_DIR);
   if (projectRoot) roots.push(join(projectRoot, ".codex"), join(projectRoot, ".opencode"));
   return isSecretgateState(abs) || roots.some((root) => covers(root, abs));
 }
@@ -508,14 +510,52 @@ function filterTree(scopes: ScopeConfig[], lines: string[], cwd: string): string
   return kept;
 }
 
+/** What a search result text lists: match lines (OpenCode `  Line 12: …`,
+ *  grep `path:12:…`) and the distinct files they are in. */
+export function searchTextCounts(text: string, cwd: string): { matches: number; files: number } {
+  let matches = 0;
+  const files = new Set<string>();
+  for (const line of text.split("\n")) {
+    if (/^\s+Line \d+:/.test(line)) matches++;
+    else if (!/^\s/.test(line)) {
+      const abs = pathOfLine(line, cwd);
+      if (abs === undefined) continue;
+      files.add(abs);
+      if (/:\d+:/.test(line)) matches++;
+    }
+  }
+  return { matches, files: files.size };
+}
+
+// A header (`Found 2 matches`) or truncation note (`showing first 2 results`)
+// still giving the pre-filter number would reveal that out-of-scope matches
+// exist: restate it from the lines left, or drop a header that carried more
+// than a count (`Found 250 matches (showing first 100)` — the total is unknown).
+function restateCounts(lines: string[], cwd: string): string[] {
+  const { matches, files } = searchTextCounts(lines.join("\n"), cwd);
+  const out: string[] = [];
+  for (const line of lines) {
+    const header = /^Found \d+ (matches|files?)\b(.*)$/.exec(line);
+    if (header) {
+      if (header[2]!.trim() !== "") continue;
+      if (header[1] === "matches") out.push(matches > 0 ? `Found ${matches} matches` : "No matches found");
+      else out.push(files > 0 ? `Found ${files} ${files === 1 ? "file" : "files"}` : "No files found");
+      continue;
+    }
+    out.push(line.replace(/^\(Results are truncated: showing first \d+ /, `(Results are truncated: showing first ${matches > 0 ? matches : files} `));
+  }
+  return out;
+}
+
 /** Drop the lines of a search result that name out-of-scope files. Indented
  *  lines (OpenCode's `  Line 12: …`) follow the header line above them. */
 function filterSearchText(scopes: ScopeConfig[], text: string, cwd: string): string {
-  const tree = filterTree(scopes, text.split("\n"), cwd);
+  const lines = text.split("\n");
+  const tree = filterTree(scopes, lines, cwd);
   if (tree) return tree.join("\n");
   let dropping = false;
   const kept: string[] = [];
-  for (const line of text.split("\n")) {
+  for (const line of lines) {
     const indented = /^\s/.test(line) && line.trim() !== "";
     if (!indented) {
       const out = lineOutOfScope(scopes, line, cwd);
@@ -523,7 +563,7 @@ function filterSearchText(scopes: ScopeConfig[], text: string, cwd: string): str
     }
     if (!dropping) kept.push(line);
   }
-  return kept.join("\n");
+  return (kept.length < lines.length ? restateCounts(kept, cwd) : kept).join("\n");
 }
 
 /** Remove out-of-scope entries from a Glob/Grep/list result (any shape). */

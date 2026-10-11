@@ -2421,6 +2421,7 @@ function isPolicyFile(abs, projectRoot) {
   if (fold2(basename3(dirname4(abs))) === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
   const home = homedir4();
   const roots = [process.env.CODEX_HOME ?? join5(home, ".codex"), join5(process.env.XDG_CONFIG_HOME ?? join5(home, ".config"), "opencode")];
+  if (process.env.OPENCODE_CONFIG_DIR) roots.push(process.env.OPENCODE_CONFIG_DIR);
   if (projectRoot) roots.push(join5(projectRoot, ".codex"), join5(projectRoot, ".opencode"));
   return isSecretgateState(abs) || roots.some((root) => covers(root, abs));
 }
@@ -2612,12 +2613,42 @@ function filterTree(scopes, lines, cwd) {
   }
   return kept;
 }
+function searchTextCounts(text, cwd) {
+  let matches = 0;
+  const files = /* @__PURE__ */ new Set();
+  for (const line of text.split("\n")) {
+    if (/^\s+Line \d+:/.test(line)) matches++;
+    else if (!/^\s/.test(line)) {
+      const abs = pathOfLine(line, cwd);
+      if (abs === void 0) continue;
+      files.add(abs);
+      if (/:\d+:/.test(line)) matches++;
+    }
+  }
+  return { matches, files: files.size };
+}
+function restateCounts(lines, cwd) {
+  const { matches, files } = searchTextCounts(lines.join("\n"), cwd);
+  const out = [];
+  for (const line of lines) {
+    const header = /^Found \d+ (matches|files?)\b(.*)$/.exec(line);
+    if (header) {
+      if (header[2].trim() !== "") continue;
+      if (header[1] === "matches") out.push(matches > 0 ? `Found ${matches} matches` : "No matches found");
+      else out.push(files > 0 ? `Found ${files} ${files === 1 ? "file" : "files"}` : "No files found");
+      continue;
+    }
+    out.push(line.replace(/^\(Results are truncated: showing first \d+ /, `(Results are truncated: showing first ${matches > 0 ? matches : files} `));
+  }
+  return out;
+}
 function filterSearchText(scopes, text, cwd) {
-  const tree = filterTree(scopes, text.split("\n"), cwd);
+  const lines = text.split("\n");
+  const tree = filterTree(scopes, lines, cwd);
   if (tree) return tree.join("\n");
   let dropping = false;
   const kept = [];
-  for (const line of text.split("\n")) {
+  for (const line of lines) {
     const indented = /^\s/.test(line) && line.trim() !== "";
     if (!indented) {
       const out = lineOutOfScope(scopes, line, cwd);
@@ -2625,7 +2656,7 @@ function filterSearchText(scopes, text, cwd) {
     }
     if (!dropping) kept.push(line);
   }
-  return kept.join("\n");
+  return (kept.length < lines.length ? restateCounts(kept, cwd) : kept).join("\n");
 }
 function filterSearchOutput(scopes, value, cwd) {
   if (scopes.length === 0) return { value, changed: false };
@@ -8604,6 +8635,8 @@ import { homedir as homedir6 } from "os";
 import { join as join10 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
+  const custom = process.env.OPENCODE_CONFIG_DIR;
+  if (custom && custom !== "") return custom;
   const xdg = process.env.XDG_CONFIG_HOME;
   return join10(xdg && xdg !== "" ? xdg : join10(homedir6(), ".config"), "opencode");
 }
@@ -9654,7 +9687,7 @@ function reportPinned(hookCommandList, io) {
     io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v, bundle)})
 `);
   }
-  if (!existsSync9(binary) && !existsSync9(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
+  if (hookCommandList.length > 0 && !existsSync9(binary) && !existsSync9(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
 }
 function reportMissingPrograms(commands2, label, io) {
   const missing = new Set(commands2.map(hookProgram).filter((p) => !!p && isAbsolute4(p) && !existsSync9(p)));

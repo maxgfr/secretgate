@@ -8,7 +8,11 @@ import { type EditReport, editJsonFile } from "./json-merge.js";
 // npm package, so there is no npm-pin mode — the file copy works fully offline.
 const OWNERSHIP_MARKER = "SecretgatePlugin";
 
+// The directory OpenCode loads `plugin/*.js` from: OPENCODE_CONFIG_DIR when
+// set (OpenCode honours it first), else the XDG config home.
 export function opencodeConfigDir(): string {
+  const custom = process.env.OPENCODE_CONFIG_DIR;
+  if (custom && custom !== "") return custom;
   const xdg = process.env.XDG_CONFIG_HOME;
   return join(xdg && xdg !== "" ? xdg : join(homedir(), ".config"), "opencode");
 }
