@@ -18,9 +18,10 @@ import { Vault } from "../vault/vault.js";
 // OpenCode lets us REWRITE the prompt, so secrets in prompts are redacted
 // (not blocked) here.
 //
-// IMPORTANT: this module must export ONLY the plugin function. OpenCode treats
-// EVERY named export as a plugin and rejects non-function exports with "Plugin
-// export is not a function", so no version constants or helpers may be exported.
+// IMPORTANT: this module must export ONLY the default plugin definition.
+// OpenCode 2 runs `default.setup` (hook registrations via the plugin context);
+// OpenCode 1 (>= 1.18.29) runs `default.server` (the legacy hook map). No
+// other exports — plugin loaders treat extra exports as plugins.
 
 const ALLOW_TAG = "[allow-secret]";
 
@@ -83,7 +84,11 @@ function attachedPath(part: PromptPart): string | undefined {
 // reaches it the same way it reaches a spawned hook, and process.cwd() is the
 // directory OpenCode was started in — the one `secretgate disable --project`
 // records.
-export const SecretgatePlugin = async (ctx: unknown) => {
+//
+// OpenCode 1 passes `{ directory, client }`; OpenCode 2 exposes the same facts
+// on the plugin context (`ctx.location.directory`, `ctx.session`), which
+// `v1ContextView` below translates before handing it here.
+async function buildHooks(ctx: unknown) {
   const directory = (ctx as { directory?: unknown } | undefined)?.directory;
   const cwd = typeof directory === "string" ? directory : process.cwd();
   const offState = (sessionId?: unknown) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : undefined });
@@ -246,4 +251,94 @@ export const SecretgatePlugin = async (ctx: unknown) => {
       }
     },
   };
+}
+
+// Shapes of the OpenCode 2 plugin context this adapter relies on. Kept
+// structural (no @opencode/plugin dependency): the bundle is standalone.
+interface V2Context {
+  location?: { directory?: unknown };
+  session: {
+    hook(name: "context" | "prompt", callback: (event: any) => unknown): Promise<unknown>;
+    get(input: { sessionID: string }): Promise<unknown>;
+  };
+  tool: {
+    hook(name: "execute.before" | "execute.after", callback: (event: any) => unknown): Promise<unknown>;
+  };
+}
+
+// OpenCode 1 passed a dedicated client object; OpenCode 2 mounts the domains
+// on the plugin context itself. Present the V2 context in the V1 shape so the
+// hook implementations above stay host-version agnostic.
+function v1ContextView(ctx: V2Context): unknown {
+  return {
+    directory: ctx?.location?.directory,
+    client: {
+      session: {
+        get: async ({ path }: { path: { id: string } }) => ({ data: await ctx.session.get({ sessionID: path.id }) }),
+      },
+    },
+  };
+}
+
+const SecretgatePlugin = {
+  id: "secretgate",
+  // OpenCode 1: return the legacy hook map.
+  async server(ctx: unknown) {
+    return buildHooks(ctx);
+  },
+  // OpenCode 2: register hooks on the domains that own the operation. Each
+  // registration adapts the V2 event into the (input, output) call the shared
+  // implementation expects.
+  async setup(ctx: V2Context) {
+    const hooks = await buildHooks(v1ContextView(ctx));
+
+    await ctx.session.hook("context", async (event) => {
+      await hooks["experimental.chat.messages.transform"]({}, { messages: event?.messages });
+    });
+
+    await ctx.session.hook("prompt", async (event) => {
+      const prompt = event && typeof event === "object" ? (event.prompt ?? {}) : {};
+      const files: Array<Record<string, unknown>> = Array.isArray(prompt.files) ? prompt.files : [];
+      const original = typeof prompt.text === "string" ? prompt.text : "";
+      // Present the draft the way the chat.message implementation sees it: the
+      // typed text first, then one part per attachment.
+      const parts: PromptPart[] = [{ type: "text", text: original }];
+      for (const file of files) {
+        parts.push({ type: "file", url: file?.uri, filename: file?.filename, mime: file?.mime });
+      }
+      await hooks["chat.message"]({ sessionID: event?.sessionID }, { parts });
+      // Attachments the implementation replaced with a note leave the draft;
+      // their note rides the prompt text so the model sees what happened.
+      const kept: Array<Record<string, unknown>> = [];
+      const notes: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const draft = files[i];
+        if (!draft) continue;
+        const part = parts[1 + i];
+        if (part?.type === "file") kept.push(draft);
+        else if (typeof part?.text === "string") notes.push(part.text);
+      }
+      let text = typeof parts[0]?.text === "string" ? (parts[0].text as string) : original;
+      if (notes.length > 0) text = `${text}\n\n${notes.join("\n\n")}`;
+      if (typeof prompt.text === "string") prompt.text = text;
+      if (files.length > 0) prompt.files = kept;
+      // Rewriting the text can shift @mention offsets — drop them rather than
+      // leave an offset pointing at the wrong range.
+      if (text !== original) {
+        for (const file of kept) delete file.mention;
+      }
+    });
+
+    await ctx.tool.hook("execute.before", async (event) => {
+      await hooks["tool.execute.before"]({ tool: event?.tool, sessionID: event?.sessionID ?? event?.input?.sessionID }, { args: event?.input ?? {} });
+    });
+
+    await ctx.tool.hook("execute.after", async (event) => {
+      // Failed executions carry no result to redact; the error path is untouched.
+      if (event?.status !== "completed") return;
+      await hooks["tool.execute.after"]({ tool: event?.tool, sessionID: event?.sessionID ?? event?.input?.sessionID, args: event?.input }, event.result);
+    });
+  },
 };
+
+export default SecretgatePlugin;

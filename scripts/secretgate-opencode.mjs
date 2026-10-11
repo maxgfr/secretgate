@@ -7648,7 +7648,7 @@ function attachedPath(part) {
   if (part.synthetic && typeof part.text === "string") return /"filePath":\s*"((?:[^"\\]|\\.)*)"/.exec(part.text)?.[1];
   return void 0;
 }
-var SecretgatePlugin = async (ctx) => {
+async function buildHooks(ctx) {
   const directory = ctx?.directory;
   const cwd = typeof directory === "string" ? directory : process.cwd();
   const offState = (sessionId) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : void 0 });
@@ -7786,7 +7786,69 @@ var SecretgatePlugin = async (ctx) => {
       }
     }
   };
+}
+function v1ContextView(ctx) {
+  return {
+    directory: ctx?.location?.directory,
+    client: {
+      session: {
+        get: async ({ path }) => ({ data: await ctx.session.get({ sessionID: path.id }) })
+      }
+    }
+  };
+}
+var SecretgatePlugin = {
+  id: "secretgate",
+  // OpenCode 1: return the legacy hook map.
+  async server(ctx) {
+    return buildHooks(ctx);
+  },
+  // OpenCode 2: register hooks on the domains that own the operation. Each
+  // registration adapts the V2 event into the (input, output) call the shared
+  // implementation expects.
+  async setup(ctx) {
+    const hooks = await buildHooks(v1ContextView(ctx));
+    await ctx.session.hook("context", async (event) => {
+      await hooks["experimental.chat.messages.transform"]({}, { messages: event?.messages });
+    });
+    await ctx.session.hook("prompt", async (event) => {
+      const prompt = event && typeof event === "object" ? event.prompt ?? {} : {};
+      const files = Array.isArray(prompt.files) ? prompt.files : [];
+      const original = typeof prompt.text === "string" ? prompt.text : "";
+      const parts = [{ type: "text", text: original }];
+      for (const file of files) {
+        parts.push({ type: "file", url: file?.uri, filename: file?.filename, mime: file?.mime });
+      }
+      await hooks["chat.message"]({ sessionID: event?.sessionID }, { parts });
+      const kept = [];
+      const notes = [];
+      for (let i = 0; i < files.length; i++) {
+        const draft = files[i];
+        if (!draft) continue;
+        const part = parts[1 + i];
+        if (part?.type === "file") kept.push(draft);
+        else if (typeof part?.text === "string") notes.push(part.text);
+      }
+      let text = typeof parts[0]?.text === "string" ? parts[0].text : original;
+      if (notes.length > 0) text = `${text}
+
+${notes.join("\n\n")}`;
+      if (typeof prompt.text === "string") prompt.text = text;
+      if (files.length > 0) prompt.files = kept;
+      if (text !== original) {
+        for (const file of kept) delete file.mention;
+      }
+    });
+    await ctx.tool.hook("execute.before", async (event) => {
+      await hooks["tool.execute.before"]({ tool: event?.tool, sessionID: event?.sessionID ?? event?.input?.sessionID }, { args: event?.input ?? {} });
+    });
+    await ctx.tool.hook("execute.after", async (event) => {
+      if (event?.status !== "completed") return;
+      await hooks["tool.execute.after"]({ tool: event?.tool, sessionID: event?.sessionID ?? event?.input?.sessionID, args: event?.input }, event.result);
+    });
+  }
 };
+var opencode_plugin_default = SecretgatePlugin;
 export {
-  SecretgatePlugin
+  opencode_plugin_default as default
 };

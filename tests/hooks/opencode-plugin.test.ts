@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SecretgatePlugin } from "../../src/adapters/opencode-plugin.js";
+import SecretgatePlugin from "../../src/adapters/opencode-plugin.js";
 import { setTrust } from "../../src/config.js";
 import { addPause, disableState, sessionForCwd } from "../../src/disable.js";
 import { Vault } from "../../src/vault/vault.js";
@@ -14,7 +14,7 @@ let hooks: Record<string, (input: any, output: any) => Promise<void>>;
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), "secretgate-oc-"));
   process.env.SECRETGATE_HOME = home;
-  hooks = (await SecretgatePlugin({ project: {}, directory: home })) as any;
+  hooks = (await SecretgatePlugin.server({ project: {}, directory: home })) as any;
 });
 
 afterEach(() => {
@@ -248,7 +248,7 @@ describe("scope + conversational off switch (OpenCode)", () => {
     writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
     // A real OpenCode passes its client; every session here is top-level.
     const client = { session: { get: async () => ({ data: {} }) } };
-    oc = (await SecretgatePlugin({ directory: proj, client })) as any;
+    oc = (await SecretgatePlugin.server({ directory: proj, client })) as any;
   });
 
   afterEach(() => rmSync(proj, { recursive: true, force: true }));
@@ -286,5 +286,82 @@ describe("scope + conversational off switch (OpenCode)", () => {
     expect(parts[0].text).toContain(FAKE.githubPat);
     expect(parts[0].text).toMatch(/DISABLED for this session only/);
     expect(disableState({ sessionId: "o2" }).disabled).toBe(true);
+  });
+});
+
+// OpenCode 2 registers hooks through the plugin context; a stub context lets
+// these tests drive exactly the callbacks OpenCode would invoke.
+describe("OpenCode 2 setup — adapted events", () => {
+  let registered: Record<string, (event: any) => Promise<void>>;
+
+  beforeEach(async () => {
+    registered = {};
+    const ctx = {
+      location: { directory: home },
+      session: {
+        hook: async (name: string, callback: (event: any) => Promise<void>) => {
+          registered[name] = callback;
+        },
+        get: async () => ({}),
+      },
+      tool: {
+        hook: async (name: string, callback: (event: any) => Promise<void>) => {
+          registered[name] = callback;
+        },
+      },
+    };
+    await SecretgatePlugin.setup(ctx as any);
+    expect(Object.keys(registered).sort()).toEqual(["context", "execute.after", "execute.before", "prompt"]);
+  });
+
+  it("redacts the prompt draft in place, like chat.message did", async () => {
+    const prompt: any = { text: `deploy with ${FAKE.githubPat} please`, files: [] };
+    await registered.prompt!({ sessionID: "v2a", prompt });
+    expect(prompt.text).not.toContain(FAKE.githubPat);
+    expect(prompt.text).toMatch(/SECRETGATE_[0-9a-f]{12,16}/);
+    const placeholder = prompt.text.match(/SECRETGATE_[0-9a-f]{12,16}/)![0];
+    expect(new Vault().secretFor(placeholder)).toBe(FAKE.githubPat);
+  });
+
+  it("drops sensitive attachments from the draft and notes the removal", async () => {
+    writeFileSync(join(home, ".env"), "TOKEN=1\n");
+    const prompt: any = { text: "please read this", files: [{ uri: `file://${home}/.env`, mention: 7 }] };
+    await registered.prompt!({ sessionID: "v2b", prompt });
+    expect(prompt.files).toHaveLength(0);
+    expect(prompt.text).toMatch(/attachment was removed/);
+  });
+
+  it("drops @mention offsets when the text is rewritten (they no longer match)", async () => {
+    const prompt: any = { text: `run ${FAKE.githubPat}`, files: [{ uri: `file://${home}/notes.md`, mention: 4 }] };
+    writeFileSync(join(home, "notes.md"), "safe\n");
+    await registered.prompt!({ sessionID: "v2c", prompt });
+    expect(prompt.files).toHaveLength(1);
+    expect("mention" in prompt.files[0]).toBe(false);
+  });
+
+  it("redacts tool history before it becomes model messages (context hook)", async () => {
+    const args = { filePath: "copy.txt", content: new Vault().recordSecret(FAKE.githubPat, "github-pat", "test") };
+    const messages = [
+      { info: { sessionID: "v2d" }, parts: [{ type: "tool", state: { status: "error", input: args, error: `write failed: ${FAKE.githubPat}` } }] },
+    ];
+    await registered.context!({ sessionID: "v2d", messages });
+    expect(JSON.stringify(messages).includes(FAKE.githubPat)).toBe(false);
+  });
+
+  it("denies sensitive tool input and redacts completed results; failures pass untouched", async () => {
+    await expect(registered["execute.before"]!({ tool: "read", sessionID: "v2e", input: { filePath: "/proj/.env" } })).rejects.toThrow(/sensitive/);
+    const result: any = { output: `TOKEN=${FAKE.slackBotToken}\n` };
+    await registered["execute.after"]!({ tool: "bash", sessionID: "v2e", status: "completed", input: { command: "cat x" }, result });
+    expect(result.output).not.toContain(FAKE.slackBotToken);
+    const failed: any = { output: FAKE.slackBotToken };
+    await registered["execute.after"]!({ tool: "bash", sessionID: "v2e", status: "error", error: new Error("boom"), result: failed });
+    expect(failed.output).toContain(FAKE.slackBotToken);
+  });
+
+  it("restores placeholders through the adapted execute.before", async () => {
+    const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
+    const input = { filePath: "/proj/.env", content: `TOKEN=${placeholder}\n` };
+    await registered["execute.before"]!({ tool: "write", sessionID: "v2f", input });
+    expect(input.content).toBe(`TOKEN=${FAKE.githubPat}\n`);
   });
 });

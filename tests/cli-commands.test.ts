@@ -581,10 +581,20 @@ describe("secretgate __verify-opencode", () => {
 
   it("fails on a plugin that does not redact", async () => {
     const plugin = join(work, "noop.mjs");
-    writeFileSync(plugin, "export const SecretgatePlugin = async () => ({ 'chat.message': async () => {} });\n");
+    writeFileSync(plugin, "export default { id: 'fake', async setup() {}, async server() { return { 'chat.message': async () => {} }; } };\n");
     const c = capture();
     expect(await run(["__verify-opencode", plugin], c.io)).toBe(1);
     expect(c.errText()).toContain("prompt redaction failed");
+  });
+
+  it("fails on a plugin without the { id, setup, server } definition", async () => {
+    // Regression guard: OpenCode 2 ignores named exports, so an old-style
+    // `export const SecretgatePlugin` bundle would silently load nothing.
+    const plugin = join(work, "legacy.mjs");
+    writeFileSync(plugin, "export const SecretgatePlugin = async () => ({});\n");
+    const c = capture();
+    expect(await run(["__verify-opencode", plugin], c.io)).toBe(1);
+    expect(c.errText()).toContain("{ id, setup, server }");
   });
 
   it("stays out of --help", async () => {

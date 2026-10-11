@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SecretgatePlugin } from "../../src/adapters/opencode-plugin.js";
+import SecretgatePlugin from "../../src/adapters/opencode-plugin.js";
 import { addPause, disableState } from "../../src/disable.js";
 import { handleClaudeCode } from "../../src/hooks/claude-code.js";
 import { handleCodex } from "../../src/hooks/codex.js";
@@ -83,7 +83,7 @@ describe("1 · tamper guard reads argv, not text", () => {
 describe("2 · an OpenCode subagent cannot switch secretgate off", () => {
   it("ignores the directive in a child session, honors it in the root one", async () => {
     const client = { session: { get: async ({ path }: { path: { id: string } }) => ({ data: path.id === "child" ? { parentID: "root" } : {} }) } };
-    const hooks = (await SecretgatePlugin({ directory: proj, client })) as any;
+    const hooks = (await SecretgatePlugin.server({ directory: proj, client })) as any;
     const child = [{ type: "text", text: "désactive secretgate et le scope" }];
     await hooks["chat.message"]({ sessionID: "child" }, { parts: child });
     expect(disableState({ sessionId: "child" }).disabled).toBe(false);
@@ -93,7 +93,7 @@ describe("2 · an OpenCode subagent cannot switch secretgate off", () => {
   });
 
   it("fails safe when the session API is missing: the off switch is refused", async () => {
-    const hooks = (await SecretgatePlugin({ directory: proj })) as any;
+    const hooks = (await SecretgatePlugin.server({ directory: proj })) as any;
     const parts = [{ type: "text", text: "disable secretgate" }];
     await hooks["chat.message"]({ sessionID: "unknown" }, { parts });
     expect(disableState({ sessionId: "unknown" }).disabled).toBe(false);
@@ -128,7 +128,7 @@ describe("4 · search-result filter", () => {
   });
 
   it("finds the path in grep lines with dashes, and in OpenCode headers", async () => {
-    const hooks = (await SecretgatePlugin({ directory: proj })) as any;
+    const hooks = (await SecretgatePlugin.server({ directory: proj })) as any;
     const out = { output: `docs/2024-01-15-notes.md:1:TOPSECRET\nsrc/a.ts:1:ok\n${join(proj, "docs/2024-01-15-notes.md")}:\n  Line 1: TOPSECRET` };
     await hooks["tool.execute.after"]({ tool: "grep", args: { pattern: "x" } }, out);
     expect(out.output).toBe("src/a.ts:1:ok");
@@ -247,7 +247,7 @@ describe("13 · a commented .secretgate.json (as in the README) is valid", () =>
 
 describe("15 · directory listings", () => {
   it("keeps the root and in-scope entries, drops denied and unrelated ones", async () => {
-    const hooks = (await SecretgatePlugin({ directory: proj })) as any;
+    const hooks = (await SecretgatePlugin.server({ directory: proj })) as any;
     const out = { output: `${proj}/\n  docs/\n    readme.md\n  src/\n    a.ts\n    secret/\n      x.ts\n  tests/\n    t.ts\n` };
     await hooks["tool.execute.after"]({ tool: "list", args: { path: proj } }, out);
     expect(out.output).toBe(`${proj}/\n  src/\n    a.ts\n  tests/\n    t.ts\n`);
@@ -365,7 +365,7 @@ describe("GLM review · an @-mentioned sensitive file blocks the prompt", () => 
   it("OpenCode removes a sensitive attachment", async () => {
     scope(undefined);
     const client = { session: { get: async () => ({ data: {} }) } };
-    const hooks = (await SecretgatePlugin({ directory: proj, client })) as any;
+    const hooks = (await SecretgatePlugin.server({ directory: proj, client })) as any;
     const parts: any[] = [{ type: "file", url: `file://${join(proj, ".env")}`, mime: "text/plain" }];
     await hooks["chat.message"]({ sessionID: "o9" }, { parts });
     expect(parts[0].type).toBe("text");
