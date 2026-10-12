@@ -60,6 +60,18 @@ describe("1 · tamper guard reads argv, not text", () => {
     "SG=secretgate; $SG disable",
     "npx --yes secretgate allow --rule x",
     "pnpm exec secretgate trust",
+    "pnpm secretgate disable",
+    "pnpm dlx secretgate disable",
+    "yarn secretgate uninstall --all",
+    "yarn dlx secretgate allow x",
+    "bun secretgate disable",
+    "bunx secretgate disable",
+    "bun x secretgate disable",
+    "npx --package secretgate secretgate disable",
+    "npx -p secretgate@1.6.3 secretgate disable",
+    "npm exec secretgate -- disable",
+    "npm exec --package=secretgate -- secretgate disable",
+    "npx -y -- secretgate disable",
   ])("asks for %s", async (command) => {
     scope(undefined);
     expect(await bash(command)).toBe("ask");
@@ -73,6 +85,14 @@ describe("1 · tamper guard reads argv, not text", () => {
   ])("does not ask for %s", async (command) => {
     scope(undefined);
     expect(await bash(command)).toBeUndefined();
+  });
+
+  it("still asks while secretgate is paused for this session", async () => {
+    scope(undefined);
+    addPause({ scope: "session", target: "r1", minutes: 60 });
+    for (const command of ["secretgate uninstall --all", "secretgate disable --scope", "pnpm secretgate allow --rule x"])
+      expect(await bash(command)).toBe("ask");
+    expect(await bash("secretgate status")).toBeUndefined();
   });
 
   it("quoted `uninstall` is still refused under a scope", async () => {

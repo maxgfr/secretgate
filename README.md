@@ -120,7 +120,7 @@ past the agent's timeout (which would otherwise fail open).
 | Gap | Why | Mitigation |
 |---|---|---|
 | Claude Code `@file` mentions | inlined without firing tool hooks | the prompt hook checks every `@path` in the prompt: a sensitive file (`@.env`, `@server.pem`, `@credentials.json`; test fixtures exempt) blocks the prompt, and with a scope so does an out-of-scope one. `permissions.deny` rules add a native layer for real secret locations (`.env`, `.env.local`, `.envrc`, `~/.ssh`, `~/.aws`, `.netrc`, `.npmrc`, `.git-credentials`, the vault…); project-wide `*.pem`/`*.key` rules are not installed, since they cannot exempt fixtures (`init` removes the ones older versions added) |
-| Shell commands are analysed, not sandboxed | `$(…)`, variables, `eval`, `python -c` hide paths from any static check | quotes, `cd`, redirections, globs and `x/../y` are resolved; `"bash": "strict"` refuses what cannot be checked; for a hard guarantee add the agent's OS sandbox (Claude Code sandbox, Codex permission profiles) |
+| Shell commands are analysed, not sandboxed | what a program computes at run time (`$(…)` output, variables, `python -c`, a script's own `open()`) is invisible to any static check | quotes, `$'…'`, heredocs, brace lists and sequences, globs, `x/../y`, wrappers (`sudo -u`, `env -C`, `timeout`…), `bash -c '…' a0 a1`, scripts fed to a shell on stdin, `git -C`, and every `cd` (a `cd` that may fail keeps both directories) are resolved; a word that cannot be resolved is still checked by name (`$DIR/.env` is a `.env`); `ln`/`mv` of a sensitive file to an ordinary name is refused; recursive readers (`grep -r`, `rg`, `tar c`, `find -exec cat`) are checked against the files really below them (`rg` skipping hidden and `.gitignore`d ones, as it does), and refused past 20,000 entries; `"bash": "strict"` refuses what cannot be checked; for a hard guarantee add the agent's OS sandbox (Claude Code sandbox, Codex permission profiles) |
 | An agent running as you | it can reach anything your user can, given enough indirection | switching secretgate off from the agent needs your approval (Claude Code) or is refused (Codex, OpenCode); the OS sandbox is the hard boundary |
 | Codex failed/unsupported tool output | `PostToolUse` only fires for successful supported tools; native output rewrite remains unsupported | Bash/apply_patch and successful MCP/local-function results are block-and-replace protected; an MCP result marked as an error can still bypass the post hook |
 | Codex local telemetry/logs | block-and-replace changes the model-visible result, not Codex's local logging copy | the raw result stays local; protect access to Codex logs and telemetry configuration |
@@ -265,9 +265,12 @@ to the model. Declare it in the project's `.secretgate.json`:
   - every path of every shell command — redirections, globs, `$'…'`,
     `git show HEAD:path`, and `bash -c '…'` scripts, which are analysed in place;
   - recursive readers (`grep -r`, `rg`, `find`, `ls -R`, `tree`, `tar c`,
-    `git diff`/`show`/`log -p` without pathspec) against the files actually
+    `git diff`/`show`/`log -p` without pathspec — judged on the whole
+    repository, not just the current directory) against the files actually
     below their target: refused only if one of them is out of scope, with a
     hint naming a directory that is fully in scope;
+  - a `cd` that may fail (`cd x; …`, `cd x || …`) leaves both directories
+    possible, and a `cd` that cannot be resolved makes the command fail closed;
   - `@path` mentions in the prompt (Claude Code/Codex block the prompt,
     OpenCode removes the attachment). `@docs team` is prose; a directory
     mention is written `@docs/`.

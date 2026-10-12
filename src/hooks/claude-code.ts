@@ -105,7 +105,7 @@ function disabledResult(event: string, input: Record<string, any> | undefined, s
     if (input === undefined) return DEFER;
     const cfg = load(str(input.cwd));
     const decision = preToolPolicy(extractToolCall(String(input.tool_name ?? ""), input.tool_input), cfg, str(input.cwd) ?? process.cwd(), { disabled: true });
-    if (decision) return deny(decision.reason);
+    if (decision) return decision.action === "ask" ? ask(decision.reason) : deny(decision.reason);
     try {
       return restoreOnly(input, cfg);
     } catch {

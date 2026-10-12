@@ -154,3 +154,98 @@ describe("another tool's hooks are never taken for secretgate's", () => {
     expect(hooks).toContain("node x.mjs hook codex pre-tool-use");
   });
 });
+
+describe("audit · shell constructs that reached a sensitive file", () => {
+  it.each([
+    "cat <<E\nE\ncat .env",
+    "cat $'.env\\x00junk'",
+    "cat .e{m..o}v",
+    "cat <<EOF\n`cat .env`\nEOF",
+    "sudo -u root cat .env",
+    "nice -n 5 cat .env",
+    "timeout -k 1 5 cat .env",
+    "env -u FOO cat .env",
+    "env -S 'cat .env'",
+    "doas cat .env",
+    "bash -o pipefail -c 'cat .env'",
+    "bash -c 'cat $1' x .env",
+    'cd "$(echo x)" && cat .env',
+    "cat ~root/.env",
+    "cat $DIR/.env",
+    "perl -pe1 .env",
+    "ruby -ne print .env",
+    "python3 tool.py .env",
+    "xargs -a .env echo",
+    'bash <<< "cat .env"',
+    "ln -s .env notes.txt && cat notes.txt",
+    "mv .env notes.txt",
+    "grep -r REAL .",
+    "grep -R REAL",
+    "rg --hidden REAL",
+    "find . -name '*' -exec cat {} +",
+    "tar cf - .",
+    "zip -r out.zip .",
+    "git --git-dir=.git show HEAD:.env",
+    "git -C src show HEAD:../.env",
+  ])("denies %j", async (command) => {
+    expect(await decide("Bash", { command })).toBe("deny");
+  });
+
+  it.each([
+    "cat > doc.md <<EOF\ncat ~/.ssh/id_rsa\nEOF",
+    "grep -rn --include=*.ts foo src",
+    "grep -r foo testdata",
+    "grep -rn --include=*.ts foo .",
+    "rg -n REAL testdata",
+    "find . -name '*.ts'",
+    "find testdata -exec cat {} +",
+    "mv .env .env.bak",
+    "ls [z-a]",
+    "cat '[z-a]'",
+    "node --env-file=.env server.js",
+    "python3 tool.py src/server.ts",
+  ])("allows %j", async (command) => {
+    expect(await decide("Bash", { command })).toBeUndefined();
+  });
+
+  it("a recursive read of a tree holding a real key is refused, and says which file", async () => {
+    const r = await handleClaudeCode(
+      "pre-tool-use",
+      JSON.stringify({ session_id: "w", cwd: proj, tool_name: "Bash", tool_input: { command: "grep -r foo src" } }),
+    );
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toContain("server.key");
+  });
+
+  it("rg skips hidden and .gitignored files, as it does by default", async () => {
+    expect(await decide("Bash", { command: "rg REAL" })).toBe("deny"); // src/server.key is read
+    writeFileSync(join(proj, ".gitignore"), "# keys stay local\n*.key\n");
+    expect(await decide("Bash", { command: "rg REAL" })).toBeUndefined(); // .env is hidden, the key ignored
+    expect(await decide("Bash", { command: "rg --no-ignore REAL" })).toBe("deny");
+    expect(await decide("Bash", { command: "rg -uu REAL" })).toBe("deny");
+  });
+
+  it("a fixture is exempt only when it exists", async () => {
+    expect(await decide("Bash", { command: "cat testdata/.env" })).toBeUndefined();
+    expect(await decide("Bash", { command: "cat testdata/missing/../../.env" })).toBe("deny");
+    expect(await decide("Read", { file_path: "tests/fixtures/nope/.env" })).toBe("deny");
+  });
+
+  it("a recursive read too large to check is refused", async () => {
+    const big = join(proj, "big");
+    mkdirSync(big);
+    for (let i = 0; i < 205; i++) {
+      const d = join(big, `d${i}`);
+      mkdirSync(d);
+      for (let j = 0; j < 100; j++) writeFileSync(join(d, `f${j}`), "");
+    }
+    const r = await handleClaudeCode(
+      "pre-tool-use",
+      JSON.stringify({ session_id: "w", cwd: proj, tool_name: "Bash", tool_input: { command: "grep -r x big" } }),
+    );
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    expect(out.permissionDecision).toBe("deny");
+    expect(out.permissionDecisionReason).toMatch(/too many/);
+  }, 60_000);
+});

@@ -25,30 +25,68 @@ export function isDisabledRule(ruleId: string, allowlist: UserAllowlist | undefi
 
 type GlobToken = { t: "lit"; c: string } | { t: "one" } | { t: "star" } | { t: "any" } | { t: "segments" };
 
-// `{a,b}` → alternatives, expanded up front (bounded) so matching stays linear.
-function expandGlobBraces(glob: string, limit = 64): string[] {
-  const open = glob.indexOf("{");
-  if (open === -1) return [glob];
+const SEQUENCE = /^(?:(-?\d+)\.\.(-?\d+)|([A-Za-z])\.\.([A-Za-z]))(?:\.\.(-?\d+))?$/;
+
+// `{1..3}`, `{a..e}`, `{0..10..5}` as bash expands them (zero padding aside);
+// undefined when `inner` is not a sequence.
+function sequence(inner: string, limit: number): string[] | undefined {
+  const m = SEQUENCE.exec(inner);
+  if (!m) return undefined;
+  const numeric = m[1] !== undefined;
+  const from = numeric ? Number(m[1]) : m[3]!.charCodeAt(0);
+  const to = numeric ? Number(m[2]) : m[4]!.charCodeAt(0);
+  const step = Math.abs(Number(m[5] ?? 1)) || 1;
+  const dir = from <= to ? 1 : -1;
+  const out: string[] = [];
+  for (let v = from; dir > 0 ? v <= to : v >= to; v += dir * step) {
+    out.push(numeric ? String(v) : String.fromCharCode(v));
+    if (out.length > limit) break;
+  }
+  return out;
+}
+
+/**
+ * Brace expansion: `{a,b}` alternatives, and with `sequences` the bash ranges
+ * `{1..3}` / `{a..c}` (globs keep those literal). A group with neither stays
+ * literal, as in the shell. At most `limit + 1` results, so a caller can tell
+ * an expansion that was cut short from one that fit.
+ */
+export function expandBraces(text: string, opts: { limit?: number; sequences?: boolean } = {}): string[] {
+  const limit = opts.limit ?? 64;
+  const open = text.indexOf("{");
+  if (open === -1) return [text];
   let depth = 0;
   const commas: number[] = [];
   let close = -1;
-  for (let i = open; i < glob.length; i++) {
-    const c = glob[i];
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
     if (c === "{") depth++;
     else if (c === "}" && --depth === 0) {
       close = i;
       break;
     } else if (c === "," && depth === 1) commas.push(i);
   }
-  if (close === -1) return [glob];
-  // No top-level comma: a literal brace, as in the shell.
-  if (commas.length === 0) return expandGlobBraces(glob.slice(close + 1), limit).map((t) => glob.slice(0, close + 1) + t);
-  const bounds = [open, ...commas, close];
-  const out: string[] = [];
-  for (let k = 0; k + 1 < bounds.length && out.length < limit; k++) {
-    out.push(...expandGlobBraces(glob.slice(0, open) + glob.slice(bounds[k]! + 1, bounds[k + 1]) + glob.slice(close + 1), limit));
+  if (close === -1) return [text];
+  const head = text.slice(0, open);
+  const tail = text.slice(close + 1);
+  let alternatives: string[];
+  if (commas.length > 0) {
+    const bounds = [open, ...commas, close];
+    alternatives = bounds.slice(0, -1).map((b, k) => text.slice(b + 1, bounds[k + 1]));
+  } else {
+    const seq = opts.sequences ? sequence(text.slice(open + 1, close), limit) : undefined;
+    // No comma and no sequence: a literal brace.
+    if (!seq) return expandBraces(tail, opts).map((t) => text.slice(0, close + 1) + t);
+    alternatives = seq;
   }
-  return out.slice(0, limit);
+  const out: string[] = [];
+  for (const alt of alternatives) {
+    for (const t of expandBraces(`${head}${alt}${tail}`, opts)) {
+      out.push(t);
+      if (out.length > limit) return out;
+    }
+  }
+  return out;
 }
 
 function tokenizeGlob(glob: string): GlobToken[] {
@@ -135,7 +173,9 @@ export function pathMatchesGlob(path: string, glob: string, caseInsensitive = fa
   if (!alternatives) {
     // A trailing `/**` also matches the directory itself (`src/**` ~ `src`), as
     // in picomatch/minimatch — checked by the differential test.
-    const expanded = expandGlobBraces(caseInsensitive ? glob.toLowerCase() : glob).flatMap((g) => (g.endsWith("/**") ? [g, g.slice(0, -3)] : [g]));
+    const expanded = expandBraces(caseInsensitive ? glob.toLowerCase() : glob)
+      .slice(0, 64)
+      .flatMap((g) => (g.endsWith("/**") ? [g, g.slice(0, -3)] : [g]));
     alternatives = expanded.map(tokenizeGlob);
     if (GLOB_CACHE.size > 512) GLOB_CACHE.clear();
     GLOB_CACHE.set(key, alternatives);

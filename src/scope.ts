@@ -1,11 +1,10 @@
-import { lstatSync, readdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ScopeConfig } from "./config.js";
 import { pathMatchesGlob } from "./engine/allowlist.js";
 import type { NormalizedToolCall } from "./hooks/tool-call.js";
-import { CASE_INSENSITIVE_FS, canonical, covers, expandHome } from "./paths.js";
-import { analyzeShell, type PathRef, secretgateInvocation } from "./shell-paths.js";
+import { CASE_INSENSITIVE_FS, canonical, covers, exists, expandHome, fold, globStaticDir, isDirectory, walkTree, withPathCache } from "./paths.js";
+import { analyzeShell, type PathRef, type ShellAnalysis, secretgateInvocation } from "./shell-paths.js";
 import { defaultVaultHome } from "./vault/vault.js";
 
 // The project scope: a `.secretgate.json` can fence the agent into some
@@ -24,7 +23,6 @@ export type AccessKind = "read" | "write" | "list" | "search";
 
 const isOutside = (rel: string): boolean => rel === ".." || rel.startsWith(`..${sep}`) || rel.startsWith("../") || isAbsolute(rel);
 
-const fold = (p: string): string => (CASE_INSENSITIVE_FS ? p.toLowerCase() : p);
 const toPosix = (p: string): string => p.replaceAll("\\", "/");
 
 function absolute(path: string, cwd: string): string {
@@ -36,14 +34,15 @@ function relToRoot(scope: ScopeConfig, abs: string): string | undefined {
   const rel = relative(scope.root, abs);
   if (rel === "") return "";
   // `..foo` is a name inside the root; only `..` itself or `../…` leaves it.
-  if (isOutside(rel)) {
-    // relative() is case-sensitive; on case-insensitive filesystems retry folded.
-    if (!CASE_INSENSITIVE_FS) return undefined;
-    const folded = relative(fold(scope.root), fold(abs));
-    if (folded === "" || isOutside(folded)) return folded === "" ? "" : undefined;
-    return toPosix(abs.slice(abs.length - folded.length));
-  }
-  return toPosix(rel);
+  if (!isOutside(rel)) return toPosix(rel);
+  // relative() is case-sensitive; on case-insensitive filesystems compare the
+  // segments folded. Whole segments, never character offsets: lowercasing can
+  // change a string's length (`İ`), so a folded offset is no offset in `abs`.
+  if (!CASE_INSENSITIVE_FS) return undefined;
+  const root = resolve(scope.root).split(sep).filter(Boolean);
+  const parts = resolve(abs).split(sep).filter(Boolean);
+  if (parts.length < root.length || !root.every((seg, i) => fold(seg) === fold(parts[i]!))) return undefined;
+  return parts.slice(root.length).join("/");
 }
 
 /** `a/b/c` → [a/b/c, a/b, a] */
@@ -103,7 +102,11 @@ function inTempDir(abs: string): boolean {
 
 /** Why `path` is outside `scope`, or undefined when it is inside. */
 export function pathOutOfScope(scope: ScopeConfig, path: string, cwd: string): string | undefined {
-  const abs = absolute(path, cwd);
+  return outOfScope(scope, absolute(path, cwd));
+}
+
+/** pathOutOfScope for a path that is already absolute and canonical. */
+function outOfScope(scope: ScopeConfig, abs: string): string | undefined {
   const rel = relToRoot(scope, abs);
   const denied = scope.deny?.find((g) => globMatchesPath(g, rel, abs));
   if (denied) return `'${describe(rel, abs)}' matches scope.deny '${denied}'`;
@@ -118,11 +121,7 @@ function leadsToAllowed(scope: ScopeConfig, abs: string): boolean {
   if (!scope.allow) return true;
   const rel = relToRoot(scope, abs);
   return scope.allow.some((g) => {
-    if (isAbsoluteGlob(g)) {
-      const base = canonicalGlobBase(expandHome(g));
-      const idx = base.search(/[*?[{]/);
-      return covers(abs, idx === -1 ? base : dirname(`${base.slice(0, idx)}x`));
-    }
+    if (isAbsoluteGlob(g)) return covers(abs, globStaticDir(canonicalGlobBase(expandHome(g))));
     if (rel === undefined) return false;
     if (rel === "") return true;
     const prefix = staticSegments(g);
@@ -140,9 +139,7 @@ function denyBelow(scope: ScopeConfig, abs: string): string | undefined {
   const rel = relToRoot(scope, abs);
   return scope.deny?.find((g) => {
     if (isAbsoluteGlob(g)) {
-      const base = canonicalGlobBase(expandHome(g));
-      const idx = base.search(/[*?[{]/);
-      const staticDir = idx === -1 ? base : dirname(`${base.slice(0, idx)}x`);
+      const staticDir = globStaticDir(canonicalGlobBase(expandHome(g)));
       return covers(abs, staticDir) || covers(staticDir, abs);
     }
     if (rel === undefined) return false;
@@ -159,60 +156,27 @@ function denyBelow(scope: ScopeConfig, abs: string): string | undefined {
   });
 }
 
-const TREE_LIMIT = 20_000;
-
 // What a recursive read of `dir` would actually touch: walk it (symlinks are
 // judged by their target) and return the first out-of-scope path. Precise —
 // a `**/*.snap` deny only blocks when a .snap file is really there. Past
-// TREE_LIMIT entries, fall back to the static answer.
+// TREE_LIMIT entries, fall back to the static answer. The root is made
+// canonical once: below it, only a symlink can lead somewhere else.
 function treeViolation(scope: ScopeConfig, dir: string): string | undefined {
-  let seen = 0;
-  const stack = [dir];
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
+  const root = canonical(dir);
+  let found: string | undefined;
+  const result = walkTree(root, (full, e) => {
+    const abs = e.isSymbolicLink() ? canonical(full) : full;
+    const v = outOfScope(scope, abs);
+    // A denied/out-of-scope directory: report it without descending.
+    if (v && (!e.isDirectory() || !leadsToAllowed(scope, abs))) {
+      found = v;
+      return "stop";
     }
-    for (const e of entries) {
-      if (++seen > TREE_LIMIT) {
-        const below = denyBelow(scope, dir);
-        return (
-          pathOutOfScope(scope, dir, dir) ?? (below ? `'${describe(relToRoot(scope, dir), dir)}' contains paths matching scope.deny '${below}'` : undefined)
-        );
-      }
-      const full = join(current, e.name);
-      if (e.isDirectory()) {
-        // A denied/out-of-scope directory: report it without descending.
-        const v = pathOutOfScope(scope, full, dir);
-        if (v && !leadsToAllowed(scope, canonical(full))) return v;
-        stack.push(full);
-      } else {
-        const v = pathOutOfScope(scope, full, dir);
-        if (v) return v;
-      }
-    }
-  }
-  return undefined;
-}
-
-function isDirectory(abs: string): boolean {
-  try {
-    return statSync(abs).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function exists(abs: string): boolean {
-  try {
-    lstatSync(abs);
-    return true;
-  } catch {
-    return false;
-  }
+    return undefined;
+  });
+  if (result !== "overflow") return found;
+  const below = denyBelow(scope, root);
+  return outOfScope(scope, root) ?? (below ? `'${describe(relToRoot(scope, root), root)}' contains paths matching scope.deny '${below}'` : undefined);
 }
 
 /**
@@ -251,6 +215,21 @@ export function isSecretgateState(abs: string): boolean {
   return STATE_ENTRIES.some((entry) => covers(join(home, entry), abs));
 }
 
+// The agents' configuration roots, from the environment. Computed once per
+// environment, not once per path a command touches.
+let agentRoots: { key: string; roots: string[] } | undefined;
+function agentConfigRoots(): string[] {
+  const home = homedir();
+  const key = [home, process.env.CODEX_HOME, process.env.XDG_CONFIG_HOME, process.env.OPENCODE_CONFIG_DIR].join("\u0000");
+  if (agentRoots?.key !== key) {
+    const roots = [process.env.CODEX_HOME ?? join(home, ".codex"), join(process.env.XDG_CONFIG_HOME ?? join(home, ".config"), "opencode")];
+    // OpenCode loads plugins from OPENCODE_CONFIG_DIR too (where `install` puts ours when it is set).
+    if (process.env.OPENCODE_CONFIG_DIR) roots.push(process.env.OPENCODE_CONFIG_DIR);
+    agentRoots = { key, roots };
+  }
+  return agentRoots.roots;
+}
+
 /**
  * Files that decide what secretgate and the agent's hooks do: secretgate's own
  * state, any `.secretgate.json`, the agents' hook settings (`.claude/settings*.json`,
@@ -262,11 +241,7 @@ export function isPolicyFile(abs: string, projectRoot?: string): boolean {
   const name = fold(basename(abs));
   if (name === ".secretgate.json" || name === "opencode.json" || name === "opencode.jsonc") return true;
   if (fold(basename(dirname(abs))) === ".claude" && /^settings(?:\.[\w-]+)?\.json$/.test(name)) return true;
-  const home = homedir();
-  const roots = [process.env.CODEX_HOME ?? join(home, ".codex"), join(process.env.XDG_CONFIG_HOME ?? join(home, ".config"), "opencode")];
-  // OpenCode loads plugins from OPENCODE_CONFIG_DIR too (where `install` puts ours when it is set).
-  if (process.env.OPENCODE_CONFIG_DIR) roots.push(process.env.OPENCODE_CONFIG_DIR);
-  if (projectRoot) roots.push(join(projectRoot, ".codex"), join(projectRoot, ".opencode"));
+  const roots = projectRoot ? [...agentConfigRoots(), join(projectRoot, ".codex"), join(projectRoot, ".opencode")] : agentConfigRoots();
   return isSecretgateState(abs) || roots.some((root) => covers(root, abs));
 }
 
@@ -332,13 +307,12 @@ function searchAdvice(scope: ScopeConfig, refused: string): string {
   return " — narrow it to files or subdirectories that are entirely in scope";
 }
 
-function shellViolation(scope: ScopeConfig, command: string | string[], cwd: string, workdir?: string): string | undefined {
+function shellViolation(scope: ScopeConfig, cwd: string, workdir: string | undefined, analysis: ShellAnalysis): string | undefined {
   const base = workdir ? resolve(cwd, expandHome(workdir)) : cwd;
   if (workdir) {
     const v = accessViolation(scope, base, cwd, "list");
     if (v) return `working directory ${v}`;
   }
-  const analysis = analyzeShell(command, { cwd: base });
   if (analysis.commands.some((argv) => secretgateInvocation(argv) === "uninstall")) return "uninstalling secretgate is not allowed while a scope is active";
   if (scope.bash === "strict" && analysis.dynamic.length > 0) {
     return `scope.bash is "strict" and this command uses ${analysis.dynamic.slice(0, 3).join(", ")}, which cannot be checked statically — spell the paths out`;
@@ -386,10 +360,8 @@ function searchRootOf(call: NormalizedToolCall, cwd: string): string {
   const root = resolve(cwd, expandHome(call.searchRoot ?? "."));
   const pattern = call.pattern ? expandHome(call.pattern) : "";
   // A glob pattern can carry its own directory (`../other/**/*.ts`, `/etc/*`).
-  const idx = pattern.search(/[*?[{]/);
-  const prefix = idx === -1 ? "" : pattern.slice(0, idx);
-  const cut = prefix.lastIndexOf("/");
-  return cut === -1 ? root : resolve(root, prefix.slice(0, cut) || "/");
+  if (!/[*?[{]/.test(pattern) || !pattern.slice(0, pattern.search(/[*?[{]/)).includes("/")) return root;
+  return resolve(root, globStaticDir(pattern) || "/");
 }
 
 /**
@@ -397,15 +369,21 @@ function searchRootOf(call: NormalizedToolCall, cwd: string): string {
  * Glob/Grep over a partly in-scope tree are allowed: `filterSearchOutput`
  * removes the out-of-scope results afterwards.
  */
-export function toolCallScopeViolation(scopes: ScopeConfig[], call: NormalizedToolCall, cwd: string): string | undefined {
+export function toolCallScopeViolation(scopes: ScopeConfig[], call: NormalizedToolCall, cwd: string, analysis?: ShellAnalysis): string | undefined {
+  if (scopes.length === 0) return undefined;
+  // A shell command is analysed once, whatever the number of scopes.
+  const shell =
+    call.kind === "shell" && call.command !== undefined
+      ? (analysis ?? analyzeShell(call.command, { cwd: call.workdir ? resolve(cwd, expandHome(call.workdir)) : cwd }))
+      : undefined;
   for (const scope of scopes) {
-    const v = oneScope(scope, call, cwd);
+    const v = oneScope(scope, call, cwd, shell);
     if (v) return `secretgate scope (${scope.file}): ${v}.`;
   }
   return undefined;
 }
 
-function oneScope(scope: ScopeConfig, call: NormalizedToolCall, cwd: string): string | undefined {
+function oneScope(scope: ScopeConfig, call: NormalizedToolCall, cwd: string, shell: ShellAnalysis | undefined): string | undefined {
   switch (call.kind) {
     case "read":
       for (const p of call.paths) {
@@ -431,7 +409,7 @@ function oneScope(scope: ScopeConfig, call: NormalizedToolCall, cwd: string): st
       return accessViolation(scope, root, cwd, "list");
     }
     case "shell":
-      return call.command === undefined ? undefined : shellViolation(scope, call.command, cwd, call.workdir);
+      return call.command === undefined || !shell ? undefined : shellViolation(scope, cwd, call.workdir, shell);
     default:
       // Unknown/MCP tools: only paths that name something on disk.
       for (const p of call.paths) {
@@ -454,7 +432,18 @@ function entryOutOfScope(scopes: ScopeConfig[], abs: string, cwd: string): boole
 // The file a result line is about: the longest prefix, cut at `:` or at a
 // `-N-` context marker, that exists on disk. Every cut is tried, so names with
 // dashes and digits (`2024-01-15-notes.md`) and drive letters (`C:\…`) work.
+// Filtering and restating the counts look at the same lines: remembered for
+// the duration of one filter.
+let lineMemo: Map<string, string | undefined> | undefined;
 function pathOfLine(line: string, cwd: string): string | undefined {
+  const key = `${cwd}\u0000${line}`;
+  if (lineMemo?.has(key)) return lineMemo.get(key);
+  const found = findPathOfLine(line, cwd);
+  lineMemo?.set(key, found);
+  return found;
+}
+
+function findPathOfLine(line: string, cwd: string): string | undefined {
   const trimmed = line.trim().replace(/^[-*]\s+/, "");
   if (trimmed === "" || trimmed === "--" || trimmed.length > 4096) return undefined;
   const cuts = [trimmed.length];
@@ -569,6 +558,16 @@ function filterSearchText(scopes: ScopeConfig[], text: string, cwd: string): str
 /** Remove out-of-scope entries from a Glob/Grep/list result (any shape). */
 export function filterSearchOutput(scopes: ScopeConfig[], value: unknown, cwd: string): { value: unknown; changed: boolean } {
   if (scopes.length === 0) return { value, changed: false };
+  if (lineMemo) return filterValue(scopes, value, cwd);
+  lineMemo = new Map();
+  try {
+    return withPathCache(() => filterValue(scopes, value, cwd));
+  } finally {
+    lineMemo = undefined;
+  }
+}
+
+function filterValue(scopes: ScopeConfig[], value: unknown, cwd: string): { value: unknown; changed: boolean } {
   if (typeof value === "string") {
     const filtered = filterSearchText(scopes, value, cwd);
     return { value: filtered, changed: filtered !== value };
@@ -585,7 +584,7 @@ export function filterSearchOutput(scopes: ScopeConfig[], value: unknown, cwd: s
         changed = true;
         continue;
       }
-      const r = filterSearchOutput(scopes, item, cwd);
+      const r = filterValue(scopes, item, cwd);
       changed ||= r.changed;
       next.push(r.value);
     }
@@ -595,7 +594,7 @@ export function filterSearchOutput(scopes: ScopeConfig[], value: unknown, cwd: s
     let changed = false;
     const next: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value)) {
-      const r = filterSearchOutput(scopes, v, cwd);
+      const r = filterValue(scopes, v, cwd);
       changed ||= r.changed;
       next[k] = r.value;
     }
@@ -607,7 +606,6 @@ export function filterSearchOutput(scopes: ScopeConfig[], value: unknown, cwd: s
 
 // ---------------------------------------------------------------- prompts
 
-/** `@path` mentions that inline out-of-scope files into the prompt. */
 /** The files/directories a prompt `@`-mentions (the host inlines them without
  *  firing any tool hook). "@docs team" is prose; a directory mention is
  *  written `@docs/` or `@a/b`. */

@@ -1,8 +1,8 @@
-import { basename, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import type { SecretgateConfig } from "../config.js";
-import { canonical, commandTouchesSensitivePath, expandHome, sensitivePathMatch } from "../paths.js";
+import { canonical, expandHome, sensitivePathMatch, sensitiveShellRead, TREE_LIMIT, withPathCache } from "../paths.js";
 import { isPolicyFile, mayModify, toolCallScopeViolation } from "../scope.js";
-import { analyzeShell, secretgateInvocation } from "../shell-paths.js";
+import { analyzeShell, type ShellAnalysis, secretgateInvocation } from "../shell-paths.js";
 import type { NormalizedToolCall } from "./tool-call.js";
 
 // What happens to a tool call BEFORE it runs, for every host. Order matters:
@@ -10,9 +10,11 @@ import type { NormalizedToolCall } from "./tool-call.js";
 //   2. the project scope (stays on while secretgate is disabled — a pause
 //      switches off secret scanning, not the boundary the repository declared);
 //   3. tamper guard: switching secretgate off or rewriting its wiring is the
-//      user's call, so the host asks (or refuses, where it cannot ask);
-//   4. sensitive-path deny (.env, keys…).
-// Placeholder restore runs after this, in the host adapter.
+//      user's call, so the host asks (or refuses, where it cannot ask) — while
+//      paused too, or the agent could finish the job a pause started;
+//   4. sensitive-path deny (.env, keys…), skipped while paused.
+// A shell command is analysed once, for all of them. Placeholder restore runs
+// after this, in the host adapter.
 
 export interface PreDecision {
   action: "deny" | "ask";
@@ -27,10 +29,8 @@ function touchesOnly(call: NormalizedToolCall, file: string, cwd: string): boole
 // Subcommands that change what secretgate protects.
 const GUARDED = new Set(["disable", "allow", "uninstall", "trust", "vault clear"]);
 
-function tamperReason(call: NormalizedToolCall, cwd: string): string | undefined {
-  if (call.kind === "shell" && call.command !== undefined) {
-    const base = call.workdir ? resolve(cwd, expandHome(call.workdir)) : cwd;
-    const analysis = analyzeShell(call.command, { cwd: base });
+function tamperReason(call: NormalizedToolCall, cwd: string, analysis: ShellAnalysis | undefined): string | undefined {
+  if (analysis) {
     // Judged on argv after quote removal: `secretgate 'disable'` is caught,
     // `git commit -m "document secretgate disable"` is not a disable.
     for (const argv of analysis.commands) {
@@ -64,7 +64,7 @@ function patternLooksSensitive(pattern: string, root: string, allowlist: Secretg
   return undefined;
 }
 
-function sensitiveReason(call: NormalizedToolCall, cfg: SecretgateConfig, cwd: string): string | undefined {
+function sensitiveReason(call: NormalizedToolCall, cfg: SecretgateConfig, cwd: string, analysis: ShellAnalysis | undefined): string | undefined {
   const deny = (target: string, hit: string): string =>
     `secretgate: '${target}' looks sensitive (${hit}); its content must not enter the model. If the agent needs a value from it, reference it as an env var instead — or allow the file with \`secretgate allow --path '${target}'\`.`;
   switch (call.kind) {
@@ -87,29 +87,39 @@ function sensitiveReason(call: NormalizedToolCall, cfg: SecretgateConfig, cwd: s
       return pattern ? deny(pattern, "search pattern naming sensitive files") : undefined;
     }
     case "shell": {
-      if (call.command === undefined) return undefined;
-      const base = call.workdir ? resolve(cwd, expandHome(call.workdir)) : cwd;
-      const touched = commandTouchesSensitivePath(call.command, cfg.allowlist, base);
-      return touched ? `secretgate: this command reads '${touched}', which looks sensitive. Its content must not enter the model.` : undefined;
+      if (!analysis) return undefined;
+      const base = shellCwd(call, cwd);
+      const hit = sensitiveShellRead(analysis, cfg.allowlist, base);
+      if (!hit) return undefined;
+      if (hit.tooMany)
+        return `secretgate: this command reads every file under '${hit.raw}', too many to check for sensitive ones (over ${TREE_LIMIT}). Narrow it to a subdirectory, or exclude what it does not need.`;
+      if (hit.below)
+        return `secretgate: this command reads everything under '${hit.raw}', including '${relative(base, hit.below) || hit.below}', which looks sensitive. Its content must not enter the model — narrow the command, or exclude that file.`;
+      return `secretgate: this command reads '${hit.raw}', which looks sensitive. Its content must not enter the model.`;
     }
     default:
       return undefined;
   }
 }
 
+const shellCwd = (call: NormalizedToolCall, cwd: string): string => (call.workdir ? resolve(cwd, expandHome(call.workdir)) : cwd);
+
 export function preToolPolicy(call: NormalizedToolCall, cfg: SecretgateConfig, cwd: string, opts: { disabled: boolean }): PreDecision | undefined {
-  if (cfg.error && !touchesOnly(call, cfg.error.file, cwd)) {
-    return {
-      action: "deny",
-      reason: `secretgate: ${cfg.error.file} is invalid (${cfg.error.message}). Tool calls are refused until it is fixed, because it may declare a scope. Fix it yourself, or let the agent edit it (you will be asked to approve).`,
-    };
-  }
-  const scope = toolCallScopeViolation(cfg.scopes, call, cwd);
-  if (scope) return { action: "deny", reason: scope };
-  if (opts.disabled) return undefined;
-  const tamper = tamperReason(call, cwd);
-  if (tamper) return { action: "ask", reason: `secretgate: ${tamper}. Approve only if you asked for it.` };
-  const sensitive = sensitiveReason(call, cfg, cwd);
-  if (sensitive) return { action: "deny", reason: sensitive };
-  return undefined;
+  return withPathCache(() => {
+    if (cfg.error && !touchesOnly(call, cfg.error.file, cwd)) {
+      return {
+        action: "deny",
+        reason: `secretgate: ${cfg.error.file} is invalid (${cfg.error.message}). Tool calls are refused until it is fixed, because it may declare a scope. Fix it yourself, or let the agent edit it (you will be asked to approve).`,
+      };
+    }
+    const analysis = call.kind === "shell" && call.command !== undefined ? analyzeShell(call.command, { cwd: shellCwd(call, cwd) }) : undefined;
+    const scope = toolCallScopeViolation(cfg.scopes, call, cwd, analysis);
+    if (scope) return { action: "deny", reason: scope };
+    const tamper = tamperReason(call, cwd, analysis);
+    if (tamper) return { action: "ask", reason: `secretgate: ${tamper}. Approve only if you asked for it.` };
+    if (opts.disabled) return undefined;
+    const sensitive = sensitiveReason(call, cfg, cwd, analysis);
+    if (sensitive) return { action: "deny", reason: sensitive };
+    return undefined;
+  });
 }

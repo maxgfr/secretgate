@@ -284,3 +284,40 @@ describe("audit regressions — output and prompts", () => {
     expect(performance.now() - t).toBeLessThan(1500);
   });
 });
+
+describe("audit · the shell cannot step around the scope", () => {
+  const bash = async (command: string, cwd = proj) =>
+    decision((await handleClaudeCode("pre-tool-use", JSON.stringify({ session_id: "s1", cwd, tool_name: "Bash", tool_input: { command } }))).stdout);
+
+  beforeEach(() => {
+    mkdirSync(join(proj, "secret"));
+    writeFileSync(join(proj, "secret", "x"), "classified\n");
+    writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { deny: ["secret/**"] } }));
+  });
+
+  it.each([
+    "cd nowhere; cat secret/x",
+    "cd secret && echo $(cat x)",
+    "cd secret && cat <(cat x)",
+    "cd src && git log -p",
+    "git -C src log -p",
+    "cd src && git diff",
+  ])("denies %j", async (command) => {
+    expect(await bash(command)).toBe("deny");
+  });
+
+  it("an unresolvable cd is refused under a scope", async () => {
+    expect(await bash('cd "$(echo x)" && cat x')).toBe("deny");
+  });
+
+  it("the value of grep --include is not a path under an allow scope", async () => {
+    writeFileSync(join(proj, ".secretgate.json"), JSON.stringify({ scope: { allow: ["src/**"] } }));
+    writeFileSync(join(proj, "top.ts"), "x\n");
+    expect(await bash("grep -rn --include=*.ts foo src")).toBeUndefined();
+    expect(await bash("rg -n -g '*.ts' foo src")).toBeUndefined();
+  });
+
+  it("a cd in a pipeline does not move the shell", async () => {
+    expect(await bash("cd src | true; cat secret/x")).toBe("deny");
+  });
+});
