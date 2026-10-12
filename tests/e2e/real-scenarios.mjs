@@ -11,7 +11,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { parse as parseToml } from "smol-toml";
 
 const bundle = resolve(process.argv[1], "../../../scripts/secretgate.mjs");
@@ -302,7 +302,12 @@ scenario("claude-code: hooks run an absolute node and uninstall leaves no empty 
   cli(sb, ["install", "--claude-code"]);
   const wired = JSON.parse(readFileSync(settings, "utf8"));
   const command = wired.hooks.PreToolUse.at(-1).hooks[0].command;
-  check(command.startsWith(`"${process.execPath}"`), `hook command does not run an absolute node: ${command}`);
+  const runtime = /^"([^"]+)"/.exec(command)?.[1];
+  check(
+    runtime !== undefined && isAbsolute(runtime) && realpathSync(runtime) === realpathSync(process.execPath),
+    `hook command does not run an absolute node: ${command}`,
+  );
+  check(!runtime.includes("fnm_multishells"), `hook command runs a per-shell node link: ${runtime}`);
   const run = spawnSync("/bin/sh", ["-c", command], {
     env: { ...sb.env, PATH: "/usr/bin:/bin" },
     input: JSON.stringify({ cwd: sb.proj, tool_name: "Bash", tool_input: { command: "ls" } }),

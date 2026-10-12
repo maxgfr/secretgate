@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -13,6 +13,7 @@ import {
   type SelfContext,
   selfForm,
   selfInvocation,
+  stableRuntime,
 } from "../src/self.js";
 
 let dir: string;
@@ -119,5 +120,23 @@ describe("hookProgram", () => {
     expect(hookRuntime('"/opt/node/bin/node" "/h/secretgate.mjs" hook codex post-tool-use')).toBe("/opt/node/bin/node");
     expect(hookRuntime('node "/h/secretgate.mjs" hook codex post-tool-use')).toBe("node");
     expect(hookRuntime('"/h/.secretgate/bin/secretgate" hook claude-code pre-tool-use')).toBeUndefined();
+  });
+});
+
+describe("stableRuntime", () => {
+  it("names node by the PATH entry that survives upgrades, not the versioned binary it resolves to", () => {
+    const cellar = join(dir, "Cellar", "node", "26.1.0", "bin");
+    const bin = join(dir, "bin");
+    mkdirSync(cellar, { recursive: true });
+    mkdirSync(bin);
+    writeFileSync(join(cellar, "node"), "", { mode: 0o755 });
+    symlinkSync(join(cellar, "node"), join(bin, "node"));
+    // A per-shell link (fnm's multishell dir) first on PATH is skipped: it dies with the shell.
+    const shell = join(dir, "fnm_multishells", "123", "bin");
+    mkdirSync(shell, { recursive: true });
+    symlinkSync(join(cellar, "node"), join(shell, "node"));
+    expect(stableRuntime(join(cellar, "node"), `/nowhere:${shell}:${bin}`, [bin])).toBe(join(bin, "node"));
+    // No stable PATH entry leads to it: the binary itself.
+    expect(stableRuntime(join(cellar, "node"), `/nowhere:${shell}`, [bin])).toBe(join(cellar, "node"));
   });
 });

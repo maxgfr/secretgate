@@ -691,7 +691,10 @@ const hasFlag = (flags: string[], short: string[], long: string[]): boolean =>
   flags.some((f) => long.includes(f.split("=")[0]!) || (/^-[A-Za-z]+$/.test(f) && short.some((s) => f.includes(s))));
 
 // Value-taking options, per command. A value listed in `paths` is read; any
-// other is a pattern, a number or a name, never a path.
+// other is a pattern, a number or a name, never a path. An option whose value
+// is optional, or that takes one on GNU but not BSD (`grep --color`, `sed
+// -l`), is left out: wrongly consuming the next word would hide a file from
+// every check, while wrongly keeping it only checks one word too many.
 const COMMAND_SPECS: Record<string, OptionSpec> = {
   grep: {
     valued: [
@@ -706,13 +709,10 @@ const COMMAND_SPECS: Record<string, OptionSpec> = {
       "-C",
       "--after-context",
       "--before-context",
-      "--context",
       "--include",
       "--exclude",
       "--exclude-dir",
       "--exclude-from",
-      "--color",
-      "--colour",
       "--label",
       "--binary-files",
       "-d",
@@ -793,7 +793,7 @@ const COMMAND_SPECS: Record<string, OptionSpec> = {
   ack: { valued: ["--type", "--match", "--ignore-dir", "--ignore-file", "-A", "-B", "-C", "-m", "--max-count"] },
   head: { valued: ["-n", "-c", "--lines", "--bytes"] },
   tail: { valued: ["-n", "-c", "--lines", "--bytes", "-s", "--sleep-interval", "--pid"] },
-  sed: { valued: ["-e", "--expression", "-f", "--file", "-l", "--line-length"], paths: ["-f", "--file"] },
+  sed: { valued: ["-e", "--expression", "-f", "--file"], paths: ["-f", "--file"] },
   awk: {
     valued: ["-f", "--file", "-v", "--assign", "-F", "--field-separator", "-i", "--include", "-l", "--load", "-E", "--exec"],
     paths: ["-f", "--file", "-E", "--exec"],
@@ -1018,10 +1018,12 @@ const EVAL_COMMANDS = new Set(["eval", "source", ".", "xargs", "parallel"]);
 
 // How each interpreter takes an inline program, and which of its options
 // take a value. perl and ruby read `-e` from the rest of a cluster (`-pe1`).
-const INTERPRETER_SPECS: Array<{ re: RegExp; inline: string[]; valued: string[] }> = [
+// `module` names a program by module (`python3 -m tokenize FILE`): it runs,
+// and every positional after it is its argument.
+const INTERPRETER_SPECS: Array<{ re: RegExp; inline: string[]; valued: string[]; module?: string }> = [
   { re: /^perl$/, inline: ["-e", "-E"], valued: [] },
   { re: /^ruby$/, inline: ["-e"], valued: ["-r", "-I", "-C", "-E", "-W", "-x", "-F"] },
-  { re: /^python[0-9.]*$/, inline: ["-c"], valued: ["-m", "-W", "-X"] },
+  { re: /^python[0-9.]*$/, inline: ["-c"], valued: ["-W", "-X"], module: "-m" },
   {
     re: /^(?:node|nodejs|bun)$/,
     inline: ["-e", "--eval", "-p", "--print"],
@@ -1552,7 +1554,8 @@ function analyzeShellCommand(
 // it). Without one, the first positional is the program: it runs, it is not
 // printed; the others are its arguments, read.
 function analyzeInterpreter(sc: SimpleCommand, k: number, cmd: string, push: (w: ShellWord, kind: PathRefKind, opts?: Push) => void, out: ShellAnalysis): void {
-  const spec: { inline: string[]; valued: string[] } = INTERPRETER_SPECS.find((s) => s.re.test(cmd)) ?? { inline: [], valued: [] };
+  const spec: { inline: string[]; valued: string[]; module?: string } = INTERPRETER_SPECS.find((s) => s.re.test(cmd)) ?? { inline: [], valued: [] };
+  let module = false;
   const inlineShort = spec.inline.filter((f) => /^-[A-Za-z]$/.test(f));
   const pos: ShellWord[] = [];
   let inline: string | undefined;
@@ -1560,7 +1563,7 @@ function analyzeInterpreter(sc: SimpleCommand, k: number, cmd: string, push: (w:
   for (let j = k + 1; j < sc.words.length; j++) {
     const w = sc.words[j]!;
     const t = w.text;
-    if (pos.length > 0 && inline === undefined) {
+    if (pos.length > 0 && inline === undefined && !module) {
       // After the program, every word is the program's.
       pos.push(w);
       continue;
@@ -1569,6 +1572,13 @@ function analyzeInterpreter(sc: SimpleCommand, k: number, cmd: string, push: (w:
       inline = t;
       j++;
       continue;
+    }
+    if (spec.module !== undefined && (t === spec.module || t.startsWith(spec.module))) {
+      // `-m mod` / `-mmod`: the module is the program, the rest its arguments.
+      module = true;
+      if (t === spec.module) j++;
+      for (const w of sc.words.slice(j + 1)) push(w, "read");
+      return;
     }
     if (t.startsWith("--")) {
       const eq = t.indexOf("=");

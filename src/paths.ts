@@ -424,8 +424,10 @@ export function repositoryRoot(dir: string): string | undefined {
  *  TREE_LIMIT entries, or undefined. */
 export function sensitiveFileBelow(dir: string, spec: WalkSpec, allowlist: UserAllowlist | undefined, cwd: string): string | "overflow" | undefined {
   const rules = new Map<string, IgnoreRule[]>();
-  if (spec.ignore) {
-    const top = repositoryRoot(dir) ?? dir;
+  // rg and ag honour .gitignore inside a git repository only.
+  const top = spec.ignore ? repositoryRoot(dir) : undefined;
+  spec = { ...spec, ignore: top !== undefined };
+  if (top !== undefined) {
     const chain: IgnoreRule[] = [];
     for (let d = resolve(dir); ; d = dirname(d)) {
       chain.unshift(...ignoreRules(d));

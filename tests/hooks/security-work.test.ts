@@ -187,6 +187,11 @@ describe("audit · shell constructs that reached a sensitive file", () => {
     "zip -r out.zip .",
     "git --git-dir=.git show HEAD:.env",
     "git -C src show HEAD:../.env",
+    "grep --color KEY .env",
+    "grep --colour KEY .env",
+    "grep --context KEY .env",
+    "sed -n -l p .env",
+    "python3 -m tokenize .env",
   ])("denies %j", async (command) => {
     expect(await decide("Bash", { command })).toBe("deny");
   });
@@ -220,10 +225,16 @@ describe("audit · shell constructs that reached a sensitive file", () => {
 
   it("rg skips hidden and .gitignored files, as it does by default", async () => {
     expect(await decide("Bash", { command: "rg REAL" })).toBe("deny"); // src/server.key is read
+    mkdirSync(join(proj, ".git"));
     writeFileSync(join(proj, ".gitignore"), "# keys stay local\n*.key\n");
     expect(await decide("Bash", { command: "rg REAL" })).toBeUndefined(); // .env is hidden, the key ignored
     expect(await decide("Bash", { command: "rg --no-ignore REAL" })).toBe("deny");
     expect(await decide("Bash", { command: "rg -uu REAL" })).toBe("deny");
+  });
+
+  it("outside a git repository rg reads .gitignored files, and so does the check", async () => {
+    writeFileSync(join(proj, ".gitignore"), "*.key\n");
+    expect(await decide("Bash", { command: "rg REAL" })).toBe("deny");
   });
 
   it("a fixture is exempt only when it exists", async () => {

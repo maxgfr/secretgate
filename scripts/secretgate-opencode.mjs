@@ -1573,13 +1573,10 @@ var COMMAND_SPECS = {
       "-C",
       "--after-context",
       "--before-context",
-      "--context",
       "--include",
       "--exclude",
       "--exclude-dir",
       "--exclude-from",
-      "--color",
-      "--colour",
       "--label",
       "--binary-files",
       "-d",
@@ -1660,7 +1657,7 @@ var COMMAND_SPECS = {
   ack: { valued: ["--type", "--match", "--ignore-dir", "--ignore-file", "-A", "-B", "-C", "-m", "--max-count"] },
   head: { valued: ["-n", "-c", "--lines", "--bytes"] },
   tail: { valued: ["-n", "-c", "--lines", "--bytes", "-s", "--sleep-interval", "--pid"] },
-  sed: { valued: ["-e", "--expression", "-f", "--file", "-l", "--line-length"], paths: ["-f", "--file"] },
+  sed: { valued: ["-e", "--expression", "-f", "--file"], paths: ["-f", "--file"] },
   awk: {
     valued: ["-f", "--file", "-v", "--assign", "-F", "--field-separator", "-i", "--include", "-l", "--load", "-E", "--exec"],
     paths: ["-f", "--file", "-E", "--exec"]
@@ -1851,7 +1848,7 @@ var EVAL_COMMANDS = /* @__PURE__ */ new Set(["eval", "source", ".", "xargs", "pa
 var INTERPRETER_SPECS = [
   { re: /^perl$/, inline: ["-e", "-E"], valued: [] },
   { re: /^ruby$/, inline: ["-e"], valued: ["-r", "-I", "-C", "-E", "-W", "-x", "-F"] },
-  { re: /^python[0-9.]*$/, inline: ["-c"], valued: ["-m", "-W", "-X"] },
+  { re: /^python[0-9.]*$/, inline: ["-c"], valued: ["-W", "-X"], module: "-m" },
   {
     re: /^(?:node|nodejs|bun)$/,
     inline: ["-e", "--eval", "-p", "--print"],
@@ -2250,6 +2247,7 @@ function analyzeShellCommand(sc, k, cmd, cwds, ctx, depth, push) {
 }
 function analyzeInterpreter(sc, k, cmd, push, out) {
   const spec = INTERPRETER_SPECS.find((s) => s.re.test(cmd)) ?? { inline: [], valued: [] };
+  let module = false;
   const inlineShort = spec.inline.filter((f) => /^-[A-Za-z]$/.test(f));
   const pos = [];
   let inline;
@@ -2257,7 +2255,7 @@ function analyzeInterpreter(sc, k, cmd, push, out) {
   for (let j = k + 1; j < sc.words.length; j++) {
     const w = sc.words[j];
     const t = w.text;
-    if (pos.length > 0 && inline === void 0) {
+    if (pos.length > 0 && inline === void 0 && !module) {
       pos.push(w);
       continue;
     }
@@ -2265,6 +2263,12 @@ function analyzeInterpreter(sc, k, cmd, push, out) {
       inline = t;
       j++;
       continue;
+    }
+    if (spec.module !== void 0 && (t === spec.module || t.startsWith(spec.module))) {
+      module = true;
+      if (t === spec.module) j++;
+      for (const w2 of sc.words.slice(j + 1)) push(w2, "read");
+      return;
     }
     if (t.startsWith("--")) {
       const eq = t.indexOf("=");
@@ -2890,8 +2894,9 @@ function repositoryRoot(dir) {
 }
 function sensitiveFileBelow(dir, spec, allowlist, cwd) {
   const rules = /* @__PURE__ */ new Map();
-  if (spec.ignore) {
-    const top = repositoryRoot(dir) ?? dir;
+  const top = spec.ignore ? repositoryRoot(dir) : void 0;
+  spec = { ...spec, ignore: top !== void 0 };
+  if (top !== void 0) {
     const chain = [];
     for (let d = resolve2(dir); ; d = dirname2(d)) {
       chain.unshift(...ignoreRules(d));

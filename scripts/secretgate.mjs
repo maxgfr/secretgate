@@ -4,7 +4,7 @@
 import { execFileSync } from "child_process";
 import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync11, readdirSync as readdirSync4, realpathSync as realpathSync4, rmSync as rmSync7, statSync as statSync4 } from "fs";
 import { homedir as homedir8, tmpdir as tmpdir3 } from "os";
-import { delimiter as delimiter2, dirname as dirname8, isAbsolute as isAbsolute4, join as join13, relative as relative4, resolve as resolve7 } from "path";
+import { delimiter as delimiter3, dirname as dirname8, isAbsolute as isAbsolute5, join as join13, relative as relative4, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config.ts
@@ -2090,13 +2090,10 @@ var COMMAND_SPECS = {
       "-C",
       "--after-context",
       "--before-context",
-      "--context",
       "--include",
       "--exclude",
       "--exclude-dir",
       "--exclude-from",
-      "--color",
-      "--colour",
       "--label",
       "--binary-files",
       "-d",
@@ -2177,7 +2174,7 @@ var COMMAND_SPECS = {
   ack: { valued: ["--type", "--match", "--ignore-dir", "--ignore-file", "-A", "-B", "-C", "-m", "--max-count"] },
   head: { valued: ["-n", "-c", "--lines", "--bytes"] },
   tail: { valued: ["-n", "-c", "--lines", "--bytes", "-s", "--sleep-interval", "--pid"] },
-  sed: { valued: ["-e", "--expression", "-f", "--file", "-l", "--line-length"], paths: ["-f", "--file"] },
+  sed: { valued: ["-e", "--expression", "-f", "--file"], paths: ["-f", "--file"] },
   awk: {
     valued: ["-f", "--file", "-v", "--assign", "-F", "--field-separator", "-i", "--include", "-l", "--load", "-E", "--exec"],
     paths: ["-f", "--file", "-E", "--exec"]
@@ -2368,7 +2365,7 @@ var EVAL_COMMANDS = /* @__PURE__ */ new Set(["eval", "source", ".", "xargs", "pa
 var INTERPRETER_SPECS = [
   { re: /^perl$/, inline: ["-e", "-E"], valued: [] },
   { re: /^ruby$/, inline: ["-e"], valued: ["-r", "-I", "-C", "-E", "-W", "-x", "-F"] },
-  { re: /^python[0-9.]*$/, inline: ["-c"], valued: ["-m", "-W", "-X"] },
+  { re: /^python[0-9.]*$/, inline: ["-c"], valued: ["-W", "-X"], module: "-m" },
   {
     re: /^(?:node|nodejs|bun)$/,
     inline: ["-e", "--eval", "-p", "--print"],
@@ -2767,6 +2764,7 @@ function analyzeShellCommand(sc, k, cmd, cwds, ctx, depth, push) {
 }
 function analyzeInterpreter(sc, k, cmd, push, out) {
   const spec = INTERPRETER_SPECS.find((s) => s.re.test(cmd)) ?? { inline: [], valued: [] };
+  let module = false;
   const inlineShort = spec.inline.filter((f) => /^-[A-Za-z]$/.test(f));
   const pos = [];
   let inline;
@@ -2774,7 +2772,7 @@ function analyzeInterpreter(sc, k, cmd, push, out) {
   for (let j = k + 1; j < sc.words.length; j++) {
     const w = sc.words[j];
     const t = w.text;
-    if (pos.length > 0 && inline === void 0) {
+    if (pos.length > 0 && inline === void 0 && !module) {
       pos.push(w);
       continue;
     }
@@ -2782,6 +2780,12 @@ function analyzeInterpreter(sc, k, cmd, push, out) {
       inline = t;
       j++;
       continue;
+    }
+    if (spec.module !== void 0 && (t === spec.module || t.startsWith(spec.module))) {
+      module = true;
+      if (t === spec.module) j++;
+      for (const w2 of sc.words.slice(j + 1)) push(w2, "read");
+      return;
     }
     if (t.startsWith("--")) {
       const eq = t.indexOf("=");
@@ -3407,8 +3411,9 @@ function repositoryRoot(dir) {
 }
 function sensitiveFileBelow(dir, spec, allowlist, cwd) {
   const rules = /* @__PURE__ */ new Map();
-  if (spec.ignore) {
-    const top = repositoryRoot(dir) ?? dir;
+  const top = spec.ignore ? repositoryRoot(dir) : void 0;
+  spec = { ...spec, ignore: top !== void 0 };
+  if (top !== void 0) {
     const chain = [];
     for (let d = resolve2(dir); ; d = dirname2(d)) {
       chain.unshift(...ignoreRules(d));
@@ -10132,10 +10137,33 @@ function uninstallOpencode({ configDir }) {
 
 // src/self.ts
 import { chmodSync as chmodSync2, copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync3, rmSync as rmSync6 } from "fs";
-import { basename as basename6, dirname as dirname7, join as join12 } from "path";
+import { basename as basename6, delimiter as delimiter2, dirname as dirname7, isAbsolute as isAbsolute4, join as join12 } from "path";
 import { fileURLToPath } from "url";
 function currentContext() {
-  return { modulePath: fileURLToPath(import.meta.url), execPath: process.execPath, home: defaultVaultHome() };
+  const modulePath = fileURLToPath(import.meta.url);
+  const execPath = selfForm(modulePath) === "binary" ? process.execPath : stableRuntime(process.execPath);
+  return { modulePath, execPath, home: defaultVaultHome() };
+}
+var STABLE_BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin", "/opt/local/bin", "/usr/bin", "/snap/bin"];
+function stableRuntime(execPath, pathEnv = process.env.PATH ?? "", stableDirs = STABLE_BIN_DIRS) {
+  let real;
+  try {
+    real = realpathSync3(execPath);
+  } catch {
+    return execPath;
+  }
+  const stable = new Set(stableDirs);
+  for (const dir of pathEnv.split(delimiter2)) {
+    if (!stable.has(dir)) continue;
+    for (const name of [basename6(execPath), "node"]) {
+      const candidate = join12(dir, name);
+      try {
+        if (isAbsolute4(candidate) && realpathSync3(candidate) === real) return candidate;
+      } catch {
+      }
+    }
+  }
+  return execPath;
 }
 function selfForm(modulePath) {
   if (modulePath.startsWith("/$bunfs/") || /^[A-Za-z]:[\\/]~BUN[\\/]/.test(modulePath)) return "binary";
@@ -11164,24 +11192,24 @@ function reportPinned(hookCommandList, io) {
   if (hookCommandList.length > 0 && !existsSync9(binary) && !existsSync9(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
 }
 function reportMissingPrograms(commands2, label, io) {
-  const missing = new Set(commands2.map(hookProgram).filter((p) => !!p && isAbsolute4(p) && !existsSync9(p)));
+  const missing = new Set(commands2.map(hookProgram).filter((p) => !!p && isAbsolute5(p) && !existsSync9(p)));
   for (const p of missing) io.stdout(`${label}!! hooks run ${p}, which is MISSING \u2014 run \`secretgate init\` to re-pin it
 `);
   const runtimes = new Set(commands2.map(hookRuntime).filter((r) => r !== void 0));
   for (const r of runtimes) {
-    if (isAbsolute4(r) ? !existsSync9(r) : !onPath(r))
+    if (isAbsolute5(r) ? !existsSync9(r) : !onPath(r))
       io.stdout(
-        `${label}!! hooks start ${r}, which is NOT FOUND${isAbsolute4(r) ? "" : " on PATH"} \u2014 run \`secretgate init\` to wire this node by its absolute path
+        `${label}!! hooks start ${r}, which is NOT FOUND${isAbsolute5(r) ? "" : " on PATH"} \u2014 run \`secretgate init\` to wire this node by its absolute path
 `
       );
-    else if (!isAbsolute4(r))
+    else if (!isAbsolute5(r))
       io.stdout(`${label}hooks start a bare \`${r}\`: an agent launched without your shell's PATH may not find it \u2014 re-run \`secretgate init\`
 `);
   }
 }
 function onPath(name) {
   const exts = process.platform === "win32" ? ["", ".exe", ".cmd"] : [""];
-  return (process.env.PATH ?? "").split(delimiter2).some((dir) => dir !== "" && exts.some((e) => existsSync9(join13(dir, name + e))));
+  return (process.env.PATH ?? "").split(delimiter3).some((dir) => dir !== "" && exts.some((e) => existsSync9(join13(dir, name + e))));
 }
 async function cmdStatus(_args, io) {
   io.stdout(`secretgate ${VERSION}

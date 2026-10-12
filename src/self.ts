@@ -1,5 +1,5 @@
 import { chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, renameSync, rmSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defaultVaultHome } from "./vault/vault.js";
 
@@ -26,7 +26,43 @@ export interface Invocation {
 }
 
 export function currentContext(): SelfContext {
-  return { modulePath: fileURLToPath(import.meta.url), execPath: process.execPath, home: defaultVaultHome() };
+  const modulePath = fileURLToPath(import.meta.url);
+  const execPath = selfForm(modulePath) === "binary" ? process.execPath : stableRuntime(process.execPath);
+  return { modulePath, execPath, home: defaultVaultHome() };
+}
+
+// Where package managers keep a version-independent link to node. PATH can
+// hold other entries that lead to the same binary — fnm's per-shell
+// `fnm_multishells/<pid>/bin`, gone when that shell exits — so only these count.
+const STABLE_BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.linuxbrew/bin", "/opt/local/bin", "/usr/bin", "/snap/bin"];
+
+/**
+ * The spelling of the running node that survives its upgrades. Homebrew
+ * reports the versioned Cellar path, which `brew upgrade node` deletes — a
+ * hook wired to it would exit 127 (fail open) after the next upgrade, while
+ * /opt/homebrew/bin/node stays. A stable directory on PATH that leads to the
+ * same binary wins; otherwise the binary itself.
+ */
+export function stableRuntime(execPath: string, pathEnv = process.env.PATH ?? "", stableDirs = STABLE_BIN_DIRS): string {
+  let real: string;
+  try {
+    real = realpathSync(execPath);
+  } catch {
+    return execPath;
+  }
+  const stable = new Set(stableDirs);
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!stable.has(dir)) continue;
+    for (const name of [basename(execPath), "node"]) {
+      const candidate = join(dir, name);
+      try {
+        if (isAbsolute(candidate) && realpathSync(candidate) === real) return candidate;
+      } catch {
+        // not there
+      }
+    }
+  }
+  return execPath;
 }
 
 export function selfForm(modulePath: string): SelfForm {
