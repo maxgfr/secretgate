@@ -2,14 +2,14 @@
 
 // src/cli.ts
 import { execFileSync } from "child_process";
-import { copyFileSync as copyFileSync4, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync3, realpathSync as realpathSync4, rmSync as rmSync6, statSync as statSync3 } from "fs";
+import { copyFileSync as copyFileSync4, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync3, realpathSync as realpathSync4, rmSync as rmSync6, statSync as statSync4 } from "fs";
 import { homedir as homedir7, tmpdir as tmpdir3 } from "os";
 import { dirname as dirname7, isAbsolute as isAbsolute4, join as join12, relative as relative3, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync3, writeFileSync } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, statSync as statSync2 } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 
@@ -463,6 +463,243 @@ var cachedBreakLinesWithSpaces = {
     })
   }
 };
+var supportedEols = ["\n", "\r", "\r\n"];
+
+// node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/format.js
+function format(documentText, range, options) {
+  let initialIndentLevel;
+  let formatText;
+  let formatTextStart;
+  let rangeStart;
+  let rangeEnd;
+  if (range) {
+    rangeStart = range.offset;
+    rangeEnd = rangeStart + range.length;
+    formatTextStart = rangeStart;
+    while (formatTextStart > 0 && !isEOL(documentText, formatTextStart - 1)) {
+      formatTextStart--;
+    }
+    let endOffset = rangeEnd;
+    while (endOffset < documentText.length && !isEOL(documentText, endOffset)) {
+      endOffset++;
+    }
+    formatText = documentText.substring(formatTextStart, endOffset);
+    initialIndentLevel = computeIndentLevel(formatText, options);
+  } else {
+    formatText = documentText;
+    initialIndentLevel = 0;
+    formatTextStart = 0;
+    rangeStart = 0;
+    rangeEnd = documentText.length;
+  }
+  const eol = getEOL(options, documentText);
+  const eolFastPathSupported = supportedEols.includes(eol);
+  let numberLineBreaks = 0;
+  let indentLevel = 0;
+  let indentValue;
+  if (options.insertSpaces) {
+    indentValue = cachedSpaces[options.tabSize || 4] ?? repeat(cachedSpaces[1], options.tabSize || 4);
+  } else {
+    indentValue = "	";
+  }
+  const indentType = indentValue === "	" ? "	" : " ";
+  let scanner = createScanner(formatText, false);
+  let hasError = false;
+  function newLinesAndIndent() {
+    if (numberLineBreaks > 1) {
+      return repeat(eol, numberLineBreaks) + repeat(indentValue, initialIndentLevel + indentLevel);
+    }
+    const amountOfSpaces = indentValue.length * (initialIndentLevel + indentLevel);
+    if (!eolFastPathSupported || amountOfSpaces > cachedBreakLinesWithSpaces[indentType][eol].length) {
+      return eol + repeat(indentValue, initialIndentLevel + indentLevel);
+    }
+    if (amountOfSpaces <= 0) {
+      return eol;
+    }
+    return cachedBreakLinesWithSpaces[indentType][eol][amountOfSpaces];
+  }
+  function scanNext() {
+    let token = scanner.scan();
+    numberLineBreaks = 0;
+    while (token === 15 || token === 14) {
+      if (token === 14 && options.keepLines) {
+        numberLineBreaks += 1;
+      } else if (token === 14) {
+        numberLineBreaks = 1;
+      }
+      token = scanner.scan();
+    }
+    hasError = token === 16 || scanner.getTokenError() !== 0;
+    return token;
+  }
+  const editOperations = [];
+  function addEdit(text, startOffset, endOffset) {
+    if (!hasError && (!range || startOffset < rangeEnd && endOffset > rangeStart) && documentText.substring(startOffset, endOffset) !== text) {
+      editOperations.push({ offset: startOffset, length: endOffset - startOffset, content: text });
+    }
+  }
+  let firstToken = scanNext();
+  if (options.keepLines && numberLineBreaks > 0) {
+    addEdit(repeat(eol, numberLineBreaks), 0, 0);
+  }
+  if (firstToken !== 17) {
+    let firstTokenStart = scanner.getTokenOffset() + formatTextStart;
+    let initialIndent = indentValue.length * initialIndentLevel < 20 && options.insertSpaces ? cachedSpaces[indentValue.length * initialIndentLevel] : repeat(indentValue, initialIndentLevel);
+    addEdit(initialIndent, formatTextStart, firstTokenStart);
+  }
+  while (firstToken !== 17) {
+    let firstTokenEnd = scanner.getTokenOffset() + scanner.getTokenLength() + formatTextStart;
+    let secondToken = scanNext();
+    let replaceContent = "";
+    let needsLineBreak = false;
+    while (numberLineBreaks === 0 && (secondToken === 12 || secondToken === 13)) {
+      let commentTokenStart = scanner.getTokenOffset() + formatTextStart;
+      addEdit(cachedSpaces[1], firstTokenEnd, commentTokenStart);
+      firstTokenEnd = scanner.getTokenOffset() + scanner.getTokenLength() + formatTextStart;
+      needsLineBreak = secondToken === 12;
+      replaceContent = needsLineBreak ? newLinesAndIndent() : "";
+      secondToken = scanNext();
+    }
+    if (secondToken === 2) {
+      if (firstToken !== 1) {
+        indentLevel--;
+      }
+      ;
+      if (options.keepLines && numberLineBreaks > 0 || !options.keepLines && firstToken !== 1) {
+        replaceContent = newLinesAndIndent();
+      } else if (options.keepLines) {
+        replaceContent = cachedSpaces[1];
+      }
+    } else if (secondToken === 4) {
+      if (firstToken !== 3) {
+        indentLevel--;
+      }
+      ;
+      if (options.keepLines && numberLineBreaks > 0 || !options.keepLines && firstToken !== 3) {
+        replaceContent = newLinesAndIndent();
+      } else if (options.keepLines) {
+        replaceContent = cachedSpaces[1];
+      }
+    } else {
+      switch (firstToken) {
+        case 3:
+        case 1:
+          indentLevel++;
+          if (options.keepLines && numberLineBreaks > 0 || !options.keepLines) {
+            replaceContent = newLinesAndIndent();
+          } else {
+            replaceContent = cachedSpaces[1];
+          }
+          break;
+        case 5:
+          if (options.keepLines && numberLineBreaks > 0 || !options.keepLines) {
+            replaceContent = newLinesAndIndent();
+          } else {
+            replaceContent = cachedSpaces[1];
+          }
+          break;
+        case 12:
+          replaceContent = newLinesAndIndent();
+          break;
+        case 13:
+          if (numberLineBreaks > 0) {
+            replaceContent = newLinesAndIndent();
+          } else if (!needsLineBreak) {
+            replaceContent = cachedSpaces[1];
+          }
+          break;
+        case 6:
+          if (options.keepLines && numberLineBreaks > 0) {
+            replaceContent = newLinesAndIndent();
+          } else if (!needsLineBreak) {
+            replaceContent = cachedSpaces[1];
+          }
+          break;
+        case 10:
+          if (options.keepLines && numberLineBreaks > 0) {
+            replaceContent = newLinesAndIndent();
+          } else if (secondToken === 6 && !needsLineBreak) {
+            replaceContent = "";
+          }
+          break;
+        case 7:
+        case 8:
+        case 9:
+        case 11:
+        case 2:
+        case 4:
+          if (options.keepLines && numberLineBreaks > 0) {
+            replaceContent = newLinesAndIndent();
+          } else {
+            if ((secondToken === 12 || secondToken === 13) && !needsLineBreak) {
+              replaceContent = cachedSpaces[1];
+            } else if (secondToken !== 5 && secondToken !== 17) {
+              hasError = true;
+            }
+          }
+          break;
+        case 16:
+          hasError = true;
+          break;
+      }
+      if (numberLineBreaks > 0 && (secondToken === 12 || secondToken === 13)) {
+        replaceContent = newLinesAndIndent();
+      }
+    }
+    if (secondToken === 17) {
+      if (options.keepLines && numberLineBreaks > 0) {
+        replaceContent = newLinesAndIndent();
+      } else {
+        replaceContent = options.insertFinalNewline ? eol : "";
+      }
+    }
+    const secondTokenStart = scanner.getTokenOffset() + formatTextStart;
+    addEdit(replaceContent, firstTokenEnd, secondTokenStart);
+    firstToken = secondToken;
+  }
+  return editOperations;
+}
+function repeat(s, count) {
+  let result = "";
+  for (let i = 0; i < count; i++) {
+    result += s;
+  }
+  return result;
+}
+function computeIndentLevel(content, options) {
+  let i = 0;
+  let nChars = 0;
+  const tabSize = options.tabSize || 4;
+  while (i < content.length) {
+    let ch = content.charAt(i);
+    if (ch === cachedSpaces[1]) {
+      nChars++;
+    } else if (ch === "	") {
+      nChars += tabSize;
+    } else {
+      break;
+    }
+    i++;
+  }
+  return Math.floor(nChars / tabSize);
+}
+function getEOL(options, text) {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text.charAt(i);
+    if (ch === "\r") {
+      if (i + 1 < text.length && text.charAt(i + 1) === "\n") {
+        return "\r\n";
+      }
+      return "\r";
+    } else if (ch === "\n") {
+      return "\n";
+    }
+  }
+  return options && options.eol || "\n";
+}
+function isEOL(text, offset) {
+  return "\r\n".indexOf(text.charAt(offset)) !== -1;
+}
 
 // node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/parser.js
 var ParseOptions;
@@ -513,6 +750,95 @@ function parse(text, errors = [], options = ParseOptions.DEFAULT) {
   };
   visit(text, visitor, options);
   return currentParent[0];
+}
+function parseTree(text, errors = [], options = ParseOptions.DEFAULT) {
+  let currentParent = { type: "array", offset: -1, length: -1, children: [], parent: void 0 };
+  function ensurePropertyComplete(endOffset) {
+    if (currentParent.type === "property") {
+      currentParent.length = endOffset - currentParent.offset;
+      currentParent = currentParent.parent;
+    }
+  }
+  function onValue(valueNode) {
+    currentParent.children.push(valueNode);
+    return valueNode;
+  }
+  const visitor = {
+    onObjectBegin: (offset) => {
+      currentParent = onValue({ type: "object", offset, length: -1, parent: currentParent, children: [] });
+    },
+    onObjectProperty: (name, offset, length) => {
+      currentParent = onValue({ type: "property", offset, length: -1, parent: currentParent, children: [] });
+      currentParent.children.push({ type: "string", value: name, offset, length, parent: currentParent });
+    },
+    onObjectEnd: (offset, length) => {
+      ensurePropertyComplete(offset + length);
+      currentParent.length = offset + length - currentParent.offset;
+      currentParent = currentParent.parent;
+      ensurePropertyComplete(offset + length);
+    },
+    onArrayBegin: (offset, length) => {
+      currentParent = onValue({ type: "array", offset, length: -1, parent: currentParent, children: [] });
+    },
+    onArrayEnd: (offset, length) => {
+      currentParent.length = offset + length - currentParent.offset;
+      currentParent = currentParent.parent;
+      ensurePropertyComplete(offset + length);
+    },
+    onLiteralValue: (value, offset, length) => {
+      onValue({ type: getNodeType(value), offset, length, parent: currentParent, value });
+      ensurePropertyComplete(offset + length);
+    },
+    onSeparator: (sep3, offset, length) => {
+      if (currentParent.type === "property") {
+        if (sep3 === ":") {
+          currentParent.colonOffset = offset;
+        } else if (sep3 === ",") {
+          ensurePropertyComplete(offset);
+        }
+      }
+    },
+    onError: (error, offset, length) => {
+      errors.push({ error, offset, length });
+    }
+  };
+  visit(text, visitor, options);
+  const result = currentParent.children[0];
+  if (result) {
+    delete result.parent;
+  }
+  return result;
+}
+function findNodeAtLocation(root, path) {
+  if (!root) {
+    return void 0;
+  }
+  let node = root;
+  for (let segment of path) {
+    if (typeof segment === "string") {
+      if (node.type !== "object" || !Array.isArray(node.children)) {
+        return void 0;
+      }
+      let found = false;
+      for (const propertyNode of node.children) {
+        if (Array.isArray(propertyNode.children) && propertyNode.children[0].value === segment && propertyNode.children.length === 2) {
+          node = propertyNode.children[1];
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return void 0;
+      }
+    } else {
+      const index = segment;
+      if (node.type !== "array" || index < 0 || !Array.isArray(node.children) || index >= node.children.length) {
+        return void 0;
+      }
+      node = node.children[index];
+    }
+  }
+  return node;
 }
 function visit(text, visitor, options = ParseOptions.DEFAULT) {
   const _scanner = createScanner(text, false);
@@ -819,6 +1145,170 @@ function visit(text, visitor, options = ParseOptions.DEFAULT) {
   }
   return true;
 }
+function getNodeType(value) {
+  switch (typeof value) {
+    case "boolean":
+      return "boolean";
+    case "number":
+      return "number";
+    case "string":
+      return "string";
+    case "object": {
+      if (!value) {
+        return "null";
+      } else if (Array.isArray(value)) {
+        return "array";
+      }
+      return "object";
+    }
+    default:
+      return "null";
+  }
+}
+
+// node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/edit.js
+function setProperty(text, originalPath, value, options) {
+  const path = originalPath.slice();
+  const errors = [];
+  const root = parseTree(text, errors);
+  let parent = void 0;
+  let lastSegment = void 0;
+  while (path.length > 0) {
+    lastSegment = path.pop();
+    parent = findNodeAtLocation(root, path);
+    if (parent === void 0 && value !== void 0) {
+      if (typeof lastSegment === "string") {
+        value = { [lastSegment]: value };
+      } else {
+        value = [value];
+      }
+    } else {
+      break;
+    }
+  }
+  if (!parent) {
+    if (value === void 0) {
+      throw new Error("Can not delete in empty document");
+    }
+    return withFormatting(text, { offset: root ? root.offset : 0, length: root ? root.length : 0, content: JSON.stringify(value) }, options);
+  } else if (parent.type === "object" && typeof lastSegment === "string" && Array.isArray(parent.children)) {
+    const existing = findNodeAtLocation(parent, [lastSegment]);
+    if (existing !== void 0) {
+      if (value === void 0) {
+        if (!existing.parent) {
+          throw new Error("Malformed AST");
+        }
+        const propertyIndex = parent.children.indexOf(existing.parent);
+        let removeBegin;
+        let removeEnd = existing.parent.offset + existing.parent.length;
+        if (propertyIndex > 0) {
+          let previous = parent.children[propertyIndex - 1];
+          removeBegin = previous.offset + previous.length;
+        } else {
+          removeBegin = parent.offset + 1;
+          if (parent.children.length > 1) {
+            let next = parent.children[1];
+            removeEnd = next.offset;
+          }
+        }
+        return withFormatting(text, { offset: removeBegin, length: removeEnd - removeBegin, content: "" }, options);
+      } else {
+        return withFormatting(text, { offset: existing.offset, length: existing.length, content: JSON.stringify(value) }, options);
+      }
+    } else {
+      if (value === void 0) {
+        return [];
+      }
+      const newProperty = `${JSON.stringify(lastSegment)}: ${JSON.stringify(value)}`;
+      const index = options.getInsertionIndex ? options.getInsertionIndex(parent.children.map((p) => p.children[0].value)) : parent.children.length;
+      let edit;
+      if (index > 0) {
+        let previous = parent.children[index - 1];
+        edit = { offset: previous.offset + previous.length, length: 0, content: "," + newProperty };
+      } else if (parent.children.length === 0) {
+        edit = { offset: parent.offset + 1, length: 0, content: newProperty };
+      } else {
+        edit = { offset: parent.offset + 1, length: 0, content: newProperty + "," };
+      }
+      return withFormatting(text, edit, options);
+    }
+  } else if (parent.type === "array" && typeof lastSegment === "number" && Array.isArray(parent.children)) {
+    const insertIndex = lastSegment;
+    if (insertIndex === -1) {
+      const newProperty = `${JSON.stringify(value)}`;
+      let edit;
+      if (parent.children.length === 0) {
+        edit = { offset: parent.offset + 1, length: 0, content: newProperty };
+      } else {
+        const previous = parent.children[parent.children.length - 1];
+        edit = { offset: previous.offset + previous.length, length: 0, content: "," + newProperty };
+      }
+      return withFormatting(text, edit, options);
+    } else if (value === void 0 && parent.children.length >= 0) {
+      const removalIndex = lastSegment;
+      const toRemove = parent.children[removalIndex];
+      let edit;
+      if (parent.children.length === 1) {
+        edit = { offset: parent.offset + 1, length: parent.length - 2, content: "" };
+      } else if (parent.children.length - 1 === removalIndex) {
+        let previous = parent.children[removalIndex - 1];
+        let offset = previous.offset + previous.length;
+        let parentEndOffset = parent.offset + parent.length;
+        edit = { offset, length: parentEndOffset - 2 - offset, content: "" };
+      } else {
+        edit = { offset: toRemove.offset, length: parent.children[removalIndex + 1].offset - toRemove.offset, content: "" };
+      }
+      return withFormatting(text, edit, options);
+    } else if (value !== void 0) {
+      let edit;
+      const newProperty = `${JSON.stringify(value)}`;
+      if (!options.isArrayInsertion && parent.children.length > lastSegment) {
+        const toModify = parent.children[lastSegment];
+        edit = { offset: toModify.offset, length: toModify.length, content: newProperty };
+      } else if (parent.children.length === 0 || lastSegment === 0) {
+        edit = { offset: parent.offset + 1, length: 0, content: parent.children.length === 0 ? newProperty : newProperty + "," };
+      } else {
+        const index = lastSegment > parent.children.length ? parent.children.length : lastSegment;
+        const previous = parent.children[index - 1];
+        edit = { offset: previous.offset + previous.length, length: 0, content: "," + newProperty };
+      }
+      return withFormatting(text, edit, options);
+    } else {
+      throw new Error(`Can not ${value === void 0 ? "remove" : options.isArrayInsertion ? "insert" : "modify"} Array index ${insertIndex} as length is not sufficient`);
+    }
+  } else {
+    throw new Error(`Can not add ${typeof lastSegment !== "number" ? "index" : "property"} to parent of type ${parent.type}`);
+  }
+}
+function withFormatting(text, edit, options) {
+  if (!options.formattingOptions) {
+    return [edit];
+  }
+  let newText = applyEdit(text, edit);
+  let begin = edit.offset;
+  let end = edit.offset + edit.content.length;
+  if (edit.length === 0 || edit.content.length === 0) {
+    while (begin > 0 && !isEOL(newText, begin - 1)) {
+      begin--;
+    }
+    while (end < newText.length && !isEOL(newText, end)) {
+      end++;
+    }
+  }
+  const edits = format(newText, { offset: begin, length: end - begin }, { ...options.formattingOptions, keepLines: false });
+  for (let i = edits.length - 1; i >= 0; i--) {
+    const edit2 = edits[i];
+    newText = applyEdit(newText, edit2);
+    begin = Math.min(begin, edit2.offset);
+    end = Math.max(end, edit2.offset + edit2.length);
+    end += edit2.content.length - edit2.length;
+  }
+  const editLength = text.length - (newText.length - end) - begin;
+  return [{ offset: begin, length: editLength, content: newText.substring(begin, end) }];
+}
+function applyEdit(text, edit) {
+  return text.substring(0, edit.offset) + edit.content + text.substring(edit.offset + edit.length);
+}
 
 // node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/main.js
 var ScanError;
@@ -907,6 +1397,48 @@ function printParseErrorCode(code) {
       return "InvalidCharacter";
   }
   return "<unknown ParseErrorCode>";
+}
+function modify(text, path, value, options) {
+  return setProperty(text, path, value, options);
+}
+function applyEdits(text, edits) {
+  let sortedEdits = edits.slice(0).sort((a, b) => {
+    const diff = a.offset - b.offset;
+    if (diff === 0) {
+      return a.length - b.length;
+    }
+    return diff;
+  });
+  let lastModifiedOffset = text.length;
+  for (let i = sortedEdits.length - 1; i >= 0; i--) {
+    let e = sortedEdits[i];
+    if (e.offset + e.length <= lastModifiedOffset) {
+      text = applyEdit(text, e);
+    } else {
+      throw new Error("Overlapping edit");
+    }
+    lastModifiedOffset = e.offset;
+  }
+  return text;
+}
+
+// src/fs-atomic.ts
+import { randomBytes } from "crypto";
+import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
+function writeFileAtomic(path, content, mode = 420) {
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  const fd = openSync(tmp, "wx", mode);
+  try {
+    try {
+      writeSync(fd, content);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 // src/paths.ts
@@ -1800,25 +2332,6 @@ import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, r
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
 
-// src/fs-atomic.ts
-import { randomBytes } from "crypto";
-import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
-function writeFileAtomic(path, content, mode = 420) {
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tmp, "wx", mode);
-  try {
-    try {
-      writeSync(fd, content);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(tmp, path);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
 // src/vault/placeholder.ts
 import { createHmac } from "crypto";
 function placeholderFor(secret, salt, hexLen = 12) {
@@ -2145,12 +2658,13 @@ function commandTouchesSensitivePath(command, allowlist, cwd = process.cwd()) {
 
 // src/config.ts
 function readJsonFile(path) {
-  let raw;
+  let bytes;
   try {
-    raw = readFileSync2(path, "utf8");
+    bytes = readFileSync2(path);
   } catch {
     return { ok: false, missing: true, message: "unreadable" };
   }
+  const raw = bytes.toString("utf8");
   const errors = [];
   const value = parse2(raw, errors, { allowTrailingComma: true, disallowComments: false });
   if (errors.length > 0) {
@@ -2158,7 +2672,16 @@ function readJsonFile(path) {
     const line = raw.slice(0, e.offset).split("\n").length;
     return { ok: false, missing: false, message: `not valid JSON: ${printParseErrorCode(e.error)} at line ${line}` };
   }
-  return { ok: true, value };
+  return { ok: true, value, hash: sha256Bytes(bytes) };
+}
+var sha256Bytes = (bytes) => createHash2("sha256").update(bytes).digest("hex");
+function ownedByCurrentUser(file) {
+  if (typeof process.getuid !== "function") return true;
+  try {
+    return statSync2(file).uid === process.getuid();
+  } catch {
+    return false;
+  }
 }
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
 function strings(v) {
@@ -2200,7 +2723,7 @@ function projectConfigFiles(cwd) {
   for (; ; ) {
     if (dir === home) break;
     const file = join4(dir, ".secretgate.json");
-    if (existsSync(file)) files.push(file);
+    if (existsSync(file) && ownedByCurrentUser(file)) files.push(file);
     if (existsSync(join4(dir, ".git"))) break;
     const parent = dirname3(dir);
     if (parent === dir) break;
@@ -2231,7 +2754,7 @@ function loadConfig(cwd) {
       const list = validateAllowlist(project.allowlist, "allowlist");
       const scope = validateScope(project.scope, canonical(dirname3(file)), file);
       const entries = (list.sha256?.length ?? 0) + (list.rules?.length ?? 0) + (list.paths?.length ?? 0);
-      const targets = trust[canonical(file)] === fileHash(file) ? [merged, forScan] : [forScan];
+      const targets = trust[canonical(file)] === read.hash ? [merged, forScan] : [forScan];
       if (entries > 0 && targets.length === 1) untrusted.push(file);
       for (const t of targets) {
         t.sha256.push(...list.sha256 ?? []);
@@ -2258,7 +2781,7 @@ function trustPath() {
 }
 function fileHash(file) {
   try {
-    return createHash2("sha256").update(readFileSync2(file)).digest("hex");
+    return sha256Bytes(readFileSync2(file));
   } catch {
     return void 0;
   }
@@ -2278,16 +2801,14 @@ function setTrust(files, revoke = false) {
     else trust[key] = hash;
   }
   mkdirSync2(defaultVaultHome(), { recursive: true, mode: 448 });
-  const tmp = `${trustPath()}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ version: 1, files: trust }, null, 2), { mode: 384 });
-  renameSync3(tmp, trustPath());
+  writeFileAtomic(trustPath(), JSON.stringify({ version: 1, files: trust }, null, 2), 384);
 }
 function allowlistPath() {
   return join4(defaultVaultHome(), "allowlist.json");
 }
 
 // src/scope.ts
-import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
+import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync as statSync3 } from "fs";
 import { homedir as homedir4, tmpdir } from "os";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute3, join as join5, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
 var isOutside = (rel) => rel === ".." || rel.startsWith(`..${sep2}`) || rel.startsWith("../") || isAbsolute3(rel);
@@ -2428,7 +2949,7 @@ function treeViolation(scope, dir) {
 }
 function isDirectory(abs) {
   try {
-    return statSync2(abs).isDirectory();
+    return statSync3(abs).isDirectory();
   } catch {
     return false;
   }
@@ -2772,7 +3293,7 @@ function describeScope(scope) {
 
 // src/disable.ts
 import { randomBytes as randomBytes3 } from "crypto";
-import { closeSync as closeSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync3, renameSync as renameSync4, writeSync as writeSync2 } from "fs";
+import { closeSync as closeSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync3, renameSync as renameSync3, writeSync as writeSync2 } from "fs";
 import { join as join6 } from "path";
 var NOT_DISABLED = { disabled: false };
 var SESSION_INDEX_MAX = 20;
@@ -2793,7 +3314,7 @@ function writeFileAtomic2(path, content, mode) {
   } finally {
     closeSync3(fd);
   }
-  renameSync4(tmp, path);
+  renameSync3(tmp, path);
 }
 function readJson(path) {
   try {
@@ -7555,31 +8076,15 @@ function dedupe(findings) {
 }
 
 // src/prompt-directive.ts
-var NAME = String.raw`[\`'"]?secretgate[\`'"]?`;
-var COURTESY = String.raw`(?:(?:stp|svp|please|pls|merci|thanks|now|maintenant|ok|okay)[\s,.!]*)*`;
-var TAIL = String.raw`(?:\s+(?:pour|for)\s+(?:cette|ce|this|la|the)\s+(?:session|run|conversation|conv))?(?:\s+(?:stp|svp|please|merci|thanks))?\s*[.!]*`;
-var SCOPE = String.raw`(?:\s+(?:et|and|\+|avec|with|,)\s*(?:le|la|the)?\s*(?:scope|p[ée]rim[èe]tre))?`;
-var DISABLE = new RegExp(
-  String.raw`^${COURTESY}(?:d[ée]sactiv(?:e|er|ez)|coupe(?:r|z)?|mets\s+en\s+pause|disable|turn\s+off|switch\s+off|pause)\s+(?:le\s+|la\s+|the\s+)?${NAME}(${SCOPE})${TAIL}$|^${COURTESY}(?:turn\s+|switch\s+)?${NAME}\s*:?\s*off${TAIL}$`,
-  "i"
-);
-var ENABLE = new RegExp(
-  String.raw`^${COURTESY}(?:r[ée]activ(?:e|er|ez)|rallume(?:r|z)?|enable|re-?enable|turn\s+(?:back\s+)?on|resume)\s+(?:le\s+|la\s+|the\s+)?${NAME}(?:\s+back\s+on)?${TAIL}$|^${COURTESY}(?:turn\s+|switch\s+)?${NAME}\s*:?\s*(?:back\s+)?on${TAIL}$`,
-  "i"
-);
-var SKILL_DISABLE = /^[/$]secretgate\s+(?:disable|off|pause|stop|d[ée]sactiv(?:e|er|ez)?|coupe)(\s+(?:--)?(?:scope|p[ée]rim[èe]tre)|\s+(?:et|and|\+)\s+(?:le\s+|la\s+|the\s+)?(?:scope|p[ée]rim[èe]tre))?\s*[.!]*$/i;
-var SKILL_ENABLE = /^[/$]secretgate\s+(?:enable|on|resume|r[ée]activ(?:e|er|ez)?|rallume)\s*[.!]*$/i;
+var SKILL_DISABLE = /^[/$]secretgate\s+(?:disable|off|pause|stop)(\s+(?:--)?scope)?\s*[.!]?$/i;
+var SKILL_ENABLE = /^[/$]secretgate\s+(?:enable|on|resume)\s*[.!]?$/i;
 function promptDirective(prompt) {
-  for (const raw of prompt.split(/\r?\n/)) {
-    const line = raw.trim().replace(/^(["'`])(.*)\1$/, "$2").trim();
-    if (line.length === 0 || line.length > 120) continue;
-    const skillOff = SKILL_DISABLE.exec(line);
-    if (skillOff) return { action: "disable", liftScope: Boolean(skillOff[1]) };
-    if (SKILL_ENABLE.test(line)) return { action: "enable" };
-    const off = DISABLE.exec(line);
-    if (off) return { action: "disable", liftScope: Boolean(off[1]) };
-    if (ENABLE.test(line)) return { action: "enable" };
-  }
+  const first = prompt.split(/\r?\n/).find((l) => l.trim() !== "");
+  if (first === void 0) return void 0;
+  const line = first.trim().replace(/^(["'`])(.*)\1$/, "$2").trim();
+  const off = SKILL_DISABLE.exec(line);
+  if (off) return { action: "disable", liftScope: Boolean(off[1]) };
+  if (SKILL_ENABLE.test(line)) return { action: "enable" };
   return void 0;
 }
 function applyPromptDirective(directive, sessionId, cwd) {
@@ -7598,8 +8103,8 @@ function applyPromptDirective(directive, sessionId, cwd) {
   addPause({ scope: "session", target: sessionId, minutes: null, cwd, lifetime: true, liftScope: directive.liftScope });
   return [
     "secretgate: DISABLED for this session only, at your request \u2014 prompts, tool input and tool output are no longer scanned until the session ends (24 h at most).",
-    directive.liftScope ? "The project scope is lifted too." : "A project scope, if any, stays enforced (say \u201Cd\xE9sactive secretgate et le scope\u201D to lift it too).",
-    "Say \u201Cr\xE9active secretgate\u201D to turn it back on. A new session is protected automatically."
+    directive.liftScope ? "The project scope is lifted too." : "A project scope, if any, stays enforced (type `/secretgate off scope` to lift it too).",
+    "Type `/secretgate on` to turn it back on. A new session is protected automatically."
   ].join(" ");
 }
 
@@ -7738,7 +8243,7 @@ function eventRedactor(vault, source, allowlist) {
 
 // src/hooks/stopped-session.ts
 import { createHash as createHash3 } from "crypto";
-import { existsSync as existsSync3, mkdirSync as mkdirSync4, writeFileSync as writeFileSync2 } from "fs";
+import { existsSync as existsSync3, mkdirSync as mkdirSync4, writeFileSync } from "fs";
 import { join as join8 } from "path";
 function stoppedPath(session) {
   return join8(defaultVaultHome(), "stopped-sessions", createHash3("sha256").update(session).digest("hex"));
@@ -7749,7 +8254,7 @@ function isStoppedSession(session) {
 function stopSession(session) {
   if (typeof session !== "string" || !session) return;
   mkdirSync4(join8(defaultVaultHome(), "stopped-sessions"), { recursive: true, mode: 448 });
-  writeFileSync2(stoppedPath(session), "unscannable tool result\n", { mode: 384 });
+  writeFileSync(stoppedPath(session), "unscannable tool result\n", { mode: 384 });
 }
 
 // src/hooks/tool-call.ts
@@ -7952,7 +8457,7 @@ function disabledResult(event, input, state, notices) {
     if (!notices) return PASS;
     return {
       stdout: JSON.stringify({
-        systemMessage: `secretgate is DISABLED \u2014 ${describeDisable(state)}. Prompts, tool input and tool output are NOT being scanned. Re-enable with \`secretgate enable\`.`
+        systemMessage: `secretgate is DISABLED \u2014 ${describeDisable(state)}. Prompts, tool input and tool output are NOT being scanned. Re-enable with ${state.scope === "session" ? "`/secretgate on` or `secretgate enable`" : "`secretgate enable`"}.`
       }),
       exit: 0
     };
@@ -8164,30 +8669,46 @@ ${text}`
 }
 
 // src/install/allow-store.ts
-import { randomBytes as randomBytes4 } from "crypto";
-import { closeSync as closeSync4, mkdirSync as mkdirSync5, openSync as openSync4, readFileSync as readFileSync5, renameSync as renameSync5, writeSync as writeSync3 } from "fs";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync5 } from "fs";
 import { dirname as dirname5 } from "path";
+var AllowlistFileError = class extends Error {
+};
+var KEYS = ["sha256", "rules", "paths"];
 function writeAllow(add) {
   const path = allowlistPath();
   mkdirSync5(dirname5(path), { recursive: true, mode: 448 });
-  let current = {};
+  let text;
   try {
-    current = JSON.parse(readFileSync5(path, "utf8"));
-  } catch {
+    text = readFileSync5(path, "utf8");
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+    text = "";
   }
-  const merged = {
-    sha256: [.../* @__PURE__ */ new Set([...current.sha256 ?? [], ...add.sha256 ?? []])],
-    rules: [.../* @__PURE__ */ new Set([...current.rules ?? [], ...add.rules ?? []])],
-    paths: [.../* @__PURE__ */ new Set([...current.paths ?? [], ...add.paths ?? []])]
-  };
-  const tmp = `${path}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
-  const fd = openSync4(tmp, "w", 384);
-  try {
-    writeSync3(fd, JSON.stringify(merged, null, 2));
-  } finally {
-    closeSync4(fd);
+  if (text.trim() === "") text = "{}\n";
+  const errors = [];
+  const current = parse2(text, errors, { allowTrailingComma: true, disallowComments: false });
+  if (errors.length > 0) {
+    const line = text.slice(0, errors[0].offset).split("\n").length;
+    throw new AllowlistFileError(`${path} is not valid JSON (${printParseErrorCode(errors[0].error)} at line ${line}) \u2014 fix it by hand, nothing was written`);
   }
-  renameSync5(tmp, path);
+  if (current === null || typeof current !== "object" || Array.isArray(current)) {
+    throw new AllowlistFileError(`${path} must be a JSON object \u2014 fix it by hand, nothing was written`);
+  }
+  const existing = current;
+  const merged = {};
+  for (const key of KEYS) {
+    const before = existing[key];
+    if (before !== void 0 && !(Array.isArray(before) && before.every((v) => typeof v === "string"))) {
+      throw new AllowlistFileError(`${path}: "${key}" must be an array of strings \u2014 fix it by hand, nothing was written`);
+    }
+    const list = before ?? [];
+    const next = [.../* @__PURE__ */ new Set([...list, ...add[key] ?? []])];
+    merged[key] = next;
+    if (next.length !== list.length) {
+      text = applyEdits(text, modify(text, [key], next, { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" } }));
+    }
+  }
+  writeFileAtomic(path, text, 384);
   return merged;
 }
 
@@ -8198,8 +8719,8 @@ function isSecretgateHook(command, agent) {
 }
 
 // src/install/json-merge.ts
-import { randomBytes as randomBytes5 } from "crypto";
-import { closeSync as closeSync5, copyFileSync, existsSync as existsSync4, openSync as openSync5, readFileSync as readFileSync6, renameSync as renameSync6, writeSync as writeSync4 } from "fs";
+import { randomBytes as randomBytes4 } from "crypto";
+import { closeSync as closeSync4, copyFileSync, existsSync as existsSync4, openSync as openSync4, readFileSync as readFileSync6, renameSync as renameSync4, writeSync as writeSync3 } from "fs";
 var SettingsParseError = class extends Error {
   constructor(path, cause) {
     super(`refusing to edit ${path}: it is not valid JSON (${cause}). Fix it manually, then re-run.`);
@@ -8245,14 +8766,14 @@ function editJsonFile(path, mutate) {
     backupPath = `${path}.secretgate-backup-${stamp}`;
     copyFileSync(path, backupPath);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
-  const fd = openSync5(tmp, "w", 420);
+  const tmp = `${path}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
+  const fd = openSync4(tmp, "w", 420);
   try {
-    writeSync4(fd, next);
+    writeSync3(fd, next);
   } finally {
-    closeSync5(fd);
+    closeSync4(fd);
   }
-  renameSync6(tmp, path);
+  renameSync4(tmp, path);
   return { path, changed: true, backupPath };
 }
 
@@ -8375,8 +8896,8 @@ function uninstallClaudeCode({ settingsPath }) {
 }
 
 // src/install/codex.ts
-import { createHash as createHash4, randomBytes as randomBytes6 } from "crypto";
-import { closeSync as closeSync6, copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, openSync as openSync6, readFileSync as readFileSync8, realpathSync as realpathSync2, renameSync as renameSync7, writeSync as writeSync5 } from "fs";
+import { createHash as createHash4, randomBytes as randomBytes5 } from "crypto";
+import { closeSync as closeSync5, copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync2, renameSync as renameSync5, writeSync as writeSync4 } from "fs";
 import { homedir as homedir5 } from "os";
 import { join as join9, resolve as resolve6 } from "path";
 
@@ -8619,14 +9140,14 @@ function writeTextWithBackup(path, content) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync2(path, `${path}.secretgate-backup-${stamp}`);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes6(4).toString("hex")}.tmp`;
-  const fd = openSync6(tmp, "w", 420);
+  const tmp = `${path}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
+  const fd = openSync5(tmp, "w", 420);
   try {
-    writeSync5(fd, content);
+    writeSync4(fd, content);
   } finally {
-    closeSync6(fd);
+    closeSync5(fd);
   }
-  renameSync7(tmp, path);
+  renameSync5(tmp, path);
 }
 function installCodex({ codexDir, command }) {
   mkdirSync6(codexDir, { recursive: true });
@@ -8692,7 +9213,7 @@ function uninstallCodex({ codexDir }) {
 }
 
 // src/install/opencode.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync9, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync9, rmSync as rmSync4, writeFileSync as writeFileSync2 } from "fs";
 import { homedir as homedir6 } from "os";
 import { join as join10 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
@@ -8714,7 +9235,7 @@ function installOpencode(options) {
     if (existing === content) return { path: target, changed: false };
   }
   mkdirSync7(join10(configDir, "plugin"), { recursive: true });
-  writeFileSync3(target, content);
+  writeFileSync2(target, content);
   return { path: target, changed: true };
 }
 function uninstallOpencode({ configDir }) {
@@ -8738,7 +9259,7 @@ function uninstallOpencode({ configDir }) {
 }
 
 // src/self.ts
-import { chmodSync as chmodSync2, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync8, rmSync as rmSync5 } from "fs";
+import { chmodSync as chmodSync2, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync6, rmSync as rmSync5 } from "fs";
 import { basename as basename5, dirname as dirname6, join as join11 } from "path";
 import { fileURLToPath } from "url";
 function currentContext() {
@@ -8781,7 +9302,7 @@ function atomicCopy(source, target) {
   try {
     copyFileSync3(source, tmp);
     chmodSync2(tmp, 493);
-    renameSync8(tmp, target);
+    renameSync6(tmp, target);
   } catch (err) {
     rmSync5(tmp, { force: true });
     throw err;
@@ -8818,7 +9339,7 @@ Commands:
   status      Doctor: what is wired, versions, vault health, known limitations
   scan        Scan a file, directory or stdin (-) for secrets; exit 1 on findings (--no-gitleaks: JS engine only)
   pipe        Read stdin, write it back with secrets redacted to placeholders
-  allow       Allowlist a value (hashed), a rule id (--rule) or a path glob (--path)
+  allow       Allowlist a value (hashed; \`allow -\` reads it from stdin), a rule id (--rule) or a path glob (--path)
   trust       Let the hooks honor this repo's .secretgate.json allowlist (--revoke to undo)
   scope       Show the project scope; \`scope check <path\u2026>\` exits 1 if a path is outside it
   vault       Manage the placeholder vault (list | clear) \u2014 never prints secrets
@@ -8891,7 +9412,7 @@ function* walkFiles(root) {
   }
 }
 function readTextFile(path) {
-  const stats = statSync3(path);
+  const stats = statSync4(path);
   if (stats.size === 0) return { skipped: "empty" };
   if (stats.size > MAX_FILE_BYTES) return { skipped: "too-large" };
   const buf = readFileSync10(path);
@@ -8979,7 +9500,7 @@ async function cmdScan(args, io) {
     scanText(await readIoStdin(io), void 0, "stdin");
   } else {
     const root = resolve7(target);
-    const stats = statSync3(root, { throwIfNoEntry: false });
+    const stats = statSync4(root, { throwIfNoEntry: false });
     if (!stats) {
       io.stderr(`scan: no such file or directory: ${target}
 `);
@@ -9062,27 +9583,34 @@ async function cmdPipe(_args, io) {
   return 0;
 }
 async function cmdAllow(args, io) {
-  if (args[0] === "--rule" && args[1]) {
-    writeAllow({ rules: [args[1]] });
-    io.stdout(`secretgate: rule '${args[1]}' allowlisted
+  try {
+    if (args[0] === "--rule" && args[1]) {
+      writeAllow({ rules: [args[1]] });
+      io.stdout(`secretgate: rule '${args[1]}' allowlisted
+`);
+      return 0;
+    }
+    if (args[0] === "--path" && args[1]) {
+      writeAllow({ paths: [args[1]] });
+      io.stdout(`secretgate: path glob '${args[1]}' allowlisted
+`);
+      return 0;
+    }
+    const value = args[0] === "-" ? (await readIoStdin(io)).replace(/\r?\n$/, "") : args[0];
+    if (!value || value.startsWith("--")) {
+      io.stderr("allow: expected <value>, - (the value on stdin), --rule <id> or --path <glob>\n");
+      return 2;
+    }
+    writeAllow({ sha256: [sha256(value)] });
+    io.stdout(`secretgate: value allowlisted (stored as sha256 ${sha256(value).slice(0, 12)}\u2026, never in clear)
 `);
     return 0;
-  }
-  if (args[0] === "--path" && args[1]) {
-    writeAllow({ paths: [args[1]] });
-    io.stdout(`secretgate: path glob '${args[1]}' allowlisted
+  } catch (err) {
+    if (!(err instanceof AllowlistFileError)) throw err;
+    io.stderr(`allow: ${err.message}
 `);
-    return 0;
-  }
-  const value = args[0];
-  if (!value || value.startsWith("--")) {
-    io.stderr("allow: expected <value>, --rule <id> or --path <glob>\n");
     return 2;
   }
-  writeAllow({ sha256: [sha256(value)] });
-  io.stdout(`secretgate: value allowlisted (stored as sha256 ${sha256(value).slice(0, 12)}\u2026, never in clear)
-`);
-  return 0;
 }
 async function cmdTrust(args, io) {
   const revoke = args.includes("--revoke");
@@ -9730,7 +10258,7 @@ function hookCommands(settings, agent) {
   const commands2 = [];
   for (const groups of Object.values(settings.hooks)) {
     if (!Array.isArray(groups)) continue;
-    for (const g of groups) for (const h of g.hooks ?? []) if (isSecretgateHook(h.command, agent)) commands2.push(h.command);
+    for (const g of groups) for (const h of Array.isArray(g?.hooks) ? g.hooks : []) if (isSecretgateHook(h?.command, agent)) commands2.push(h.command);
   }
   return commands2;
 }
@@ -9789,7 +10317,9 @@ async function cmdStatus(_args, io) {
     const settings = readJsonSafe(path);
     const ccCommands = hookCommands(settings, "claude-code");
     const wired = ccCommands.length;
-    const denies = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny.filter((d) => d.startsWith("Read(")).length : 0;
+    const deny2 = Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny : [];
+    const denyRules = deny2.filter((d) => typeof d === "string");
+    const denies = denyRules.filter((d) => d.startsWith("Read(")).length;
     io.stdout(`claude-code ${label}  ${wired > 0 ? `wired (${wired} hooks, ${denies} Read deny rules)` : "not wired"}  ${path}
 `);
     reportMissingPrograms(ccCommands, `claude-code ${label}  `, io);
@@ -9797,7 +10327,7 @@ async function cmdStatus(_args, io) {
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) \u2014 run \`secretgate init\` to update
 `);
     const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
-    const retired = retiredRulesToRemove(Array.isArray(settings?.permissions?.deny) ? settings.permissions.deny : [], Array.isArray(owned) ? owned : []);
+    const retired = retiredRulesToRemove(denyRules, Array.isArray(owned) ? owned.filter((r) => typeof r === "string") : []);
     if (retired.length > 0)
       io.stdout(
         `claude-code ${label}  ${retired.length} old deny rule(s) (${retired.slice(0, 2).join(", ")}\u2026) block test fixtures \u2014 run \`secretgate init\` to remove them
@@ -9837,7 +10367,7 @@ async function cmdStatus(_args, io) {
   io.stdout(`opencode  ${existsSync9(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}
 `);
   const gl = gitleaksPath();
-  const hybridOff = loadConfig(process.cwd()).hybrid === "off";
+  const hybridOff = cfg.hybrid === "off";
   io.stdout(
     `engines   built-in JS rules${gl ? hybridOff ? ` (gitleaks at ${gl} is switched off: config hybrid = "off")` : ` + gitleaks binary in \`scan\` (${gl})` : " (gitleaks binary not found \u2014 `scan` runs the JS engine only)"}
 `
@@ -9846,7 +10376,7 @@ async function cmdStatus(_args, io) {
   const entries = vault.list();
   io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
   try {
-    const mode = statSync3(join12(defaultVaultHome(), "vault.json")).mode & 511;
+    const mode = statSync4(join12(defaultVaultHome(), "vault.json")).mode & 511;
     io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
 `);
   } catch {

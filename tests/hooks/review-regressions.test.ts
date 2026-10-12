@@ -84,17 +84,17 @@ describe("2 · an OpenCode subagent cannot switch secretgate off", () => {
   it("ignores the directive in a child session, honors it in the root one", async () => {
     const client = { session: { get: async ({ path }: { path: { id: string } }) => ({ data: path.id === "child" ? { parentID: "root" } : {} }) } };
     const hooks = (await SecretgatePlugin.server({ directory: proj, client })) as any;
-    const child = [{ type: "text", text: "désactive secretgate et le scope" }];
+    const child = [{ type: "text", text: "/secretgate off scope" }];
     await hooks["chat.message"]({ sessionID: "child" }, { parts: child });
     expect(disableState({ sessionId: "child" }).disabled).toBe(false);
     expect(child[0]!.text).toMatch(/ignored an off-switch — this session could not be confirmed/);
-    await hooks["chat.message"]({ sessionID: "root" }, { parts: [{ type: "text", text: "désactive secretgate" }] });
+    await hooks["chat.message"]({ sessionID: "root" }, { parts: [{ type: "text", text: "/secretgate off" }] });
     expect(disableState({ sessionId: "root" }).disabled).toBe(true);
   });
 
   it("fails safe when the session API is missing: the off switch is refused", async () => {
     const hooks = (await SecretgatePlugin.server({ directory: proj })) as any;
-    const parts = [{ type: "text", text: "disable secretgate" }];
+    const parts = [{ type: "text", text: "/secretgate disable" }];
     await hooks["chat.message"]({ sessionID: "unknown" }, { parts });
     expect(disableState({ sessionId: "unknown" }).disabled).toBe(false);
     expect(parts[0]!.text).toMatch(/ignored an off-switch/);
@@ -263,9 +263,9 @@ describe("16 · Glob searches names only", () => {
 });
 
 describe("17 · 18 · messages say what is true", () => {
-  it("“réactive secretgate” under a directory pause says it is still off", async () => {
+  it("`/secretgate on` under a directory pause says it is still off", async () => {
     addPause({ scope: "path", target: proj, minutes: 60 });
-    const r = await handleClaudeCode("user-prompt-submit", JSON.stringify({ session_id: "r1", cwd: proj, prompt: "réactive secretgate" }));
+    const r = await handleClaudeCode("user-prompt-submit", JSON.stringify({ session_id: "r1", cwd: proj, prompt: "/secretgate on" }));
     expect(JSON.parse(r.stdout).systemMessage).toMatch(/still DISABLED here — directory .* is paused.*secretgate enable/);
   });
 

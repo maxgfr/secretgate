@@ -1,69 +1,62 @@
 import { describe, expect, it } from "vitest";
 import { promptDirective } from "../src/prompt-directive.js";
 
-describe("promptDirective — explicit instructions only", () => {
+describe("promptDirective — the skill invoked by name, on the first line", () => {
   it.each([
-    "désactive secretgate",
-    "Désactive secretgate pour cette session",
-    "desactive secretgate stp",
-    "disable secretgate",
-    "Please disable secretgate for this session.",
-    "turn off secretgate",
-    "secretgate off",
-    "coupe secretgate",
-    "désactive `secretgate`",
+    "/secretgate disable",
+    "/secretgate off",
+    "/secretgate pause",
+    "/secretgate stop",
+    "$secretgate disable",
+    "/SecretGate Off",
+    "/secretgate off.",
+    '"/secretgate disable"',
+    "  /secretgate off  ",
   ])("disables on %j", (prompt) => {
     expect(promptDirective(prompt)).toEqual({ action: "disable", liftScope: false });
   });
 
-  it("finds the directive on its own line of a longer prompt", () => {
-    expect(promptDirective("désactive secretgate\nensuite lis le fichier de config")).toEqual({ action: "disable", liftScope: false });
-  });
-
-  it.each([
-    "/secretgate disable",
-    "/secretgate désactive",
-    "/secretgate off",
-    "$secretgate disable",
-    "/secretgate desactiver",
-  ])("the skill invoked by name disables: %j", (prompt) => {
-    expect(promptDirective(prompt)).toEqual({ action: "disable", liftScope: false });
-  });
-
-  it("the skill form handles scope and enable too, and ignores its other commands", () => {
-    expect(promptDirective("/secretgate disable scope")).toEqual({ action: "disable", liftScope: true });
-    expect(promptDirective("/secretgate désactive --scope")).toEqual({ action: "disable", liftScope: true });
-    expect(promptDirective("/secretgate enable")).toEqual({ action: "enable" });
-    expect(promptDirective("$secretgate réactive")).toEqual({ action: "enable" });
-    expect(promptDirective('"/secretgate disable"')).toEqual({ action: "disable", liftScope: false });
-    expect(promptDirective("/secretgate status")).toBeUndefined();
-    expect(promptDirective("/secretgate install")).toBeUndefined();
-  });
-
   it("lifts the scope only when asked", () => {
-    expect(promptDirective("désactive secretgate et le scope")).toEqual({ action: "disable", liftScope: true });
-    expect(promptDirective("disable secretgate and the scope")).toEqual({ action: "disable", liftScope: true });
+    expect(promptDirective("/secretgate off scope")).toEqual({ action: "disable", liftScope: true });
+    expect(promptDirective("/secretgate disable --scope")).toEqual({ action: "disable", liftScope: true });
+    expect(promptDirective("$secretgate pause scope")).toEqual({ action: "disable", liftScope: true });
   });
 
-  it.each([
-    "réactive secretgate",
-    "reactive secretgate",
-    "enable secretgate",
-    "turn secretgate back on",
-    "secretgate on",
-    "re-enable secretgate",
-  ])("re-enables on %j", (prompt) => {
+  it.each(["/secretgate enable", "/secretgate on", "/secretgate resume", "$secretgate on"])("re-enables on %j", (prompt) => {
     expect(promptDirective(prompt)).toEqual({ action: "enable" });
   });
 
+  it("acts when the directive is the first non-empty line, whatever follows", () => {
+    expect(promptDirective("/secretgate off\nthen run the tests")).toEqual({ action: "disable", liftScope: false });
+    expect(promptDirective("\n\n  /secretgate on\r\nthanks")).toEqual({ action: "enable" });
+  });
+
   it.each([
-    "comment je fais pour désactiver secretgate ?",
-    "le test doit vérifier que disable secretgate marche bien",
-    "fix the bug where disable secretgate pauses the wrong session",
-    "désactive le linter",
-    "secretgate is great",
-    "",
-  ])("ignores discussion, not instruction: %j", (prompt) => {
+    "why does this fail?\n/secretgate off",
+    "here is the log:\n```\n/secretgate off\n```",
+    "> /secretgate off",
+    "please /secretgate off",
+    "/secretgate off now please",
+  ])("a directive anywhere but alone on the first line does nothing: %j", (prompt) => {
+    expect(promptDirective(prompt)).toBeUndefined();
+  });
+
+  it.each([
+    "désactive secretgate",
+    "désactive secretgate et le scope",
+    "disable secretgate",
+    "turn off secretgate",
+    "secretgate off",
+    "secretgate: off",
+    "réactive secretgate",
+    "enable secretgate",
+    "/secretgate désactive",
+    "$secretgate réactive",
+  ])("natural language no longer switches anything: %j", (prompt) => {
+    expect(promptDirective(prompt)).toBeUndefined();
+  });
+
+  it.each(["/secretgate status", "/secretgate install", "/secretgate", "secretgate is great", ""])("ignores other commands and prose: %j", (prompt) => {
     expect(promptDirective(prompt)).toBeUndefined();
   });
 });

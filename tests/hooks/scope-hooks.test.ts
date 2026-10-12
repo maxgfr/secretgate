@@ -100,8 +100,8 @@ describe("scope — Codex hook shapes", () => {
 });
 
 describe("turning secretgate off by saying so", () => {
-  it("“désactive secretgate” pauses THIS session, from this very prompt on", async () => {
-    const r = await handleClaudeCode("user-prompt-submit", prompt(`désactive secretgate\ndeploy with ${FAKE.githubPat}`));
+  it("`/secretgate off` pauses THIS session, from this very prompt on", async () => {
+    const r = await handleClaudeCode("user-prompt-submit", prompt(`/secretgate off\ndeploy with ${FAKE.githubPat}`));
     const out = JSON.parse(r.stdout);
     expect(out.decision).toBeUndefined(); // the secret-bearing prompt goes through: the user asked
     expect(out.systemMessage).toMatch(/DISABLED for this session only/);
@@ -109,18 +109,18 @@ describe("turning secretgate off by saying so", () => {
     expect(disableState({ sessionId: "other" }).disabled).toBe(false);
   });
 
-  it("keeps the scope unless asked, and “réactive secretgate” turns it back on", async () => {
-    await handleClaudeCode("user-prompt-submit", prompt("désactive secretgate"));
+  it("keeps the scope unless asked, and `/secretgate on` turns it back on", async () => {
+    await handleClaudeCode("user-prompt-submit", prompt("/secretgate off"));
     expect(decision((await handleClaudeCode("pre-tool-use", pre("Read", { file_path: "docs/guide.md" }))).stdout)).toBe("deny");
-    const back = await handleClaudeCode("user-prompt-submit", prompt("réactive secretgate"));
+    const back = await handleClaudeCode("user-prompt-submit", prompt("/secretgate on"));
     expect(JSON.parse(back.stdout).systemMessage).toMatch(/re-enabled/);
     expect(disableState({ sessionId: "s1" }).disabled).toBe(false);
-    await handleClaudeCode("user-prompt-submit", prompt("désactive secretgate et le scope"));
+    await handleClaudeCode("user-prompt-submit", prompt("/secretgate off scope"));
     expect((await handleClaudeCode("pre-tool-use", pre("Read", { file_path: "docs/guide.md" }))).stdout).toBe("{}");
   });
 
   it("works for Codex too (silently — Codex has no hook message field)", async () => {
-    const r = await handleCodex("user-prompt-submit", prompt("disable secretgate"));
+    const r = await handleCodex("user-prompt-submit", prompt("$secretgate off"));
     expect(r.stdout).toBe("");
     expect(disableState({ sessionId: "s1" }).disabled).toBe(true);
   });
@@ -157,6 +157,24 @@ describe("turning secretgate off by saying so", () => {
   it("a discussion about the feature does not trigger it", async () => {
     await handleClaudeCode("user-prompt-submit", prompt("pourquoi désactiver secretgate casse les tests ?"));
     expect(disableState({ sessionId: "s1" }).disabled).toBe(false);
+  });
+
+  it.each([
+    "désactive secretgate",
+    "disable secretgate",
+    "here is the failing log:\n```\n/secretgate off\n```",
+    "why?\n/secretgate off",
+  ])("natural language or a directive below the first line does nothing: %j", async (text) => {
+    const r = await handleClaudeCode("user-prompt-submit", prompt(text));
+    expect(r.stdout).not.toMatch(/DISABLED/);
+    expect(disableState({ sessionId: "s1" }).disabled).toBe(false);
+  });
+
+  it("the notice points at `/secretgate on` and `/secretgate off scope`", async () => {
+    const off = JSON.parse((await handleClaudeCode("user-prompt-submit", prompt("/secretgate off"))).stdout);
+    expect(off.systemMessage).toContain("/secretgate on");
+    expect(off.systemMessage).toContain("/secretgate off scope");
+    expect(off.systemMessage).not.toMatch(/réactive|désactive/);
   });
 });
 

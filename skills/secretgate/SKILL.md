@@ -64,7 +64,7 @@ config directory. These survive `brew upgrade` and eviction of the skill cache.
 
 Prefer a targeted exception: inline `# pragma: allowlist secret` or
 `gitleaks:allow` (honored by `scan`, not by the hooks), then `allow <value>`
-(stored as SHA-256), then `allow --path <glob>`. Disable a whole rule with
+(stored as SHA-256; `allow -` takes the value on stdin, out of shell history), then `allow --path <glob>`. Disable a whole rule with
 `allow --rule <id>` only when appropriate. Projects can add exceptions in
 `.secretgate.json`; `scan` always honors them, the hooks only after the user
 runs `trust` in that repository (again after each edit). OpenCode uses its
@@ -75,10 +75,11 @@ the user typed, not attached file content.
 
 ### Disable or enable through this skill
 
-When invoked as `/secretgate disable` (Codex: `$secretgate disable`; also
-`désactive`, `off`, `disable scope`) or `/secretgate enable` (`réactive`, `on`),
-the prompt hook has already applied it to this session before you read this.
-Do not run `disable` yourself.
+When invoked as `/secretgate off` (Codex: `$secretgate off`; also `disable`,
+`pause`, `stop`, and `off scope` / `disable --scope` to lift the project scope)
+or `/secretgate on` (`enable`, `resume`) as the first line of the prompt, the
+prompt hook has already applied it to this session before you read this. Do
+not run `disable` yourself.
 
 1. Run `node scripts/secretgate.mjs status` (read-only) and report what it says:
    the pause, its bound (until the session ends, 24 h at most), and whether the
@@ -89,9 +90,9 @@ Do not run `disable` yourself.
    Code asks the user to approve it; that is expected. On Codex/OpenCode it is
    refused, so tell the user to run it themselves (`! secretgate disable --session`).
 
-The same works without the skill: the user writes, on its own line,
-`désactive secretgate` (or `disable secretgate`), `réactive secretgate`, or
-`désactive secretgate et le scope`. The pause covers this session only, until it
+Only that form counts, and only on the prompt's first non-empty line: a
+sentence such as "disable secretgate", or the directive further down a prompt
+(a pasted log), switches nothing. The pause covers this session only, until it
 ends (24 h at most).
 
 From a terminal, use the narrowest requested scope:
@@ -105,7 +106,7 @@ From a terminal, use the narrowest requested scope:
 When you run `disable`, `allow`, `trust` or `uninstall` yourself, Claude Code
 asks the user to approve; Codex and OpenCode refuse. That is intended: turning
 the firewall off is the user's decision. Do not work around it. Ask the user
-to approve, to say `désactive secretgate`, or to run the command themselves.
+to approve, to type `/secretgate off`, or to run the command themselves.
 
 State lives under `~/.secretgate/` (or `SECRETGATE_HOME`), never in a repository's
 configuration. Restore, `scan` and `pipe` keep working while protection is paused.

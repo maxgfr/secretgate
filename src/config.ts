@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { UserAllowlist } from "./engine/allowlist.js";
+import { writeFileAtomic } from "./fs-atomic.js";
 import { canonical } from "./paths.js";
 import { defaultVaultHome } from "./vault/vault.js";
 
@@ -52,14 +53,17 @@ export interface SecretgateConfig {
 }
 
 // JSON with comments and trailing commas (JSONC), as editors write it — the
-// README examples are commented. Parsed by VS Code's own jsonc-parser.
-function readJsonFile(path: string): { ok: true; value: unknown } | { ok: false; missing: boolean; message: string } {
-  let raw: string;
+// README examples are commented. Parsed by VS Code's own jsonc-parser. The
+// hash is taken over the very bytes that were parsed: reading the file a
+// second time to hash it would let it change in between.
+export function readJsonFile(path: string): { ok: true; value: unknown; hash: string } | { ok: false; missing: boolean; message: string } {
+  let bytes: Buffer;
   try {
-    raw = readFileSync(path, "utf8");
+    bytes = readFileSync(path);
   } catch {
     return { ok: false, missing: true, message: "unreadable" };
   }
+  const raw = bytes.toString("utf8");
   const errors: ParseError[] = [];
   const value = parseJsonc(raw, errors, { allowTrailingComma: true, disallowComments: false });
   if (errors.length > 0) {
@@ -67,7 +71,22 @@ function readJsonFile(path: string): { ok: true; value: unknown } | { ok: false;
     const line = raw.slice(0, e.offset).split("\n").length;
     return { ok: false, missing: false, message: `not valid JSON: ${printParseErrorCode(e.error)} at line ${line}` };
   }
-  return { ok: true, value };
+  return { ok: true, value, hash: sha256Bytes(bytes) };
+}
+
+const sha256Bytes = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
+
+// A `.secretgate.json` on the way up that another account owns (one dropped
+// in /tmp, a shared parent directory) is not this user's policy: it could
+// otherwise block every tool call with a broken file, or impose a scope.
+// Windows reports no meaningful uid, so the check is POSIX-only.
+function ownedByCurrentUser(file: string): boolean {
+  if (typeof process.getuid !== "function") return true;
+  try {
+    return statSync(file).uid === process.getuid();
+  } catch {
+    return false;
+  }
 }
 
 const isStringArray = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
@@ -119,7 +138,7 @@ export function projectConfigFiles(cwd: string): string[] {
   for (;;) {
     if (dir === home) break;
     const file = join(dir, ".secretgate.json");
-    if (existsSync(file)) files.push(file);
+    if (existsSync(file) && ownedByCurrentUser(file)) files.push(file);
     if (existsSync(join(dir, ".git"))) break;
     const parent = dirname(dir);
     if (parent === dir) break;
@@ -159,7 +178,7 @@ export function loadConfig(cwd?: string): SecretgateConfig {
       // A cloned repository must not be able to switch detection off for
       // itself: its allowlist reaches the hooks only once the user trusted
       // this exact content. Scopes need no trust — they only restrict.
-      const targets = trust[canonical(file)] === fileHash(file) ? [merged, forScan] : [forScan];
+      const targets = trust[canonical(file)] === read.hash ? [merged, forScan] : [forScan];
       if (entries > 0 && targets.length === 1) untrusted.push(file);
       for (const t of targets) {
         t.sha256.push(...(list.sha256 ?? []));
@@ -191,7 +210,7 @@ function trustPath(): string {
 
 function fileHash(file: string): string | undefined {
   try {
-    return createHash("sha256").update(readFileSync(file)).digest("hex");
+    return sha256Bytes(readFileSync(file));
   } catch {
     return undefined;
   }
@@ -214,9 +233,7 @@ export function setTrust(files: string[], revoke = false): void {
     else trust[key] = hash;
   }
   mkdirSync(defaultVaultHome(), { recursive: true, mode: 0o700 });
-  const tmp = `${trustPath()}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ version: 1, files: trust }, null, 2), { mode: 0o600 });
-  renameSync(tmp, trustPath());
+  writeFileAtomic(trustPath(), JSON.stringify({ version: 1, files: trust }, null, 2), 0o600);
 }
 
 export function allowlistPath(): string {

@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 
 // src/config.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync3, writeFileSync } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, statSync as statSync2 } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 
@@ -905,6 +905,25 @@ function printParseErrorCode(code) {
   return "<unknown ParseErrorCode>";
 }
 
+// src/fs-atomic.ts
+import { randomBytes } from "crypto";
+import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
+function writeFileAtomic(path, content, mode = 420) {
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  const fd = openSync(tmp, "wx", mode);
+  try {
+    try {
+      writeSync(fd, content);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
 // src/paths.ts
 import { realpathSync } from "fs";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
@@ -1796,25 +1815,6 @@ import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, r
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
 
-// src/fs-atomic.ts
-import { randomBytes } from "crypto";
-import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
-function writeFileAtomic(path, content, mode = 420) {
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tmp, "wx", mode);
-  try {
-    try {
-      writeSync(fd, content);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(tmp, path);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-}
-
 // src/vault/placeholder.ts
 import { createHmac } from "crypto";
 function placeholderFor(secret, salt, hexLen = 12) {
@@ -2141,12 +2141,13 @@ function commandTouchesSensitivePath(command, allowlist, cwd = process.cwd()) {
 
 // src/config.ts
 function readJsonFile(path) {
-  let raw;
+  let bytes;
   try {
-    raw = readFileSync2(path, "utf8");
+    bytes = readFileSync2(path);
   } catch {
     return { ok: false, missing: true, message: "unreadable" };
   }
+  const raw = bytes.toString("utf8");
   const errors = [];
   const value = parse2(raw, errors, { allowTrailingComma: true, disallowComments: false });
   if (errors.length > 0) {
@@ -2154,7 +2155,16 @@ function readJsonFile(path) {
     const line = raw.slice(0, e.offset).split("\n").length;
     return { ok: false, missing: false, message: `not valid JSON: ${printParseErrorCode(e.error)} at line ${line}` };
   }
-  return { ok: true, value };
+  return { ok: true, value, hash: sha256Bytes(bytes) };
+}
+var sha256Bytes = (bytes) => createHash2("sha256").update(bytes).digest("hex");
+function ownedByCurrentUser(file) {
+  if (typeof process.getuid !== "function") return true;
+  try {
+    return statSync2(file).uid === process.getuid();
+  } catch {
+    return false;
+  }
 }
 var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
 function strings(v) {
@@ -2196,7 +2206,7 @@ function projectConfigFiles(cwd) {
   for (; ; ) {
     if (dir === home) break;
     const file = join4(dir, ".secretgate.json");
-    if (existsSync(file)) files.push(file);
+    if (existsSync(file) && ownedByCurrentUser(file)) files.push(file);
     if (existsSync(join4(dir, ".git"))) break;
     const parent = dirname3(dir);
     if (parent === dir) break;
@@ -2227,7 +2237,7 @@ function loadConfig(cwd) {
       const list = validateAllowlist(project.allowlist, "allowlist");
       const scope = validateScope(project.scope, canonical(dirname3(file)), file);
       const entries = (list.sha256?.length ?? 0) + (list.rules?.length ?? 0) + (list.paths?.length ?? 0);
-      const targets = trust[canonical(file)] === fileHash(file) ? [merged, forScan] : [forScan];
+      const targets = trust[canonical(file)] === read.hash ? [merged, forScan] : [forScan];
       if (entries > 0 && targets.length === 1) untrusted.push(file);
       for (const t of targets) {
         t.sha256.push(...list.sha256 ?? []);
@@ -2252,13 +2262,6 @@ function loadConfig(cwd) {
 function trustPath() {
   return join4(defaultVaultHome(), "trusted.json");
 }
-function fileHash(file) {
-  try {
-    return createHash2("sha256").update(readFileSync2(file)).digest("hex");
-  } catch {
-    return void 0;
-  }
-}
 function readTrust() {
   const read = readJsonFile(trustPath());
   if (!read.ok || !read.value || typeof read.value !== "object") return {};
@@ -2268,7 +2271,7 @@ function readTrust() {
 
 // src/disable.ts
 import { randomBytes as randomBytes3 } from "crypto";
-import { closeSync as closeSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync3, renameSync as renameSync4, writeSync as writeSync2 } from "fs";
+import { closeSync as closeSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync3, renameSync as renameSync3, writeSync as writeSync2 } from "fs";
 import { join as join5 } from "path";
 var NOT_DISABLED = { disabled: false };
 var SESSION_INDEX_MAX = 20;
@@ -2288,7 +2291,7 @@ function writeFileAtomic2(path, content, mode) {
   } finally {
     closeSync3(fd);
   }
-  renameSync4(tmp, path);
+  renameSync3(tmp, path);
 }
 function readJson(path) {
   try {
@@ -2413,7 +2416,7 @@ function describeDisable(state) {
 import { basename as basename4, resolve as resolve5 } from "path";
 
 // src/scope.ts
-import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync as statSync2 } from "fs";
+import { lstatSync as lstatSync2, readdirSync as readdirSync2, statSync as statSync3 } from "fs";
 import { homedir as homedir4, tmpdir } from "os";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute3, join as join6, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
 var isOutside = (rel) => rel === ".." || rel.startsWith(`..${sep2}`) || rel.startsWith("../") || isAbsolute3(rel);
@@ -2554,7 +2557,7 @@ function treeViolation(scope, dir) {
 }
 function isDirectory(abs) {
   try {
-    return statSync2(abs).isDirectory();
+    return statSync3(abs).isDirectory();
   } catch {
     return false;
   }
@@ -7655,31 +7658,15 @@ function extractToolCall(toolName, toolInput) {
 }
 
 // src/prompt-directive.ts
-var NAME = String.raw`[\`'"]?secretgate[\`'"]?`;
-var COURTESY = String.raw`(?:(?:stp|svp|please|pls|merci|thanks|now|maintenant|ok|okay)[\s,.!]*)*`;
-var TAIL = String.raw`(?:\s+(?:pour|for)\s+(?:cette|ce|this|la|the)\s+(?:session|run|conversation|conv))?(?:\s+(?:stp|svp|please|merci|thanks))?\s*[.!]*`;
-var SCOPE = String.raw`(?:\s+(?:et|and|\+|avec|with|,)\s*(?:le|la|the)?\s*(?:scope|p[ée]rim[èe]tre))?`;
-var DISABLE = new RegExp(
-  String.raw`^${COURTESY}(?:d[ée]sactiv(?:e|er|ez)|coupe(?:r|z)?|mets\s+en\s+pause|disable|turn\s+off|switch\s+off|pause)\s+(?:le\s+|la\s+|the\s+)?${NAME}(${SCOPE})${TAIL}$|^${COURTESY}(?:turn\s+|switch\s+)?${NAME}\s*:?\s*off${TAIL}$`,
-  "i"
-);
-var ENABLE = new RegExp(
-  String.raw`^${COURTESY}(?:r[ée]activ(?:e|er|ez)|rallume(?:r|z)?|enable|re-?enable|turn\s+(?:back\s+)?on|resume)\s+(?:le\s+|la\s+|the\s+)?${NAME}(?:\s+back\s+on)?${TAIL}$|^${COURTESY}(?:turn\s+|switch\s+)?${NAME}\s*:?\s*(?:back\s+)?on${TAIL}$`,
-  "i"
-);
-var SKILL_DISABLE = /^[/$]secretgate\s+(?:disable|off|pause|stop|d[ée]sactiv(?:e|er|ez)?|coupe)(\s+(?:--)?(?:scope|p[ée]rim[èe]tre)|\s+(?:et|and|\+)\s+(?:le\s+|la\s+|the\s+)?(?:scope|p[ée]rim[èe]tre))?\s*[.!]*$/i;
-var SKILL_ENABLE = /^[/$]secretgate\s+(?:enable|on|resume|r[ée]activ(?:e|er|ez)?|rallume)\s*[.!]*$/i;
+var SKILL_DISABLE = /^[/$]secretgate\s+(?:disable|off|pause|stop)(\s+(?:--)?scope)?\s*[.!]?$/i;
+var SKILL_ENABLE = /^[/$]secretgate\s+(?:enable|on|resume)\s*[.!]?$/i;
 function promptDirective(prompt) {
-  for (const raw of prompt.split(/\r?\n/)) {
-    const line = raw.trim().replace(/^(["'`])(.*)\1$/, "$2").trim();
-    if (line.length === 0 || line.length > 120) continue;
-    const skillOff = SKILL_DISABLE.exec(line);
-    if (skillOff) return { action: "disable", liftScope: Boolean(skillOff[1]) };
-    if (SKILL_ENABLE.test(line)) return { action: "enable" };
-    const off = DISABLE.exec(line);
-    if (off) return { action: "disable", liftScope: Boolean(off[1]) };
-    if (ENABLE.test(line)) return { action: "enable" };
-  }
+  const first = prompt.split(/\r?\n/).find((l) => l.trim() !== "");
+  if (first === void 0) return void 0;
+  const line = first.trim().replace(/^(["'`])(.*)\1$/, "$2").trim();
+  const off = SKILL_DISABLE.exec(line);
+  if (off) return { action: "disable", liftScope: Boolean(off[1]) };
+  if (SKILL_ENABLE.test(line)) return { action: "enable" };
   return void 0;
 }
 function applyPromptDirective(directive, sessionId, cwd) {
@@ -7698,8 +7685,8 @@ function applyPromptDirective(directive, sessionId, cwd) {
   addPause({ scope: "session", target: sessionId, minutes: null, cwd, lifetime: true, liftScope: directive.liftScope });
   return [
     "secretgate: DISABLED for this session only, at your request \u2014 prompts, tool input and tool output are no longer scanned until the session ends (24 h at most).",
-    directive.liftScope ? "The project scope is lifted too." : "A project scope, if any, stays enforced (say \u201Cd\xE9sactive secretgate et le scope\u201D to lift it too).",
-    "Say \u201Cr\xE9active secretgate\u201D to turn it back on. A new session is protected automatically."
+    directive.liftScope ? "The project scope is lifted too." : "A project scope, if any, stays enforced (type `/secretgate off scope` to lift it too).",
+    "Type `/secretgate on` to turn it back on. A new session is protected automatically."
   ].join(" ");
 }
 

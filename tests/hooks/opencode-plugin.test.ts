@@ -291,12 +291,20 @@ describe("scope + conversational off switch (OpenCode)", () => {
     expect(disableState({ sessionId: "o3" }).disabled).toBe(false);
   });
 
-  it("“désactive secretgate” pauses this session and tells the model", async () => {
-    const parts: any[] = [{ type: "text", text: `désactive secretgate\n${FAKE.githubPat}` }];
+  it("`/secretgate off` pauses this session and tells the model", async () => {
+    const parts: any[] = [{ type: "text", text: `/secretgate off\n${FAKE.githubPat}` }];
     await oc["chat.message"]!({ sessionID: "o2" }, { parts });
     expect(parts[0].text).toContain(FAKE.githubPat);
     expect(parts[0].text).toMatch(/DISABLED for this session only/);
     expect(disableState({ sessionId: "o2" }).disabled).toBe(true);
+    expect(parts[0].text).toContain("/secretgate on");
+  });
+
+  it("a directive pasted below the first line, or in prose, pauses nothing", async () => {
+    for (const text of ["log:\n/secretgate off", "désactive secretgate"]) {
+      await oc["chat.message"]!({ sessionID: "o4" }, { parts: [{ type: "text", text }] });
+      expect(disableState({ sessionId: "o4" }).disabled).toBe(false);
+    }
   });
 });
 

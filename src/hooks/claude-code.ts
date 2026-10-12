@@ -122,7 +122,7 @@ function disabledResult(event: string, input: Record<string, any> | undefined, s
     // enough to be impossible to forget, quiet enough to stay usable.
     return {
       stdout: JSON.stringify({
-        systemMessage: `secretgate is DISABLED — ${describeDisable(state)}. Prompts, tool input and tool output are NOT being scanned. Re-enable with \`secretgate enable\`.`,
+        systemMessage: `secretgate is DISABLED — ${describeDisable(state)}. Prompts, tool input and tool output are NOT being scanned. Re-enable with ${state.scope === "session" ? "`/secretgate on` or `secretgate enable`" : "`secretgate enable`"}.`,
       }),
       exit: 0,
     };
@@ -140,7 +140,7 @@ export async function handleClaudeCode(event: string, rawStdin: string, opts: { 
   // Parse best-effort so explicit pauses also apply to malformed events.
   const parsed = parseOrUndefined(rawStdin);
   try {
-    // "désactive secretgate" typed by the user pauses this session, and it
+    // `/secretgate off` typed by the user pauses this session, and it
     // takes effect for this very prompt.
     let notice: string | undefined;
     if (event === "user-prompt-submit") {

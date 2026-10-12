@@ -177,6 +177,36 @@ describe("secretgate allow + vault", () => {
     expect(await run(["scan", "-"], scanRun.io)).toBe(0);
   });
 
+  it("allow keeps a commented (JSONC) allowlist, comments included", async () => {
+    writeFileSync(join(home, "allowlist.json"), '{\n  // reviewed by security\n  "rules": ["generic-api-key"],\n}\n');
+    expect(await run(["allow", "--rule", "jwt"], capture().io)).toBe(0);
+    const after = readFileSync(join(home, "allowlist.json"), "utf8");
+    expect(after).toContain("// reviewed by security");
+    expect(after).toContain("generic-api-key");
+    expect(after).toContain("jwt");
+  });
+
+  it.each([
+    ['{ "rules": [', /not valid JSON/],
+    ['{ "rules": "abc" }', /"rules" must be an array of strings/],
+    ['["x"]', /must be a JSON object/],
+  ])("allow refuses to rewrite an unusable allowlist %j", async (content, why) => {
+    writeFileSync(join(home, "allowlist.json"), content);
+    const r = capture();
+    expect(await run(["allow", "--path", "x/**"], r.io)).toBe(2);
+    expect(r.errText()).toMatch(why);
+    expect(readFileSync(join(home, "allowlist.json"), "utf8")).toBe(content);
+  });
+
+  it("allow - reads the value from stdin, so it never lands in shell history or ps", async () => {
+    const allowRun = capture(`${FAKE.awsKeyId}\n`);
+    expect(await run(["allow", "-"], allowRun.io)).toBe(0);
+    expect(allowRun.text()).not.toContain(FAKE.awsKeyId);
+    expect(await run(["scan", "-"], capture(`key: ${FAKE.awsKeyId}`).io)).toBe(0);
+    const empty = capture("\n");
+    expect(await run(["allow", "-"], empty.io)).toBe(2);
+  });
+
   it("vault list shows placeholders and rules but never secrets; vault clear wipes", async () => {
     const pipeRun = capture(`t=${FAKE.githubPat}`);
     await run(["pipe"], pipeRun.io);
@@ -395,6 +425,18 @@ describe("secretgate status", () => {
     const lines = text().split("\n");
     expect(lines.findIndex((l) => l.includes("DISABLED"))).toBeLessThan(lines.findIndex((l) => l.includes("claude-code")));
     expect(text()).toContain("secretgate enable");
+  });
+
+  it("survives settings with non-string deny entries", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ permissions: { deny: [42, null, { x: 1 }, "Read(**/.env)"] }, hooks: { PreToolUse: [null, { hooks: "x" }, { hooks: [null] }] } }),
+    );
+    const { io } = capture();
+    expect(await run(["status"], io)).toBe(0);
   });
 
   it("names the env var when that is what is off", async () => {

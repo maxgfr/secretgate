@@ -145,12 +145,14 @@ Narrowest fix first:
 1. inline `# pragma: allowlist secret` (or `# gitleaks:allow`) on the line —
    honored by `secretgate scan`, **not** by the hooks: text on its way to the
    model (a fetched page, a tool result) could carry a forged pragma
-2. `secretgate allow <value>` — stored as SHA-256, never in clear
+2. `secretgate allow <value>` — stored as SHA-256, never in clear. `secretgate
+   allow -` reads the value from stdin instead, so it stays out of your shell
+   history and of `ps`
 3. `secretgate allow --path 'tests/fixtures/**'`
 4. `secretgate allow --rule <rule-id>` (last resort)
 5. one-off prompt bypass: include `[allow-secret]` in the prompt (it exempts
    what you typed, never content attached to the prompt)
-6. whole firewall off for one run: say "désactive secretgate" (see below)
+6. whole firewall off for one run: type `/secretgate off` (see below)
 
 Projects can commit shared entries in `.secretgate.json`:
 `{"allowlist": {"paths": ["testdata/**"]}}`. `secretgate scan` always honors
@@ -162,22 +164,23 @@ quietly switch detection off for itself. `secretgate status` lists untrusted fil
 ## Turning it off for one run
 
 Sometimes you *are* working on the credentials — debugging an auth flow, an
-incident, a fixtures repo. The quickest way is to **say so in the conversation**,
-on a line of its own:
+incident, a fixtures repo. The quickest way is to **invoke the skill by name**,
+as the first line of your prompt:
 
 ```
-désactive secretgate            (or: disable secretgate / secretgate off)
-désactive secretgate et le scope   (also lifts the project scope)
-réactive secretgate             (or: enable secretgate / secretgate on)
-/secretgate disable             the skill, by name (Codex: $secretgate disable)
-/secretgate disable scope       … also lifting the scope;  /secretgate enable to undo
+/secretgate off          (or disable, pause, stop — Codex: $secretgate off)
+/secretgate off scope    … also lifting the project scope (or: disable --scope)
+/secretgate on           back on (or enable, resume)
 ```
 
 That pauses **this session only**, from that very prompt on, until the session
 ends (24 h at most); a new conversation is protected again. Claude Code shows a
 confirmation; on OpenCode it is added to the prompt; Codex applies it silently
-(`secretgate status` shows it). Only prompts you submit are read, and only a
-line that *is* the instruction counts — "how do I disable secretgate?" does not.
+(`secretgate status` shows it). Only prompts you submit are read, and only their
+**first non-empty line**, which must be the directive and nothing else: the same
+words further down — a pasted log, a quoted block — do nothing, and there is no
+plain-language form ("disable secretgate" is just a sentence), since prose is
+what a model or a fetched page can write.
 The skill form is applied by the same prompt hook before the skill even loads,
 so the agent has nothing to run and nothing to approve; the skill then just
 confirms with `secretgate status`. `pnpm test:live` checks this on all three
@@ -198,7 +201,7 @@ If the **agent** runs `secretgate disable` (or `allow`, `trust`, `uninstall`,
 or changes `~/.secretgate/`, `.secretgate.json` or its own hook settings — with an
 editor, a redirection, `sed -i`, `perl -pi`, `dd of=`…),
 Claude Code asks you first; Codex and OpenCode cannot ask from a hook, so they
-refuse and tell you to run it yourself — or to say "désactive secretgate".
+refuse and tell you to run it yourself — or to type `/secretgate off`.
 
 `secretgate disable` with no flag pauses the **agent session** running in this
 directory — another session in the same repo stays protected. Run it from the
@@ -281,9 +284,8 @@ to the model. Declare it in the project's `.secretgate.json`:
   policy stays readable (`cat .secretgate.json`), and secretgate's own CLI
   (`secretgate scope`, `status`) always runs.
 - **A pause keeps the scope** (it switches off secret scanning, not the
-  boundary): lift it with `secretgate disable --scope`, `/secretgate disable
-  scope` or "désactive secretgate et le scope", or edit `.secretgate.json`
-  yourself.
+  boundary): lift it with `secretgate disable --scope` or `/secretgate off
+  scope`, or edit `.secretgate.json` yourself.
 - **An invalid `.secretgate.json`** (broken JSON, `"allow": "src/**"`, unknown
   keys in `scope`…) makes every tool call fail closed — except reading and
   editing that file (the edit asks for your approval) — until it is fixed: it
@@ -387,7 +389,7 @@ MIT — rule definitions derived from [gitleaks](https://github.com/gitleaks/git
 One `secretgate init` wires the hooks into Claude Code, Codex and
 OpenCode, and from then on every prompt, file read and tool result is
 scanned and redacted by the hooks — not by the model, and not on request.
-Turning the firewall off is saying "désactive secretgate", `secretgate disable`
+Turning the firewall off is typing `/secretgate off`, `secretgate disable`
 for a run, or removing the hooks; nothing about it depends on a skill being invoked.
 
 The shipped skill is also model-invocable, so the agent can reach

@@ -145,7 +145,7 @@ async function buildHooks(ctx: unknown) {
       recordSession(typeof sessionID === "string" ? sessionID : undefined, cwd);
       const parts = output?.parts;
       if (!Array.isArray(parts)) return;
-      // "désactive secretgate" typed by the user pauses this session. OpenCode
+      // `/secretgate off` typed by the user pauses this session. OpenCode
       // has no user-facing hook message, so the confirmation rides along in
       // the prompt for the model to relay.
       const said = parts.find(
