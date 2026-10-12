@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.7.0](https://github.com/maxgfr/secretgate/compare/v1.6.4...v1.7.0) (2026-10-12)
+
+
+### Features
+
+* **engine:** detect Groq, Replicate and xAI keys and Discord webhook URLs ([e497a3c](https://github.com/maxgfr/secretgate/commit/e497a3ce87667fa075cfdb403d83f5fc9bcd5876))
+
 ## [1.6.4](https://github.com/maxgfr/secretgate/compare/v1.6.3...v1.6.4) (2026-10-12)
 
 
