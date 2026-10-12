@@ -51,6 +51,21 @@ for (const name of ["secretgate.mjs", "secretgate-opencode.mjs"]) {
   else ok(`skill ${name} is byte-identical to the tested bundle`);
 }
 
+// One version everywhere: what `--version` prints, what the skill declares and
+// what the package is released as. sync-version.mjs keeps them in lockstep.
+const versions = {
+  "package.json": JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version,
+  "src/version.ts": /export const VERSION = "([^"]+)";/.exec(readFileSync(join(root, "src", "version.ts"), "utf8"))?.[1],
+  "SKILL.md metadata.version": existsSync(skillMd)
+    ? /^---\r?\n[\s\S]*?^[ \t]+version:[ \t]*(\S+)[ \t]*$[\s\S]*?^---/m.exec(readFileSync(skillMd, "utf8"))?.[1]
+    : undefined,
+};
+new Set(Object.values(versions)).size === 1 && versions["package.json"]
+  ? ok(`version ${versions["package.json"]} in package.json, src/version.ts and SKILL.md`)
+  : bad(`versions disagree: ${Object.entries(versions)
+      .map(([k, v]) => `${k}=${v ?? "missing"}`)
+      .join(", ")} — run \`node scripts/sync-version.mjs <version>\``);
+
 if (errors.length > 0) {
   console.error(`verify-skill-bundle: ${errors.length} problem(s)`);
   process.exit(1);

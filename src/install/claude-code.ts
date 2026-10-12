@@ -141,15 +141,19 @@ export function installClaudeCode({ settingsPath, command }: InstallOptions): Ed
     added.push(...CC_DENY_RULES.filter((r) => !deny.includes(r)));
     s.permissions.deny = [...deny, ...added];
   });
-  editJsonFile(ownershipPath, (state) => {
-    state.deny = [...new Set([...(previous.deny ?? []), ...added])].filter((r) => CC_DENY_RULES.includes(r));
-  });
+  editJsonFile(
+    ownershipPath,
+    (state) => {
+      state.deny = [...new Set([...(previous.deny ?? []), ...added])].filter((r) => CC_DENY_RULES.includes(r));
+    },
+    { latestBackupOnly: true },
+  );
   return report;
 }
 
 export function uninstallClaudeCode({ settingsPath }: { settingsPath: string }): EditReport {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
-  const owned: string[] = existsSync(ownershipPath) ? (JSON.parse(readFileSync(ownershipPath, "utf8")).deny ?? []) : [];
+  const recorded: string[] | undefined = existsSync(ownershipPath) ? (JSON.parse(readFileSync(ownershipPath, "utf8")).deny ?? []) : undefined;
   const report = editJsonFile(settingsPath, (s) => {
     if (s.hooks && typeof s.hooks === "object") {
       for (const { event } of EVENTS) {
@@ -157,9 +161,15 @@ export function uninstallClaudeCode({ settingsPath }: { settingsPath: string }):
         if (kept.length > 0) s.hooks[event] = kept;
         else delete s.hooks[event];
       }
+      // An object install created and uninstall emptied is not left behind.
+      if (Object.keys(s.hooks).length === 0) delete s.hooks;
     }
     if (Array.isArray(s.permissions?.deny)) {
-      s.permissions.deny = s.permissions.deny.filter((r: string) => !owned.includes(r));
+      // Without an ownership record (secretgate <= 1.4 kept none), a complete
+      // set of the rules those versions installed can only be ours.
+      const deny: unknown[] = s.permissions.deny;
+      const owned = recorded ?? (LEGACY_DENY_RULES.every((r) => deny.includes(r)) ? LEGACY_DENY_RULES : []);
+      s.permissions.deny = deny.filter((r) => !(typeof r === "string" && owned.includes(r)));
       if (s.permissions.deny.length === 0) delete s.permissions.deny;
       if (Object.keys(s.permissions).length === 0) delete s.permissions;
     }

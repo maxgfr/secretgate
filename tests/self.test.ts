@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   commandLine,
   hookProgram,
+  hookRuntime,
   pinSelf,
   pinnedBinaryPath,
   pinnedBundlePath,
@@ -79,16 +80,17 @@ describe("pinSelf / selfInvocation — binary form", () => {
 });
 
 describe("pinSelf / selfInvocation — bundle form", () => {
-  it("pins the .mjs and runs it through node, as before", () => {
+  it("pins the .mjs and runs it through the absolute node that installed it", () => {
     const bundle = join(dir, "secretgate.mjs");
     writeFileSync(bundle, 'const VERSION = "1.0.0";');
     const ctx: SelfContext = { modulePath: bundle, execPath: "/usr/bin/node", home };
-    expect(selfInvocation(ctx)).toEqual({ file: "node", args: [bundle] });
+    expect(selfInvocation(ctx)).toEqual({ file: "/usr/bin/node", args: [bundle] });
     const pinned = pinSelf(ctx);
-    expect(commandLine(pinned)).toBe(`node "${pinnedBundlePath(home)}"`);
+    // A GUI-launched agent may not have nvm's node on its PATH: no bare `node`.
+    expect(commandLine(pinned)).toBe(`"/usr/bin/node" "${pinnedBundlePath(home)}"`);
     expect(readFileSync(pinnedBundlePath(home), "utf8")).toBe('const VERSION = "1.0.0";');
     expect(existsSync(pinnedBinaryPath(home))).toBe(false);
-    expect(selfInvocation(ctx)).toEqual({ file: "node", args: [pinnedBundlePath(home)] });
+    expect(selfInvocation(ctx)).toEqual({ file: "/usr/bin/node", args: [pinnedBundlePath(home)] });
   });
 });
 
@@ -100,7 +102,7 @@ describe("runningInvocation", () => {
     const bin = binaryContext();
     expect(runningInvocation(bin)).toEqual({ file: bin.execPath, args: [] });
     const bundle = join(dir, "secretgate.mjs");
-    expect(runningInvocation({ modulePath: bundle, execPath: "/usr/bin/node", home })).toEqual({ file: "node", args: [bundle] });
+    expect(runningInvocation({ modulePath: bundle, execPath: "/usr/bin/node", home })).toEqual({ file: "/usr/bin/node", args: [bundle] });
   });
 });
 
@@ -110,5 +112,12 @@ describe("hookProgram", () => {
     expect(hookProgram('node "/h/.secretgate/bin/secretgate.mjs" hook codex post-tool-use')).toBe("/h/.secretgate/bin/secretgate.mjs");
     expect(hookProgram("node /h/secretgate.mjs hook codex post-tool-use")).toBe("/h/secretgate.mjs");
     expect(hookProgram("secretgate hook claude-code user-prompt-submit")).toBe("secretgate");
+    expect(hookProgram('"/opt/node/bin/node" "/h/.secretgate/bin/secretgate.mjs" hook codex post-tool-use')).toBe("/h/.secretgate/bin/secretgate.mjs");
+  });
+
+  it("names the runtime a wired hook command runs, when it has one", () => {
+    expect(hookRuntime('"/opt/node/bin/node" "/h/secretgate.mjs" hook codex post-tool-use')).toBe("/opt/node/bin/node");
+    expect(hookRuntime('node "/h/secretgate.mjs" hook codex post-tool-use')).toBe("node");
+    expect(hookRuntime('"/h/.secretgate/bin/secretgate" hook claude-code pre-tool-use')).toBeUndefined();
   });
 });

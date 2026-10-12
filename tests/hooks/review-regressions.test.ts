@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import SecretgatePlugin from "../../src/adapters/opencode-plugin.js";
-import { addPause, disableState } from "../../src/disable.js";
+import { addPause, disableState, sessionForCwd } from "../../src/disable.js";
 import { handleClaudeCode } from "../../src/hooks/claude-code.js";
 import { handleCodex } from "../../src/hooks/codex.js";
 
@@ -110,6 +110,14 @@ describe("2 · an OpenCode subagent cannot switch secretgate off", () => {
     expect(child[0]!.text).toMatch(/ignored an off-switch — this session could not be confirmed/);
     await hooks["chat.message"]({ sessionID: "root" }, { parts: [{ type: "text", text: "/secretgate off" }] });
     expect(disableState({ sessionId: "root" }).disabled).toBe(true);
+  });
+
+  it("a subagent's session is not recorded as the one `secretgate disable` pauses", async () => {
+    const client = { session: { get: async ({ path }: { path: { id: string } }) => ({ data: path.id === "child" ? { parentID: "root" } : {} }) } };
+    const hooks = (await SecretgatePlugin.server({ directory: proj, client })) as any;
+    await hooks["chat.message"]({ sessionID: "root" }, { parts: [{ type: "text", text: "hello" }] });
+    await hooks["chat.message"]({ sessionID: "child" }, { parts: [{ type: "text", text: "subtask" }] });
+    expect(sessionForCwd(proj)).toBe("root");
   });
 
   it("fails safe when the session API is missing: the off switch is refused", async () => {

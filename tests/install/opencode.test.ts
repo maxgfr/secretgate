@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SettingsParseError } from "../../src/install/json-merge.js";
 import { installOpencode, uninstallOpencode } from "../../src/install/opencode.js";
 
 let dir: string;
@@ -70,5 +71,30 @@ describe("uninstallOpencode", () => {
     writeFileSync(join(configDir(), "plugin", "secretgate.js"), "// someone else's plugin\n");
     uninstallOpencode({ configDir: configDir() });
     expect(existsSync(join(configDir(), "plugin", "secretgate.js"))).toBe(true);
+  });
+});
+
+describe("uninstallOpencode — JSONC configs", () => {
+  it.each(["opencode.json", "opencode.jsonc"])("edits %s in place, comments included", (name) => {
+    installOpencode({ configDir: configDir(), pluginSource: bundle });
+    const text = '{\n  // my theme\n  "theme": "dark",\n  "plugin": ["secretgate@1.0.0", "other"],\n}\n';
+    writeFileSync(join(configDir(), name), text);
+    expect(uninstallOpencode({ configDir: configDir() }).changed).toBe(true);
+    const after = readFileSync(join(configDir(), name), "utf8");
+    expect(after).toContain("// my theme");
+    expect(after).toContain('"other"');
+    expect(after).not.toContain("secretgate@");
+  });
+
+  it("removes nothing when a config cannot be parsed", () => {
+    installOpencode({ configDir: configDir(), pluginSource: bundle });
+    writeFileSync(join(configDir(), "opencode.json"), '{ "plugin": [');
+    expect(() => uninstallOpencode({ configDir: configDir() })).toThrow(SettingsParseError);
+    expect(existsSync(join(configDir(), "plugin", "secretgate.js"))).toBe(true);
+  });
+
+  it("writes the plugin file atomically (no temp file left behind)", () => {
+    installOpencode({ configDir: configDir(), pluginSource: bundle });
+    expect(readdirSync(join(configDir(), "plugin"))).toEqual(["secretgate.js"]);
   });
 });

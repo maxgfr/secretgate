@@ -1,6 +1,6 @@
-import { randomBytes } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeFileAtomic as writeAtomic } from "./fs-atomic.js";
 import { covers } from "./paths.js";
 import { defaultVaultHome } from "./vault/vault.js";
 
@@ -100,14 +100,7 @@ function sessionIndexPath(): string {
 // (open(mode) then write, never write-then-chmod), renamed into place.
 function writeFileAtomic(path: string, content: string, mode: number): void {
   mkdirSync(defaultVaultHome(), { recursive: true, mode: 0o700 });
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tmp, "w", mode);
-  try {
-    writeSync(fd, content);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
+  writeAtomic(path, content, mode);
 }
 
 function readJson<T>(path: string): T | undefined {

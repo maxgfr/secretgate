@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { installCodex, uninstallCodex } from "../../src/install/codex.js";
+import { parse as parseToml } from "smol-toml";
+import { codexWiringStatus, installCodex, uninstallCodex } from "../../src/install/codex.js";
 
 let dir: string;
 const command = "node /home/u/.secretgate/bin/secretgate.mjs";
@@ -172,5 +173,42 @@ command = "/usr/local/bin/node_repl"
     expect(toml).toContain('[mcp_servers.node_repl]\ncommand = "/usr/local/bin/node_repl"');
     expect(toml).toContain("secretgate managed");
     expect(toml).toMatch(/^hooks\s*=\s*true$/m);
+  });
+});
+
+describe("codex trust state stays in step with hooks.json", () => {
+  it("drops our trust entries left at positions another tool moved us from", () => {
+    installCodex({ codexDir: dir, command });
+    const hooksPath = join(dir, "hooks.json");
+    const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+    hooks.hooks.PreToolUse.unshift({ matcher: "x", hooks: [{ type: "command", command: "/foreign.sh" }] });
+    writeFileSync(hooksPath, JSON.stringify(hooks));
+    installCodex({ codexDir: dir, command });
+    const state = (parseToml(readFileSync(join(dir, "config.toml"), "utf8")) as { hooks: { state: Record<string, unknown> } }).hooks.state;
+    expect(Object.keys(state).filter((k) => k.includes(":pre_tool_use:"))).toEqual([`${hooksPath}:pre_tool_use:1:0`]);
+    expect(codexWiringStatus(dir)).toMatchObject({ trusted: 3, expected: 3, feature: true });
+  });
+
+  it("uninstall drops stale entries too, and keeps a foreign one", () => {
+    const hooksPath = join(dir, "hooks.json");
+    installCodex({ codexDir: dir, command });
+    const ours = readFileSync(join(dir, "config.toml"), "utf8");
+    const hash = /pre_tool_use:0:0"\]\ntrusted_hash = ("[^"]+")/.exec(ours)![1];
+    writeFileSync(
+      join(dir, "config.toml"),
+      `${ours}\n[hooks.state."${hooksPath}:pre_tool_use:7:0"]\ntrusted_hash = ${hash}\n\n[hooks.state."${hooksPath}:pre_tool_use:8:0"]\ntrusted_hash = "sha256:foreign"\n`,
+    );
+    uninstallCodex({ codexDir: dir });
+    const toml = readFileSync(join(dir, "config.toml"), "utf8");
+    expect(toml).not.toContain(":pre_tool_use:7:0");
+    expect(toml).toContain(":pre_tool_use:8:0");
+  });
+
+  it("installs over dotted feature keys and reports the gate as on", () => {
+    writeFileSync(join(dir, "config.toml"), 'model = "o4"\nfeatures.web_search = true\n');
+    installCodex({ codexDir: dir, command });
+    const toml = readFileSync(join(dir, "config.toml"), "utf8");
+    expect((parseToml(toml) as { features: unknown }).features).toEqual({ web_search: true, hooks: true });
+    expect(codexWiringStatus(dir).feature).toBe(true);
   });
 });

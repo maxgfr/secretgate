@@ -400,6 +400,61 @@ describe("OpenCode 2 setup — adapted events", () => {
     expect(JSON.stringify(paused.messages)).toContain(FAKE.githubPat);
   });
 
+  it("redacts @-attached file content in the user's context message (text part or text data URL)", async () => {
+    const asText = `Called the Read tool with the following input: {"filePath":"notes.md"}\nTOKEN=${FAKE.githubPat}`;
+    const dataUrl = `data:text/plain;base64,${Buffer.from(`TOKEN=${FAKE.slackBotToken}\n`).toString("base64")}`;
+    const image = `data:image/png;base64,${Buffer.from(FAKE.githubPat).toString("base64")}`;
+    const event = {
+      sessionID: "v2u",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "summarise the notes" },
+            { type: "text", text: asText },
+            { type: "file", uri: dataUrl, mime: "text/plain", name: "notes.md" },
+            { type: "file", uri: image, mime: "image/png", name: "logo.png" },
+          ],
+        },
+      ],
+    };
+    await registered.context!(event);
+    const parts = event.messages[0]!.content as any[];
+    expect(parts[1].text).toMatch(/TOKEN=SECRETGATE_/);
+    const decoded = Buffer.from(parts[2].uri.split(",")[1], "base64").toString("utf8");
+    expect(decoded).toMatch(/^TOKEN=SECRETGATE_/);
+    expect(parts[2].uri.startsWith("data:text/plain;base64,")).toBe(true);
+    expect(parts[3].uri).toBe(image); // binary attachments are left alone
+  });
+
+  it("keeps a prompt sent with [allow-secret] intact when it comes back through the context", async () => {
+    const typed = `[allow-secret] use ${FAKE.githubPat}`;
+    const prompt: any = { text: typed, files: [] };
+    await registered.prompt!({ sessionID: "v2w", prompt });
+    expect(prompt.text).toBe(typed);
+    const event = { sessionID: "v2w", messages: [{ role: "user", content: [{ type: "text", text: typed }] }] };
+    await registered.context!(event);
+    expect((event.messages[0]!.content[0] as any).text).toBe(typed);
+  });
+
+  it("scans a long history once, not on every turn", async () => {
+    const history = Array.from({ length: 40 }, (_, i) => ({
+      role: "tool",
+      content: [{ type: "tool-result", id: `t${i}`, name: "bash", result: { type: "text", value: `${"log line\n".repeat(6000)}T=${FAKE.githubPat}` } }],
+    }));
+    // ~2.4 MB of history, handed back whole on every turn.
+    const turn = () => ({ sessionID: "v2l", messages: structuredClone(history) });
+    let started = performance.now();
+    await registered.context!(turn());
+    const first = performance.now() - started;
+    const second = turn();
+    started = performance.now();
+    await expect(registered.context!(second)).resolves.toBeUndefined();
+    const again = performance.now() - started;
+    expect(JSON.stringify(second.messages)).not.toContain(FAKE.githubPat);
+    expect(again).toBeLessThan(Math.max(50, first / 3));
+  });
+
   it("refuses reading .env through the real read input ({path})", async () => {
     await expect(registered["execute.before"]!({ tool: "read", sessionID: "v2e", input: { path: ".env" } })).rejects.toThrow(/sensitive/);
     await expect(registered["execute.before"]!({ tool: "shell", sessionID: "v2e", input: { command: "cat ~/.ssh/id_rsa" } })).rejects.toThrow(/sensitive/);

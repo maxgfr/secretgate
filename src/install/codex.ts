@@ -1,10 +1,19 @@
-import { isSecretgateHook } from "./hook-marker.js";
-import { createHash, randomBytes } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { type EditReport, editJsonFile } from "./json-merge.js";
-import { disableHooksFeature, enableHooksFeature, removeHookTrust, upsertHookTrust, type HookTrustEntry } from "./toml-touch.js";
+import { writeFileAtomic } from "../fs-atomic.js";
+import { isSecretgateHook } from "./hook-marker.js";
+import { canonicalize, type EditReport, editJsonFile } from "./json-merge.js";
+import {
+  disableHooksFeature,
+  enableHooksFeature,
+  type HookTrustEntry,
+  hooksFeatureEnabled,
+  removeHookTrust,
+  staleHookTrustKeys,
+  upsertHookTrust,
+} from "./toml-touch.js";
 
 export function codexHome(): string {
   return process.env.CODEX_HOME ?? join(homedir(), ".codex");
@@ -38,18 +47,6 @@ const EVENT_KEY: Record<string, string> = {
   PreToolUse: "pre_tool_use",
   PostToolUse: "post_tool_use",
 };
-
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-        .map(([key, child]) => [key, canonicalize(child)]),
-    );
-  }
-  return value;
-}
 
 function hookTrustHash(event: string, group: HookGroup, handler: HookGroup["hooks"][number]): string {
   if (typeof handler.command !== "string") throw new Error("cannot trust a command hook without a command");
@@ -94,7 +91,7 @@ export function codexWiringStatus(codexDir: string): { trusted: number; expected
     const tables = config.split(/(?=^\s*\[)/m);
     const trusted = entries.filter((entry) =>
       tables.some((table) => {
-        const lines = table.trim().split("\n");
+        const lines = table.trim().split(/\r?\n/);
         return (
           lines[0]?.trim() === `[hooks.state.${JSON.stringify(entry.key)}]` &&
           lines.some((line) => line.trim() === `trusted_hash = ${JSON.stringify(entry.trustedHash)}`) &&
@@ -102,8 +99,7 @@ export function codexWiringStatus(codexDir: string): { trusted: number; expected
         );
       }),
     ).length;
-    const feature = tables.some((table) => /^\s*\[features\]\s*(?:#.*)?\n/.test(table) && /^\s*hooks\s*=\s*true\b/m.test(table));
-    return { trusted, expected: entries.length, feature };
+    return { trusted, expected: entries.length, feature: hooksFeatureEnabled(config) };
   } catch {
     return { trusted: 0, expected: 0, feature: false };
   }
@@ -114,14 +110,13 @@ function writeTextWithBackup(path: string, content: string): void {
     const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync(path, `${path}.secretgate-backup-${stamp}`);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tmp, "w", 0o644);
-  try {
-    writeSync(fd, content);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
+  writeFileAtomic(path, content, 0o644);
+}
+
+// Our trust entries for hooksPath at keys we no longer occupy (see staleHookTrustKeys).
+function withoutStaleTrust(content: string, hooksPath: string, ours: HookTrustEntry[], keep: string[]): ReturnType<typeof removeHookTrust> {
+  const stale = staleHookTrustKeys(content, hooksPath, new Set(ours.map((e) => e.trustedHash)), new Set(keep));
+  return removeHookTrust(content, stale);
 }
 
 export interface CodexInstallReport {
@@ -151,12 +146,20 @@ export function installCodex({ codexDir, command }: { codexDir: string; command:
   const legacyPath = resolve(codexDir, "hooks.json");
   const legacyKeys = legacyPath === hooksPath ? [] : ourHookTrustEntries(hooksPath).map((entry) => entry.key.replace(hooksPath, legacyPath));
   const migrated = removeHookTrust(featureEdit.content, legacyKeys);
-  const trustEdit = upsertHookTrust(migrated.content, ourHookTrustEntries(hooksPath));
-  if (featureEdit.changed || trustEdit.changed) writeTextWithBackup(configPath, trustEdit.content);
+  const ours = ourHookTrustEntries(hooksPath);
+  const pruned = withoutStaleTrust(
+    migrated.content,
+    hooksPath,
+    ours,
+    ours.map((e) => e.key),
+  );
+  const trustEdit = upsertHookTrust(pruned.content, ours);
+  const configChanged = featureEdit.changed || migrated.changed || pruned.changed || trustEdit.changed;
+  if (configChanged) writeTextWithBackup(configPath, trustEdit.content);
 
   return {
     hooks: hooksReport,
-    configChanged: featureEdit.changed || trustEdit.changed,
+    configChanged,
     guidance: [
       "codex: tool outputs are protected with PostToolUse block-and-replace: when a secret is found, Codex rejects the raw result and gives the model only Secretgate's locally redacted replacement.",
       'codex: for OS-enforced file protection, consider a permissions profile in config.toml, e.g.:\n  [permissions.secretgate.filesystem.":workspace_roots"]\n  "**/*.env" = "deny"\n  (not added automatically — it does not compose with legacy sandbox_mode settings).',
@@ -166,7 +169,8 @@ export function installCodex({ codexDir, command }: { codexDir: string; command:
 
 export function uninstallCodex({ codexDir }: { codexDir: string }): { hooks: EditReport; configChanged: boolean } {
   const hooksPath = existsSync(codexDir) ? join(realpathSync(codexDir), "hooks.json") : resolve(codexDir, "hooks.json");
-  const trustKeys = existsSync(hooksPath) ? ourHookTrustEntries(hooksPath).map((entry) => entry.key) : [];
+  const ours = existsSync(hooksPath) ? ourHookTrustEntries(hooksPath) : [];
+  const trustKeys = ours.map((entry) => entry.key);
   let hooksReport: EditReport = { path: hooksPath, changed: false };
   if (existsSync(hooksPath)) {
     hooksReport = editJsonFile(hooksPath, (root) => {
@@ -183,7 +187,10 @@ export function uninstallCodex({ codexDir }: { codexDir: string }): { hooks: Edi
   const configPath = join(codexDir, "config.toml");
   let configChanged = false;
   if (existsSync(configPath)) {
-    const trustEdit = removeHookTrust(readFileSync(configPath, "utf8"), trustKeys);
+    const current = readFileSync(configPath, "utf8");
+    const removed = removeHookTrust(current, trustKeys);
+    const stale = withoutStaleTrust(removed.content, hooksPath, ours, []);
+    const trustEdit = { content: stale.content, changed: removed.changed || stale.changed };
     const remaining = existsSync(hooksPath) ? JSON.parse(readFileSync(hooksPath, "utf8")).hooks : undefined;
     // The shared feature gate also enables foreign/inline/plugin hooks.
     const foreignHooks = remaining && Object.keys(remaining).length > 0;

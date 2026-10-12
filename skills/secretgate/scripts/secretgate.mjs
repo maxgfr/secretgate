@@ -2,9 +2,9 @@
 
 // src/cli.ts
 import { execFileSync } from "child_process";
-import { copyFileSync as copyFileSync4, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync11, readdirSync as readdirSync3, realpathSync as realpathSync4, rmSync as rmSync6, statSync as statSync4 } from "fs";
+import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync11, readdirSync as readdirSync4, realpathSync as realpathSync4, rmSync as rmSync7, statSync as statSync4 } from "fs";
 import { homedir as homedir8, tmpdir as tmpdir3 } from "os";
-import { dirname as dirname7, isAbsolute as isAbsolute4, join as join12, relative as relative4, resolve as resolve7 } from "path";
+import { delimiter as delimiter2, dirname as dirname8, isAbsolute as isAbsolute4, join as join13, relative as relative4, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config.ts
@@ -4063,8 +4063,7 @@ function describeScope(scope) {
 }
 
 // src/disable.ts
-import { randomBytes as randomBytes3 } from "crypto";
-import { closeSync as closeSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync4, renameSync as renameSync3, writeSync as writeSync2 } from "fs";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "fs";
 import { join as join6 } from "path";
 var NOT_DISABLED = { disabled: false };
 var SESSION_INDEX_MAX = 20;
@@ -4078,14 +4077,7 @@ function sessionIndexPath() {
 }
 function writeFileAtomic2(path, content, mode) {
   mkdirSync3(defaultVaultHome(), { recursive: true, mode: 448 });
-  const tmp = `${path}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
-  const fd = openSync3(tmp, "w", mode);
-  try {
-    writeSync2(fd, content);
-  } finally {
-    closeSync3(fd);
-  }
-  renameSync3(tmp, path);
+  writeFileAtomic(path, content, mode);
 }
 function readJson(path) {
   try {
@@ -9497,8 +9489,8 @@ function isSecretgateHook(command, agent) {
 }
 
 // src/install/json-merge.ts
-import { randomBytes as randomBytes4 } from "crypto";
-import { closeSync as closeSync4, copyFileSync, existsSync as existsSync4, openSync as openSync4, readFileSync as readFileSync7, renameSync as renameSync4, writeSync as writeSync3 } from "fs";
+import { copyFileSync, existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync3 } from "fs";
+import { basename as basename5, dirname as dirname6, join as join9 } from "path";
 var SettingsParseError = class extends Error {
   constructor(path, cause) {
     super(`refusing to edit ${path}: it is not valid JSON (${cause}). Fix it manually, then re-run.`);
@@ -9507,15 +9499,17 @@ var SettingsParseError = class extends Error {
   }
   path;
 };
-function stableStringify(v) {
-  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
-  if (v !== null && typeof v === "object") {
-    const entries = Object.entries(v).sort(([a], [b]) => a.localeCompare(b)).map(([k, inner]) => `${JSON.stringify(k)}:${stableStringify(inner)}`);
-    return `{${entries.join(",")}}`;
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, child]) => [key, canonicalize(child)])
+    );
   }
-  return JSON.stringify(v);
+  return value;
 }
-function editJsonFile(path, mutate) {
+var stableStringify = (v) => JSON.stringify(canonicalize(v));
+function editJsonFile(path, mutate, opts = {}) {
   let original;
   let obj = {};
   if (existsSync4(path)) {
@@ -9542,21 +9536,18 @@ function editJsonFile(path, mutate) {
   if (original !== void 0) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
     backupPath = `${path}.secretgate-backup-${stamp}`;
+    if (opts.latestBackupOnly) {
+      const prefix = `${basename5(path)}.secretgate-backup-`;
+      for (const f of readdirSync3(dirname6(path))) if (f.startsWith(prefix)) rmSync3(join9(dirname6(path), f), { force: true });
+    }
     copyFileSync(path, backupPath);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
-  const fd = openSync4(tmp, "w", 420);
-  try {
-    writeSync3(fd, next);
-  } finally {
-    closeSync4(fd);
-  }
-  renameSync4(tmp, path);
+  writeFileAtomic(path, next, 420);
   return { path, changed: true, backupPath };
 }
 
 // src/install/claude-code.ts
-import { existsSync as existsSync5, readFileSync as readFileSync8, rmSync as rmSync3 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync8, rmSync as rmSync4 } from "fs";
 var CC_DENY_RULES = [
   "Read(**/.env)",
   "Read(**/.env.local)",
@@ -9647,14 +9638,18 @@ function installClaudeCode({ settingsPath, command }) {
     added.push(...CC_DENY_RULES.filter((r) => !deny2.includes(r)));
     s.permissions.deny = [...deny2, ...added];
   });
-  editJsonFile(ownershipPath, (state) => {
-    state.deny = [.../* @__PURE__ */ new Set([...previous.deny ?? [], ...added])].filter((r) => CC_DENY_RULES.includes(r));
-  });
+  editJsonFile(
+    ownershipPath,
+    (state) => {
+      state.deny = [.../* @__PURE__ */ new Set([...previous.deny ?? [], ...added])].filter((r) => CC_DENY_RULES.includes(r));
+    },
+    { latestBackupOnly: true }
+  );
   return report;
 }
 function uninstallClaudeCode({ settingsPath }) {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
-  const owned = existsSync5(ownershipPath) ? JSON.parse(readFileSync8(ownershipPath, "utf8")).deny ?? [] : [];
+  const recorded = existsSync5(ownershipPath) ? JSON.parse(readFileSync8(ownershipPath, "utf8")).deny ?? [] : void 0;
   const report = editJsonFile(settingsPath, (s) => {
     if (s.hooks && typeof s.hooks === "object") {
       for (const { event } of EVENTS) {
@@ -9662,62 +9657,119 @@ function uninstallClaudeCode({ settingsPath }) {
         if (kept.length > 0) s.hooks[event] = kept;
         else delete s.hooks[event];
       }
+      if (Object.keys(s.hooks).length === 0) delete s.hooks;
     }
     if (Array.isArray(s.permissions?.deny)) {
-      s.permissions.deny = s.permissions.deny.filter((r) => !owned.includes(r));
+      const deny2 = s.permissions.deny;
+      const owned = recorded ?? (LEGACY_DENY_RULES.every((r) => deny2.includes(r)) ? LEGACY_DENY_RULES : []);
+      s.permissions.deny = deny2.filter((r) => !(typeof r === "string" && owned.includes(r)));
       if (s.permissions.deny.length === 0) delete s.permissions.deny;
       if (Object.keys(s.permissions).length === 0) delete s.permissions;
     }
   });
-  if (existsSync5(ownershipPath)) rmSync3(ownershipPath);
+  if (existsSync5(ownershipPath)) rmSync4(ownershipPath);
   return report;
 }
 
 // src/install/codex.ts
-import { createHash as createHash4, randomBytes as randomBytes5 } from "crypto";
-import { closeSync as closeSync5, copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, openSync as openSync5, readFileSync as readFileSync9, realpathSync as realpathSync2, renameSync as renameSync5, writeSync as writeSync4 } from "fs";
+import { createHash as createHash4 } from "crypto";
+import { copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync2 } from "fs";
 import { homedir as homedir6 } from "os";
-import { join as join9, resolve as resolve6 } from "path";
+import { join as join10, resolve as resolve6 } from "path";
 
 // src/install/toml-touch.ts
 var BLOCK_START = "# >>> secretgate managed >>>";
 var BLOCK_END = "# <<< secretgate managed <<<";
 var OUR_LINE = "hooks = true # secretgate";
+var OUR_DOTTED = "features.hooks = true # secretgate";
+var INLINE_MARK = "# secretgate: hooks";
 var MANUAL_SNIPPET = `[features]
 hooks = true`;
+var FEATURES_HEADER = /^\s*\[\s*features\s*\]\s*(?:#.*)?$/;
+var TABLE_HEADER = /^\s*\[/;
+var ROOT_DOTTED = /^\s*(?:features|"features")\s*\.\s*([A-Za-z0-9_-]+|"[^"]*")\s*=\s*(.*)$/;
+var ROOT_INLINE = /^(\s*(?:features|"features")\s*=\s*\{)(.*)\}\s*(#.*)?$/;
+var HOOKS_KEY = /(?:^|,)\s*hooks\s*=\s*(\S+?)\s*(?:,|$)/;
+function splitLines(content) {
+  return { lines: content.split(/\r?\n/), eol: content.includes("\r\n") ? "\r\n" : "\n" };
+}
 function featuresTableRange(lines) {
-  const start = lines.findIndex((l) => /^\s*\[features\]\s*(#.*)?$/.test(l));
+  const start = lines.findIndex((l) => FEATURES_HEADER.test(l));
   if (start === -1) return void 0;
   let end = lines.length;
   for (let i = start + 1; i < lines.length; i++) {
-    if (/^\s*\[/.test(lines[i])) {
+    if (TABLE_HEADER.test(lines[i])) {
       end = i;
       break;
     }
   }
   return { start, end };
 }
+function rootEnd(lines) {
+  const i = lines.findIndex((l) => TABLE_HEADER.test(l));
+  return i === -1 ? lines.length : i;
+}
+var unquote2 = (k) => k.startsWith('"') ? k.slice(1, -1) : k;
+function refuseValue(value, snippet) {
+  if (/^false\b/.test(value)) throw new Error(`config.toml sets 'hooks = false' explicitly \u2014 not overriding it. Enable hooks manually:
+${snippet}`);
+  throw new Error(`config.toml has an unrecognized 'hooks =' feature setting \u2014 edit it manually:
+${snippet}`);
+}
 function enableHooksFeature(content) {
-  const lines = content.split("\n");
+  const { lines, eol } = splitLines(content);
   const range = featuresTableRange(lines);
   if (range) {
     const table = lines.slice(range.start + 1, range.end);
     if (table.some((l) => /^\s*hooks\s*=\s*true\b/.test(l))) return { content, changed: false };
-    if (table.some((l) => /^\s*hooks\s*=\s*false\b/.test(l))) {
-      throw new Error(`config.toml sets 'hooks = false' explicitly \u2014 not overriding it. Enable hooks manually:
-${MANUAL_SNIPPET}`);
-    }
-    if (table.some((l) => /^\s*hooks\s*=/.test(l))) {
-      throw new Error(`config.toml has an unrecognized 'hooks =' setting under [features] \u2014 edit it manually:
-${MANUAL_SNIPPET}`);
-    }
+    if (table.some((l) => /^\s*hooks\s*=\s*false\b/.test(l))) refuseValue("false", MANUAL_SNIPPET);
+    if (table.some((l) => /^\s*hooks\s*=/.test(l))) refuseValue("?", MANUAL_SNIPPET);
     const next = [...lines.slice(0, range.start + 1), OUR_LINE, ...lines.slice(range.start + 1)];
-    return { content: next.join("\n"), changed: true };
+    return { content: next.join(eol), changed: true };
   }
-  const block = [BLOCK_START, "[features]", "hooks = true", BLOCK_END, ""].join("\n");
-  const base = content === "" || content.endsWith("\n") ? content : `${content}
-`;
-  return { content: `${base}${base === "" ? "" : "\n"}${block}`, changed: true };
+  const root = lines.slice(0, rootEnd(lines));
+  const dotted = root.map((l, i) => ({ i, m: ROOT_DOTTED.exec(l) })).filter((d) => d.m);
+  if (dotted.length > 0) {
+    const hooks = dotted.find((d) => unquote2(d.m[1]) === "hooks");
+    if (hooks) {
+      if (/^true\b/.test(hooks.m[2])) return { content, changed: false };
+      refuseValue(hooks.m[2], "features.hooks = true");
+    }
+    const last = dotted[dotted.length - 1].i;
+    return { content: [...lines.slice(0, last + 1), OUR_DOTTED, ...lines.slice(last + 1)].join(eol), changed: true };
+  }
+  const inlineAt = root.findIndex((l) => ROOT_INLINE.test(l));
+  if (inlineAt !== -1) {
+    const [, head, body, comment] = ROOT_INLINE.exec(lines[inlineAt]);
+    const hooks = HOOKS_KEY.exec(body);
+    if (hooks) {
+      if (/^true$/.test(hooks[1])) return { content, changed: false };
+      refuseValue(hooks[1], "features = { \u2026, hooks = true }");
+    }
+    if (comment !== void 0) {
+      throw new Error(
+        `config.toml declares features as a commented inline table \u2014 add hooks to it manually:
+${lines[inlineAt].replace(/\}\s*#.*$/, "")}${body.trim() ? ", " : ""}hooks = true }`
+      );
+    }
+    const items = body.trim();
+    lines[inlineAt] = `${head} ${items}${items ? ", " : ""}hooks = true } ${INLINE_MARK}`;
+    return { content: lines.join(eol), changed: true };
+  }
+  const block = [BLOCK_START, "[features]", "hooks = true", BLOCK_END, ""].join(eol);
+  const base = content === "" || content.endsWith("\n") ? content : `${content}${eol}`;
+  return { content: `${base}${base === "" ? "" : eol}${block}`, changed: true };
+}
+function hooksFeatureEnabled(content) {
+  const { lines } = splitLines(content);
+  const range = featuresTableRange(lines);
+  if (range && lines.slice(range.start + 1, range.end).some((l) => /^\s*hooks\s*=\s*true\b/.test(l))) return true;
+  const root = lines.slice(0, rootEnd(lines));
+  if (root.some((l) => /^\s*(?:features|"features")\s*\.\s*(?:hooks|"hooks")\s*=\s*true\b/.test(l))) return true;
+  return root.some((l) => {
+    const m = ROOT_INLINE.exec(l);
+    return m !== null && HOOKS_KEY.exec(m[2])?.[1] === "true";
+  });
 }
 function removeLegacyHookLine(lines) {
   const range = featuresTableRange(lines);
@@ -9732,8 +9784,7 @@ function removeLegacyHookLine(lines) {
   if (!tableIsEmpty) return withoutHook;
   return [...withoutHook.slice(0, updatedRange.start), ...withoutHook.slice(updatedRange.end)];
 }
-function removeManagedBlocks(content) {
-  const lines = content.split("\n");
+function removeManagedBlocks(lines) {
   const kept = [];
   let changed = false;
   for (let i = 0; i < lines.length; i++) {
@@ -9750,19 +9801,28 @@ function removeManagedBlocks(content) {
     changed = true;
     i = end;
   }
-  return { content: changed ? kept.join("\n") : content, changed };
+  return { lines: changed ? kept : lines, changed };
 }
 function disableHooksFeature(content) {
-  const managed = removeManagedBlocks(content);
+  const { lines, eol } = splitLines(content);
+  const managed = removeManagedBlocks(lines);
   let changed = managed.changed;
-  let out = managed.content;
-  const lines = out.split("\n");
-  const kept = lines.filter((l) => l.trim() !== OUR_LINE);
-  if (kept.length !== lines.length) {
-    out = kept.join("\n");
-    changed = true;
+  const kept = [];
+  for (const line of managed.lines) {
+    if (line.trim() === OUR_LINE || line.trim() === OUR_DOTTED) {
+      changed = true;
+      continue;
+    }
+    const m = ROOT_INLINE.exec(line);
+    if (m && m[3]?.trim() === INLINE_MARK) {
+      const items = m[2].split(",").map((s) => s.trim()).filter((s) => s !== "" && !/^hooks\s*=\s*true$/.test(s));
+      kept.push(`${m[1]} ${items.join(", ")}${items.length > 0 ? " " : ""}}`);
+      changed = true;
+      continue;
+    }
+    kept.push(line);
   }
-  return { content: changed ? out.replace(/\n{3,}/g, "\n\n") : content, changed };
+  return { content: changed ? kept.join(eol).replace(eol === "\r\n" ? /(?:\r\n){3,}/g : /\n{3,}/g, eol + eol) : content, changed };
 }
 function hookStateHeader(key) {
   return `[hooks.state.${JSON.stringify(key)}]`;
@@ -9772,7 +9832,7 @@ function exactTableRange(lines, header) {
   if (start === -1) return void 0;
   let end = lines.length;
   for (let index = start + 1; index < lines.length; index++) {
-    if (/^\s*\[/.test(lines[index])) {
+    if (TABLE_HEADER.test(lines[index])) {
       end = index;
       break;
     }
@@ -9780,43 +9840,42 @@ function exactTableRange(lines, header) {
   return { start, end };
 }
 function upsertHookTrust(content, entries) {
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
   let out = content;
   let changed = false;
   for (const entry of entries) {
     const header = hookStateHeader(entry.key);
     const trustedLine = `trusted_hash = ${JSON.stringify(entry.trustedHash)}`;
-    const lines = out.split("\n");
+    const lines = out.split(/\r?\n/);
     const range = exactTableRange(lines, header);
     if (!range) {
-      const base = out === "" || out.endsWith("\n") ? out : `${out}
-`;
-      out = `${base}${base === "" ? "" : "\n"}${header}
-${trustedLine}
-`;
+      const base = out === "" || out.endsWith("\n") ? out : `${out}${eol}`;
+      out = `${base}${base === "" ? "" : eol}${header}${eol}${trustedLine}${eol}`;
       changed = true;
       continue;
     }
     const trustedOffset = lines.slice(range.start + 1, range.end).findIndex((line) => /^\s*trusted_hash\s*=/.test(line));
     if (trustedOffset === -1) {
       lines.splice(range.start + 1, 0, trustedLine);
-      out = lines.join("\n");
+      out = lines.join(eol);
       changed = true;
       continue;
     }
     const trustedIndex = range.start + 1 + trustedOffset;
-    if (lines[trustedIndex] !== trustedLine) {
+    if (lines[trustedIndex].trim() !== trustedLine) {
       lines[trustedIndex] = trustedLine;
-      out = lines.join("\n");
+      out = lines.join(eol);
       changed = true;
     }
   }
   return { content: out, changed };
 }
 function removeHookTrust(content, keys) {
+  const eol = content.includes("\r\n") ? "\r\n" : "\n";
   let out = content;
   let changed = false;
   for (const key of keys) {
-    const lines = out.split("\n");
+    const lines = out.split(/\r?\n/);
     const range = exactTableRange(lines, hookStateHeader(key));
     if (!range) continue;
     const body = lines.slice(range.start + 1, range.end);
@@ -9828,15 +9887,35 @@ function removeHookTrust(content, keys) {
     } else {
       lines.splice(range.start, range.end - range.start);
     }
-    out = lines.join("\n").replace(/\n{3,}/g, "\n\n");
+    out = lines.join(eol).replace(eol === "\r\n" ? /(?:\r\n){3,}/g : /\n{3,}/g, eol + eol);
     changed = true;
   }
   return { content: out, changed };
 }
+function staleHookTrustKeys(content, hooksPath, hashes, keep) {
+  const lines = content.split(/\r?\n/);
+  const stale = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = /^\s*\[hooks\.state\.("(?:[^"\\]|\\.)*")\]\s*$/.exec(lines[i]);
+    if (!m) continue;
+    let key;
+    try {
+      key = JSON.parse(m[1]);
+    } catch {
+      continue;
+    }
+    if (!key.startsWith(`${hooksPath}:`) || keep.has(key)) continue;
+    for (let j = i + 1; j < lines.length && !TABLE_HEADER.test(lines[j]); j++) {
+      const h = /^\s*trusted_hash\s*=\s*("(?:[^"\\]|\\.)*")/.exec(lines[j]);
+      if (h && hashes.has(JSON.parse(h[1]))) stale.push(key);
+    }
+  }
+  return stale;
+}
 
 // src/install/codex.ts
 function codexHome() {
-  return process.env.CODEX_HOME ?? join9(homedir6(), ".codex");
+  return process.env.CODEX_HOME ?? join10(homedir6(), ".codex");
 }
 function withoutOurGroups2(groups) {
   if (!Array.isArray(groups)) return [];
@@ -9853,15 +9932,6 @@ var EVENT_KEY = {
   PreToolUse: "pre_tool_use",
   PostToolUse: "post_tool_use"
 };
-function canonicalize(value) {
-  if (Array.isArray(value)) return value.map(canonicalize);
-  if (value && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, child]) => [key, canonicalize(child)])
-    );
-  }
-  return value;
-}
 function hookTrustHash(event, group, handler) {
   if (typeof handler.command !== "string") throw new Error("cannot trust a command hook without a command");
   const normalizedHandler = {
@@ -9897,18 +9967,17 @@ function ourHookTrustEntries(hooksPath) {
 }
 function codexWiringStatus(codexDir) {
   try {
-    const hooksPath = join9(realpathSync2(codexDir), "hooks.json");
-    const config = readFileSync9(join9(codexDir, "config.toml"), "utf8");
+    const hooksPath = join10(realpathSync2(codexDir), "hooks.json");
+    const config = readFileSync9(join10(codexDir, "config.toml"), "utf8");
     const entries = ourHookTrustEntries(hooksPath);
     const tables = config.split(/(?=^\s*\[)/m);
     const trusted = entries.filter(
       (entry) => tables.some((table) => {
-        const lines = table.trim().split("\n");
+        const lines = table.trim().split(/\r?\n/);
         return lines[0]?.trim() === `[hooks.state.${JSON.stringify(entry.key)}]` && lines.some((line) => line.trim() === `trusted_hash = ${JSON.stringify(entry.trustedHash)}`) && !lines.some((line) => /^\s*enabled\s*=\s*false\b/.test(line));
       })
     ).length;
-    const feature = tables.some((table) => /^\s*\[features\]\s*(?:#.*)?\n/.test(table) && /^\s*hooks\s*=\s*true\b/m.test(table));
-    return { trusted, expected: entries.length, feature };
+    return { trusted, expected: entries.length, feature: hooksFeatureEnabled(config) };
   } catch {
     return { trusted: 0, expected: 0, feature: false };
   }
@@ -9918,18 +9987,15 @@ function writeTextWithBackup(path, content) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync2(path, `${path}.secretgate-backup-${stamp}`);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
-  const fd = openSync5(tmp, "w", 420);
-  try {
-    writeSync4(fd, content);
-  } finally {
-    closeSync5(fd);
-  }
-  renameSync5(tmp, path);
+  writeFileAtomic(path, content, 420);
+}
+function withoutStaleTrust(content, hooksPath, ours, keep) {
+  const stale = staleHookTrustKeys(content, hooksPath, new Set(ours.map((e) => e.trustedHash)), new Set(keep));
+  return removeHookTrust(content, stale);
 }
 function installCodex({ codexDir, command }) {
   mkdirSync6(codexDir, { recursive: true });
-  const hooksPath = join9(realpathSync2(codexDir), "hooks.json");
+  const hooksPath = join10(realpathSync2(codexDir), "hooks.json");
   const hooksReport = editJsonFile(hooksPath, (root) => {
     root.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS2) {
@@ -9941,17 +10007,25 @@ function installCodex({ codexDir, command }) {
       root.hooks[event] = [...kept, group];
     }
   });
-  const configPath = join9(codexDir, "config.toml");
+  const configPath = join10(codexDir, "config.toml");
   const current = existsSync6(configPath) ? readFileSync9(configPath, "utf8") : "";
   const featureEdit = enableHooksFeature(current);
   const legacyPath = resolve6(codexDir, "hooks.json");
   const legacyKeys = legacyPath === hooksPath ? [] : ourHookTrustEntries(hooksPath).map((entry) => entry.key.replace(hooksPath, legacyPath));
   const migrated = removeHookTrust(featureEdit.content, legacyKeys);
-  const trustEdit = upsertHookTrust(migrated.content, ourHookTrustEntries(hooksPath));
-  if (featureEdit.changed || trustEdit.changed) writeTextWithBackup(configPath, trustEdit.content);
+  const ours = ourHookTrustEntries(hooksPath);
+  const pruned = withoutStaleTrust(
+    migrated.content,
+    hooksPath,
+    ours,
+    ours.map((e) => e.key)
+  );
+  const trustEdit = upsertHookTrust(pruned.content, ours);
+  const configChanged = featureEdit.changed || migrated.changed || pruned.changed || trustEdit.changed;
+  if (configChanged) writeTextWithBackup(configPath, trustEdit.content);
   return {
     hooks: hooksReport,
-    configChanged: featureEdit.changed || trustEdit.changed,
+    configChanged,
     guidance: [
       "codex: tool outputs are protected with PostToolUse block-and-replace: when a secret is found, Codex rejects the raw result and gives the model only Secretgate's locally redacted replacement.",
       'codex: for OS-enforced file protection, consider a permissions profile in config.toml, e.g.:\n  [permissions.secretgate.filesystem.":workspace_roots"]\n  "**/*.env" = "deny"\n  (not added automatically \u2014 it does not compose with legacy sandbox_mode settings).'
@@ -9959,8 +10033,9 @@ function installCodex({ codexDir, command }) {
   };
 }
 function uninstallCodex({ codexDir }) {
-  const hooksPath = existsSync6(codexDir) ? join9(realpathSync2(codexDir), "hooks.json") : resolve6(codexDir, "hooks.json");
-  const trustKeys = existsSync6(hooksPath) ? ourHookTrustEntries(hooksPath).map((entry) => entry.key) : [];
+  const hooksPath = existsSync6(codexDir) ? join10(realpathSync2(codexDir), "hooks.json") : resolve6(codexDir, "hooks.json");
+  const ours = existsSync6(hooksPath) ? ourHookTrustEntries(hooksPath) : [];
+  const trustKeys = ours.map((entry) => entry.key);
   let hooksReport = { path: hooksPath, changed: false };
   if (existsSync6(hooksPath)) {
     hooksReport = editJsonFile(hooksPath, (root) => {
@@ -9974,10 +10049,13 @@ function uninstallCodex({ codexDir }) {
       }
     });
   }
-  const configPath = join9(codexDir, "config.toml");
+  const configPath = join10(codexDir, "config.toml");
   let configChanged = false;
   if (existsSync6(configPath)) {
-    const trustEdit = removeHookTrust(readFileSync9(configPath, "utf8"), trustKeys);
+    const current = readFileSync9(configPath, "utf8");
+    const removed = removeHookTrust(current, trustKeys);
+    const stale = withoutStaleTrust(removed.content, hooksPath, ours, []);
+    const trustEdit = { content: stale.content, changed: removed.changed || stale.changed };
     const remaining = existsSync6(hooksPath) ? JSON.parse(readFileSync9(hooksPath, "utf8")).hooks : void 0;
     const foreignHooks = remaining && Object.keys(remaining).length > 0;
     const sharedConfig = /\[hooks\.(?!state\b)|\[plugins\./.test(trustEdit.content);
@@ -9991,19 +10069,19 @@ function uninstallCodex({ codexDir }) {
 }
 
 // src/install/opencode.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync10, rmSync as rmSync4, writeFileSync as writeFileSync2 } from "fs";
+import { copyFileSync as copyFileSync3, existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync10, rmSync as rmSync5 } from "fs";
 import { homedir as homedir7 } from "os";
-import { join as join10 } from "path";
+import { join as join11 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
   const custom = process.env.OPENCODE_CONFIG_DIR;
   if (custom && custom !== "") return custom;
   const xdg = process.env.XDG_CONFIG_HOME;
-  return join10(xdg && xdg !== "" ? xdg : join10(homedir7(), ".config"), "opencode");
+  return join11(xdg && xdg !== "" ? xdg : join11(homedir7(), ".config"), "opencode");
 }
 function installOpencode(options) {
   const { configDir } = options;
-  const target = join10(configDir, "plugin", "secretgate.js");
+  const target = join11(configDir, "plugin", "secretgate.js");
   const content = "pluginContent" in options ? options.pluginContent : readFileSync10(options.pluginSource, "utf8");
   if (existsSync7(target)) {
     const existing = readFileSync10(target, "utf8");
@@ -10012,33 +10090,49 @@ function installOpencode(options) {
     }
     if (existing === content) return { path: target, changed: false };
   }
-  mkdirSync7(join10(configDir, "plugin"), { recursive: true });
-  writeFileSync2(target, content);
+  mkdirSync7(join11(configDir, "plugin"), { recursive: true });
+  writeFileAtomic(target, content, 420);
   return { path: target, changed: true };
 }
+function withoutNpmPin(path) {
+  const text = readFileSync10(path, "utf8");
+  if (text.trim() === "") return void 0;
+  const errors = [];
+  const cfg = parse2(text, errors, { allowTrailingComma: true, disallowComments: false });
+  if (errors.length > 0) throw new SettingsParseError(path, printParseErrorCode(errors[0].error));
+  if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) throw new SettingsParseError(path, "top level is not an object");
+  const plugin = cfg.plugin;
+  if (!Array.isArray(plugin)) return void 0;
+  const kept = plugin.filter((p) => !(typeof p === "string" && /^secretgate@/.test(p)));
+  if (kept.length === plugin.length) return void 0;
+  const fmt = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: text.includes("\r\n") ? "\r\n" : "\n" } };
+  return applyEdits(text, modify(text, ["plugin"], kept.length > 0 ? kept : void 0, fmt));
+}
 function uninstallOpencode({ configDir }) {
+  const target = join11(configDir, "plugin", "secretgate.js");
+  const edits = [];
+  for (const name of ["opencode.json", "opencode.jsonc"]) {
+    const path = join11(configDir, name);
+    if (!existsSync7(path)) continue;
+    const text = withoutNpmPin(path);
+    if (text !== void 0) edits.push({ path, text });
+  }
   let changed = false;
-  const target = join10(configDir, "plugin", "secretgate.js");
   if (existsSync7(target) && readFileSync10(target, "utf8").includes(OWNERSHIP_MARKER)) {
-    rmSync4(target);
+    rmSync5(target);
     changed = true;
   }
-  const configPath = join10(configDir, "opencode.json");
-  if (existsSync7(configPath)) {
-    const r = editJsonFile(configPath, (cfg) => {
-      if (Array.isArray(cfg.plugin)) {
-        cfg.plugin = cfg.plugin.filter((p) => !/^secretgate@/.test(p));
-        if (cfg.plugin.length === 0) delete cfg.plugin;
-      }
-    });
-    changed = changed || r.changed;
+  for (const { path, text } of edits) {
+    copyFileSync3(path, `${path}.secretgate-backup-${(/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-")}`);
+    writeFileAtomic(path, text, 420);
+    changed = true;
   }
   return { path: target, changed };
 }
 
 // src/self.ts
-import { chmodSync as chmodSync2, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync6, rmSync as rmSync5 } from "fs";
-import { basename as basename5, dirname as dirname6, join as join11 } from "path";
+import { chmodSync as chmodSync2, copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync3, rmSync as rmSync6 } from "fs";
+import { basename as basename6, dirname as dirname7, join as join12 } from "path";
 import { fileURLToPath } from "url";
 function currentContext() {
   return { modulePath: fileURLToPath(import.meta.url), execPath: process.execPath, home: defaultVaultHome() };
@@ -10048,10 +10142,10 @@ function selfForm(modulePath) {
   return modulePath.endsWith(".mjs") ? "bundle" : "dev";
 }
 function pinnedBinaryPath(home) {
-  return join11(home, "bin", "secretgate");
+  return join12(home, "bin", "secretgate");
 }
 function pinnedBundlePath(home) {
-  return join11(home, "bin", "secretgate.mjs");
+  return join12(home, "bin", "secretgate.mjs");
 }
 function commandLine(inv) {
   return [inv.file === "node" ? "node" : `"${inv.file}"`, ...inv.args.map((a) => `"${a}"`)].join(" ");
@@ -10059,14 +10153,14 @@ function commandLine(inv) {
 function selfInvocation(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   const pinned = form === "binary" ? pinnedBinaryPath(ctx.home) : form === "bundle" ? pinnedBundlePath(ctx.home) : void 0;
-  if (pinned && existsSync8(pinned)) return form === "binary" ? { file: pinned, args: [] } : { file: "node", args: [pinned] };
+  if (pinned && existsSync8(pinned)) return form === "binary" ? { file: pinned, args: [] } : { file: ctx.execPath, args: [pinned] };
   return runningInvocation(ctx);
 }
 function runningInvocation(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   if (form === "binary") return { file: ctx.execPath, args: [] };
-  if (form === "bundle") return { file: "node", args: [ctx.modulePath] };
-  return { file: "node", args: [join11(dirname6(ctx.modulePath), "main.ts")] };
+  if (form === "bundle") return { file: ctx.execPath, args: [ctx.modulePath] };
+  return { file: "node", args: [join12(dirname7(ctx.modulePath), "main.ts")] };
 }
 function samePath(a, b) {
   try {
@@ -10078,11 +10172,11 @@ function samePath(a, b) {
 function atomicCopy(source, target) {
   const tmp = `${target}.${process.pid}.tmp`;
   try {
-    copyFileSync3(source, tmp);
+    copyFileSync4(source, tmp);
     chmodSync2(tmp, 493);
-    renameSync6(tmp, target);
+    renameSync3(tmp, target);
   } catch (err) {
-    rmSync5(tmp, { force: true });
+    rmSync6(tmp, { force: true });
     throw err;
   }
 }
@@ -10090,16 +10184,22 @@ function pinSelf(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   if (form === "dev") return selfInvocation(ctx);
   const [source, target] = form === "binary" ? [ctx.execPath, pinnedBinaryPath(ctx.home)] : [ctx.modulePath, pinnedBundlePath(ctx.home)];
-  mkdirSync8(dirname6(target), { recursive: true, mode: 448 });
+  mkdirSync8(dirname7(target), { recursive: true, mode: 448 });
   if (!samePath(source, target)) atomicCopy(source, target);
-  return form === "binary" ? { file: target, args: [] } : { file: "node", args: [target] };
+  return form === "binary" ? { file: target, args: [] } : { file: ctx.execPath, args: [target] };
+}
+var JS_RUNTIME = /^(?:node|nodejs|bun)(?:\.exe)?$/;
+function commandWords(command) {
+  return [...command.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2]);
 }
 function hookProgram(command) {
-  const quoted = /^\s*(?:(?:node|nodejs|bun)\s+)?"([^"]+)"/.exec(command)?.[1];
-  if (quoted) return quoted;
-  const words = command.trim().split(/\s+/);
-  const first = words[0] && /^(?:node|nodejs|bun)$/.test(basename5(words[0])) ? words[1] : words[0];
+  const words = commandWords(command);
+  const first = words[0] && JS_RUNTIME.test(basename6(words[0])) ? words[1] : words[0];
   return first && first !== "hook" ? first : void 0;
+}
+function hookRuntime(command) {
+  const first = commandWords(command)[0];
+  return first && JS_RUNTIME.test(basename6(first)) ? first : void 0;
 }
 
 // src/version.ts
@@ -10179,9 +10279,9 @@ var SKIP_DIRS = /* @__PURE__ */ new Set([
 ]);
 var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
-  for (const entry of readdirSync3(root, { withFileTypes: true })) {
+  for (const entry of readdirSync4(root, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
-    const full = join12(root, entry.name);
+    const full = join13(root, entry.name);
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkFiles(full);
     } else if (entry.isFile()) {
@@ -10656,14 +10756,14 @@ function parseAgentFlags(args, io) {
 }
 function opencodePlugin() {
   if (embeddedOpencodePlugin !== void 0) return { pluginContent: embeddedOpencodePlugin };
-  const selfDir = dirname7(fileURLToPath2(import.meta.url));
-  const candidates = [join12(selfDir, "secretgate-opencode.mjs"), join12(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const selfDir = dirname8(fileURLToPath2(import.meta.url));
+  const candidates = [join13(selfDir, "secretgate-opencode.mjs"), join13(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
   const found = candidates.find((c) => existsSync9(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
   return { pluginSource: found };
 }
 function claudeSettingsPath(project) {
-  return project ? join12(process.cwd(), ".claude", "settings.json") : join12(homedir8(), ".claude", "settings.json");
+  return project ? join13(process.cwd(), ".claude", "settings.json") : join13(homedir8(), ".claude", "settings.json");
 }
 function projectSettingsAliasesGlobal() {
   const canon = (p) => {
@@ -10695,7 +10795,7 @@ function installForAgents(flags, io) {
       if (flags.project && projectSettingsAliasesGlobal()) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
-      mkdirSync9(dirname7(settingsPath), { recursive: true });
+      mkdirSync9(dirname8(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
@@ -10738,7 +10838,7 @@ async function cmdInstall(args, io) {
 }
 function detectAgents() {
   return {
-    claudeCode: existsSync9(join12(homedir8(), ".claude")),
+    claudeCode: existsSync9(join13(homedir8(), ".claude")),
     codex: existsSync9(codexHome()),
     opencode: existsSync9(opencodeConfigDir()),
     project: false
@@ -10750,7 +10850,7 @@ function spawnHook(agent, event, payload, env) {
 }
 function verifyClaudeCodeWiring(io) {
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join12(tmpdir3(), "secretgate-verify-"));
+  const tmpHome = mkdtempSync2(join13(tmpdir3(), "secretgate-verify-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
@@ -10812,7 +10912,7 @@ TOKEN=${fake}
 `);
     ok = false;
   } finally {
-    rmSync6(tmpHome, { recursive: true, force: true });
+    rmSync7(tmpHome, { recursive: true, force: true });
   }
   return ok;
 }
@@ -10829,7 +10929,7 @@ function verifyCodexWiring(io) {
     return false;
   }
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join12(tmpdir3(), "secretgate-verify-codex-"));
+  const tmpHome = mkdtempSync2(join13(tmpdir3(), "secretgate-verify-codex-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
@@ -10877,7 +10977,7 @@ TOKEN=${fake}
 `);
     ok = false;
   } finally {
-    rmSync6(tmpHome, { recursive: true, force: true });
+    rmSync7(tmpHome, { recursive: true, force: true });
   }
   return ok;
 }
@@ -10934,11 +11034,11 @@ async function cmdVerifyOpencode(args, io) {
   return 0;
 }
 function verifyOpencodeBundle(io) {
-  const scratch = mkdtempSync2(join12(tmpdir3(), "secretgate-verify-opencode-"));
-  const plugin = join12(opencodeConfigDir(), "plugin", "secretgate.js");
-  const verificationModule = join12(scratch, "secretgate.mjs");
+  const scratch = mkdtempSync2(join13(tmpdir3(), "secretgate-verify-opencode-"));
+  const plugin = join13(opencodeConfigDir(), "plugin", "secretgate.js");
+  const verificationModule = join13(scratch, "secretgate.mjs");
   try {
-    copyFileSync4(plugin, verificationModule);
+    copyFileSync5(plugin, verificationModule);
     const env = { ...process.env, SECRETGATE_HOME: scratch, SECRETGATE_DISABLE: "0" };
     const self = runningInvocation();
     execFileSync(self.file, [...self.args, "__verify-opencode", verificationModule], { cwd: scratch, env, stdio: "pipe", timeout: 15e3 });
@@ -10948,7 +11048,7 @@ function verifyOpencodeBundle(io) {
     io.stdout("  \u2717 opencode: installed plugin verification failed; reinstall and retry.\n");
     return false;
   } finally {
-    rmSync6(scratch, { recursive: true, force: true });
+    rmSync7(scratch, { recursive: true, force: true });
   }
 }
 async function cmdInit(args, io) {
@@ -11067,6 +11167,21 @@ function reportMissingPrograms(commands2, label, io) {
   const missing = new Set(commands2.map(hookProgram).filter((p) => !!p && isAbsolute4(p) && !existsSync9(p)));
   for (const p of missing) io.stdout(`${label}!! hooks run ${p}, which is MISSING \u2014 run \`secretgate init\` to re-pin it
 `);
+  const runtimes = new Set(commands2.map(hookRuntime).filter((r) => r !== void 0));
+  for (const r of runtimes) {
+    if (isAbsolute4(r) ? !existsSync9(r) : !onPath(r))
+      io.stdout(
+        `${label}!! hooks start ${r}, which is NOT FOUND${isAbsolute4(r) ? "" : " on PATH"} \u2014 run \`secretgate init\` to wire this node by its absolute path
+`
+      );
+    else if (!isAbsolute4(r))
+      io.stdout(`${label}hooks start a bare \`${r}\`: an agent launched without your shell's PATH may not find it \u2014 re-run \`secretgate init\`
+`);
+  }
+}
+function onPath(name) {
+  const exts = process.platform === "win32" ? ["", ".exe", ".cmd"] : [""];
+  return (process.env.PATH ?? "").split(delimiter2).some((dir) => dir !== "" && exts.some((e) => existsSync9(join13(dir, name + e))));
 }
 async function cmdStatus(_args, io) {
   io.stdout(`secretgate ${VERSION}
@@ -11088,7 +11203,7 @@ async function cmdStatus(_args, io) {
   if (here.disabled || pauses.length > 0) io.stdout("\n");
   const ccScopes = [["global ", claudeSettingsPath(false)]];
   if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
-  const codexHooks = readJsonSafe(join12(codexHome(), "hooks.json"));
+  const codexHooks = readJsonSafe(join13(codexHome(), "hooks.json"));
   const codexCommands = hookCommands(codexHooks, "codex");
   reportPinned([...ccScopes.flatMap(([, path]) => hookCommands(readJsonSafe(path), "claude-code")), ...codexCommands], io);
   for (const [label, path] of ccScopes) {
@@ -11139,9 +11254,12 @@ async function cmdStatus(_args, io) {
     );
   if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
   reportMissingPrograms(codexCommands, "codex     ", io);
-  const ocPlugin = join12(opencodeConfigDir(), "plugin", "secretgate.js");
-  const ocConfig = readJsonSafe(join12(opencodeConfigDir(), "opencode.json"));
-  const ocPinned = Array.isArray(ocConfig?.plugin) && ocConfig.plugin.some((p) => /^secretgate@/.test(p));
+  const ocPlugin = join13(opencodeConfigDir(), "plugin", "secretgate.js");
+  const ocPinned = ["opencode.json", "opencode.jsonc"].some((name) => {
+    const read = readJsonFile(join13(opencodeConfigDir(), name));
+    const plugin = read.ok ? read.value?.plugin : void 0;
+    return Array.isArray(plugin) && plugin.some((p) => typeof p === "string" && /^secretgate@/.test(p));
+  });
   io.stdout(`opencode  ${existsSync9(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}
 `);
   const gl = gitleaksPath();
@@ -11154,7 +11272,7 @@ async function cmdStatus(_args, io) {
   const entries = vault.list();
   io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
   try {
-    const mode = statSync4(join12(defaultVaultHome(), "vault.json")).mode & 511;
+    const mode = statSync4(join13(defaultVaultHome(), "vault.json")).mode & 511;
     io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
 `);
   } catch {

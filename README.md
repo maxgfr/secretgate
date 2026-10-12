@@ -247,7 +247,9 @@ to the model. Declare it in the project's `.secretgate.json`:
   started in `src/` sees it too. The directory the Claude Code session was
   started in (`CLAUDE_PROJECT_DIR`) is always searched as well, so a `cd` into
   a submodule or a nested repository does not drop the project's scope. If
-  several files declare a scope, all apply (a path must satisfy each).
+  several files declare a scope, all apply (a path must satisfy each). A
+  `.secretgate.json` owned by another account (one left in `/tmp`, a shared
+  parent directory) is ignored.
 - **Globs** are relative to the root (`*`, `**`, `?`, `{a,b}`); `src` and
   `src/**` both cover the whole directory. Absolute or `~/` globs are allowed.
   With an `allow` list, anything outside the root is out of scope — except the

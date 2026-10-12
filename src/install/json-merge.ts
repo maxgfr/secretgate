@@ -1,5 +1,6 @@
-import { randomBytes } from "node:crypto";
-import { closeSync, copyFileSync, existsSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { writeFileAtomic } from "../fs-atomic.js";
 
 export class SettingsParseError extends Error {
   constructor(
@@ -17,24 +18,30 @@ export interface EditReport {
   backupPath?: string;
 }
 
+/** A copy with every object's keys sorted by code unit: the order Codex
+ *  hashes hook identities in, and a key-order-insensitive form to compare. */
+export function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, child]) => [key, canonicalize(child)]),
+    );
+  }
+  return value;
+}
+
 // Key-order-insensitive comparison, so a re-run that rebuilds identical
 // entries in a different property order still counts as "no change".
-function stableStringify(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(stableStringify).join(",")}]`;
-  if (v !== null && typeof v === "object") {
-    const entries = Object.entries(v as Record<string, unknown>)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([k, inner]) => `${JSON.stringify(k)}:${stableStringify(inner)}`);
-    return `{${entries.join(",")}}`;
-  }
-  return JSON.stringify(v);
-}
+const stableStringify = (v: unknown): string => JSON.stringify(canonicalize(v));
 
 // Idempotent, corruption-safe settings editing shared by all installers:
 // parse (abort loudly on corrupt JSON — never overwrite what we can't read),
 // mutate a clone, no-op when nothing changed, timestamped backup of the
-// original, then an atomic tmp+rename write.
-export function editJsonFile(path: string, mutate: (obj: Record<string, any>) => void): EditReport {
+// original, then an atomic tmp+rename write. `latestBackupOnly` keeps just the
+// newest backup — for files secretgate alone writes, rewritten on every install.
+export function editJsonFile(path: string, mutate: (obj: Record<string, any>) => void, opts: { latestBackupOnly?: boolean } = {}): EditReport {
   let original: string | undefined;
   let obj: Record<string, any> = {};
   if (existsSync(path)) {
@@ -62,15 +69,12 @@ export function editJsonFile(path: string, mutate: (obj: Record<string, any>) =>
   if (original !== undefined) {
     const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
     backupPath = `${path}.secretgate-backup-${stamp}`;
+    if (opts.latestBackupOnly) {
+      const prefix = `${basename(path)}.secretgate-backup-`;
+      for (const f of readdirSync(dirname(path))) if (f.startsWith(prefix)) rmSync(join(dirname(path), f), { force: true });
+    }
     copyFileSync(path, backupPath);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tmp, "w", 0o644);
-  try {
-    writeSync(fd, next);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
+  writeFileAtomic(path, next, 0o644);
   return { path, changed: true, backupPath };
 }

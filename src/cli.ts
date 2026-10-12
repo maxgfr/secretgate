@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadConfig, projectConfigFiles, setTrust } from "./config.js";
+import { loadConfig, projectConfigFiles, readJsonFile, setTrust } from "./config.js";
 import { describeScope, pathOutOfScope } from "./scope.js";
 import {
   DEFAULT_DISABLE_MINUTES,
@@ -31,7 +31,7 @@ import { SettingsParseError } from "./install/json-merge.js";
 import { isSecretgateHook } from "./install/hook-marker.js";
 import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
-import { commandLine, hookProgram, pinSelf, pinnedBinaryPath, pinnedBundlePath, runningInvocation, selfInvocation } from "./self.js";
+import { commandLine, hookProgram, hookRuntime, pinSelf, pinnedBinaryPath, pinnedBundlePath, runningInvocation, selfInvocation } from "./self.js";
 import { Vault, defaultVaultHome } from "./vault/vault.js";
 import { VERSION } from "./version.js";
 
@@ -1143,10 +1143,26 @@ function reportPinned(hookCommandList: string[], io: Io): void {
 }
 
 // A hook whose program is gone fails on every event — for most hosts that is
-// fail-open. Only absolute paths are checked; a bare `secretgate` goes by PATH.
+// fail-open. So does one whose runtime is gone: a node removed by a version
+// manager, or a bare `node` (older installs) that is not on the PATH of an
+// agent started from a GUI.
 function reportMissingPrograms(commands: string[], label: string, io: Io): void {
   const missing = new Set(commands.map(hookProgram).filter((p): p is string => !!p && isAbsolute(p) && !existsSync(p)));
   for (const p of missing) io.stdout(`${label}!! hooks run ${p}, which is MISSING — run \`secretgate init\` to re-pin it\n`);
+  const runtimes = new Set(commands.map(hookRuntime).filter((r): r is string => r !== undefined));
+  for (const r of runtimes) {
+    if (isAbsolute(r) ? !existsSync(r) : !onPath(r))
+      io.stdout(
+        `${label}!! hooks start ${r}, which is NOT FOUND${isAbsolute(r) ? "" : " on PATH"} — run \`secretgate init\` to wire this node by its absolute path\n`,
+      );
+    else if (!isAbsolute(r))
+      io.stdout(`${label}hooks start a bare \`${r}\`: an agent launched without your shell's PATH may not find it — re-run \`secretgate init\`\n`);
+  }
+}
+
+function onPath(name: string): boolean {
+  const exts = process.platform === "win32" ? ["", ".exe", ".cmd"] : [""];
+  return (process.env.PATH ?? "").split(delimiter).some((dir) => dir !== "" && exts.some((e) => existsSync(join(dir, name + e))));
 }
 
 async function cmdStatus(_args: string[], io: Io): Promise<number> {
@@ -1220,8 +1236,11 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
 
   // opencode
   const ocPlugin = join(opencodeConfigDir(), "plugin", "secretgate.js");
-  const ocConfig = readJsonSafe(join(opencodeConfigDir(), "opencode.json"));
-  const ocPinned = Array.isArray(ocConfig?.plugin) && ocConfig.plugin.some((p: string) => /^secretgate@/.test(p));
+  const ocPinned = ["opencode.json", "opencode.jsonc"].some((name) => {
+    const read = readJsonFile(join(opencodeConfigDir(), name));
+    const plugin = read.ok ? (read.value as { plugin?: unknown } | null)?.plugin : undefined;
+    return Array.isArray(plugin) && plugin.some((p) => typeof p === "string" && /^secretgate@/.test(p));
+  });
   io.stdout(`opencode  ${existsSync(ocPlugin) ? `wired (plugin file)` : ocPinned ? "wired (opencode.json npm pin)" : "not wired"}  ${opencodeConfigDir()}\n`);
 
   // engines

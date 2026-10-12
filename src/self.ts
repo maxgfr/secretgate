@@ -43,7 +43,10 @@ export function pinnedBundlePath(home: string): string {
 }
 
 // The program the hooks run, as a shell command prefix (`… hook <agent> <event>`
-// is appended). The binary needs no runtime in front of it.
+// is appended). The binary needs no runtime in front of it; the bundle names
+// the node that installed it by its absolute path — an agent started from a
+// GUI may not have nvm's `node` on its PATH, and a hook that exits 127 fails
+// open.
 export function commandLine(inv: Invocation): string {
   return [inv.file === "node" ? "node" : `"${inv.file}"`, ...inv.args.map((a) => `"${a}"`)].join(" ");
 }
@@ -53,7 +56,7 @@ export function commandLine(inv: Invocation): string {
 export function selfInvocation(ctx: SelfContext = currentContext()): Invocation {
   const form = selfForm(ctx.modulePath);
   const pinned = form === "binary" ? pinnedBinaryPath(ctx.home) : form === "bundle" ? pinnedBundlePath(ctx.home) : undefined;
-  if (pinned && existsSync(pinned)) return form === "binary" ? { file: pinned, args: [] } : { file: "node", args: [pinned] };
+  if (pinned && existsSync(pinned)) return form === "binary" ? { file: pinned, args: [] } : { file: ctx.execPath, args: [pinned] };
   return runningInvocation(ctx);
 }
 
@@ -63,7 +66,7 @@ export function selfInvocation(ctx: SelfContext = currentContext()): Invocation 
 export function runningInvocation(ctx: SelfContext = currentContext()): Invocation {
   const form = selfForm(ctx.modulePath);
   if (form === "binary") return { file: ctx.execPath, args: [] };
-  if (form === "bundle") return { file: "node", args: [ctx.modulePath] };
+  if (form === "bundle") return { file: ctx.execPath, args: [ctx.modulePath] };
   return { file: "node", args: [join(dirname(ctx.modulePath), "main.ts")] };
 }
 
@@ -100,15 +103,26 @@ export function pinSelf(ctx: SelfContext = currentContext()): Invocation {
   const [source, target] = form === "binary" ? [ctx.execPath, pinnedBinaryPath(ctx.home)] : [ctx.modulePath, pinnedBundlePath(ctx.home)];
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
   if (!samePath(source, target)) atomicCopy(source, target);
-  return form === "binary" ? { file: target, args: [] } : { file: "node", args: [target] };
+  return form === "binary" ? { file: target, args: [] } : { file: ctx.execPath, args: [target] };
 }
 
-// The program a wired hook command runs: its first quoted word, else its first
-// word after a JS runtime (`node x.mjs hook …`).
+const JS_RUNTIME = /^(?:node|nodejs|bun)(?:\.exe)?$/;
+
+// The words of a wired hook command before `hook <agent> <event>`, quotes removed.
+function commandWords(command: string): string[] {
+  return [...command.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2]!);
+}
+
+// The program a wired hook command runs: the pinned binary, or the script a
+// JS runtime runs (`node x.mjs hook …`, `"/abs/node" "x.mjs" hook …`).
 export function hookProgram(command: string): string | undefined {
-  const quoted = /^\s*(?:(?:node|nodejs|bun)\s+)?"([^"]+)"/.exec(command)?.[1];
-  if (quoted) return quoted;
-  const words = command.trim().split(/\s+/);
-  const first = words[0] && /^(?:node|nodejs|bun)$/.test(basename(words[0])) ? words[1] : words[0];
+  const words = commandWords(command);
+  const first = words[0] && JS_RUNTIME.test(basename(words[0])) ? words[1] : words[0];
   return first && first !== "hook" ? first : undefined;
+}
+
+/** The JS runtime a wired hook command starts (`node`, `/abs/node`), if any. */
+export function hookRuntime(command: string): string | undefined {
+  const first = commandWords(command)[0];
+  return first && JS_RUNTIME.test(basename(first)) ? first : undefined;
 }

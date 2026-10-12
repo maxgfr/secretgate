@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { type EditReport, editJsonFile } from "./json-merge.js";
+import { applyEdits, modify, type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
+import { writeFileAtomic } from "../fs-atomic.js";
+import { type EditReport, SettingsParseError } from "./json-merge.js";
 
 // OpenCode install = copy the self-contained plugin bundle to
 // <config>/plugin/secretgate.js. secretgate is distributed as a skill, not an
@@ -36,26 +38,49 @@ export function installOpencode(options: OpencodeInstallOptions): EditReport {
     if (existing === content) return { path: target, changed: false };
   }
   mkdirSync(join(configDir, "plugin"), { recursive: true });
-  writeFileSync(target, content);
+  // A running OpenCode may load the plugin while it is being written.
+  writeFileAtomic(target, content, 0o644);
   return { path: target, changed: true };
 }
 
+// The legacy npm pin (`"plugin": ["secretgate@x"]`) removed from an
+// opencode.json / opencode.jsonc, edited in place so comments survive.
+// Returns the new text, or undefined when there is nothing to change.
+function withoutNpmPin(path: string): string | undefined {
+  const text = readFileSync(path, "utf8");
+  if (text.trim() === "") return undefined;
+  const errors: ParseError[] = [];
+  const cfg = parseJsonc(text, errors, { allowTrailingComma: true, disallowComments: false }) as unknown;
+  if (errors.length > 0) throw new SettingsParseError(path, printParseErrorCode(errors[0]!.error));
+  if (cfg === null || typeof cfg !== "object" || Array.isArray(cfg)) throw new SettingsParseError(path, "top level is not an object");
+  const plugin = (cfg as { plugin?: unknown }).plugin;
+  if (!Array.isArray(plugin)) return undefined;
+  const kept = plugin.filter((p) => !(typeof p === "string" && /^secretgate@/.test(p)));
+  if (kept.length === plugin.length) return undefined;
+  const fmt = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: text.includes("\r\n") ? "\r\n" : "\n" } };
+  return applyEdits(text, modify(text, ["plugin"], kept.length > 0 ? kept : undefined, fmt));
+}
+
 export function uninstallOpencode({ configDir }: { configDir: string }): EditReport {
-  let changed = false;
   const target = join(configDir, "plugin", "secretgate.js");
+  // Every config is read and checked before anything is removed: a file that
+  // cannot be parsed stops the uninstall whole, never half-way.
+  const edits: Array<{ path: string; text: string }> = [];
+  for (const name of ["opencode.json", "opencode.jsonc"]) {
+    const path = join(configDir, name);
+    if (!existsSync(path)) continue;
+    const text = withoutNpmPin(path);
+    if (text !== undefined) edits.push({ path, text });
+  }
+  let changed = false;
   if (existsSync(target) && readFileSync(target, "utf8").includes(OWNERSHIP_MARKER)) {
     rmSync(target);
     changed = true;
   }
-  const configPath = join(configDir, "opencode.json");
-  if (existsSync(configPath)) {
-    const r = editJsonFile(configPath, (cfg) => {
-      if (Array.isArray(cfg.plugin)) {
-        cfg.plugin = cfg.plugin.filter((p: string) => !/^secretgate@/.test(p));
-        if (cfg.plugin.length === 0) delete cfg.plugin;
-      }
-    });
-    changed = changed || r.changed;
+  for (const { path, text } of edits) {
+    copyFileSync(path, `${path}.secretgate-backup-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`);
+    writeFileAtomic(path, text, 0o644);
+    changed = true;
   }
   return { path: target, changed };
 }

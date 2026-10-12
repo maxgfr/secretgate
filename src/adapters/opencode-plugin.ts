@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { loadConfig, type SecretgateConfig } from "../config.js";
+import type { UserAllowlist } from "../engine/allowlist.js";
 import { disableState, recordSession } from "../disable.js";
 import { preToolPolicy } from "../hooks/policy.js";
 import { eventRedactor, isBinaryField } from "../hooks/scan-budget.js";
@@ -92,48 +93,119 @@ function attachedPath(part: PromptPart): string | undefined {
 function projectState(ctx: unknown) {
   const directory = (ctx as { directory?: unknown } | undefined)?.directory;
   const cwd = typeof directory === "string" ? directory : process.cwd();
-  const offState = (sessionId?: unknown) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : undefined });
-  const isOff = (sessionId?: unknown): boolean => offState(sessionId).disabled;
-  // Project config for this event; `disable --scope` lifts the scope too.
-  const configFor = (sessionId?: unknown): SecretgateConfig => {
+  const isOff = (sessionId?: unknown): boolean => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : undefined }).disabled;
+  // One read of the pause and of the project config per event; `disable
+  // --scope` lifts the scope too.
+  const stateFor = (sessionId?: unknown): { off: boolean; cfg: SecretgateConfig } => {
+    const state = disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : undefined });
     const cfg = loadConfig(cwd);
-    return offState(sessionId).includesScope ? { ...cfg, scopes: [], error: undefined } : cfg;
+    return { off: state.disabled, cfg: state.includesScope ? { ...cfg, scopes: [], error: undefined } : cfg };
   };
-  return { cwd, isOff, configFor };
+  return { cwd, isOff, stateFor };
+}
+
+/** Text the user typed: not an attachment, not a synthetic part. */
+const typedText = (p: PromptPart | undefined): boolean => typeof p?.text === "string" && !p.synthetic && (p.type === undefined || p.type === "text");
+
+const TEXT_MIME = /^(?:text\/|application\/(?:json|xml|javascript|x-yaml|yaml|toml|x-sh|x-www-form-urlencoded)\b|$)/;
+
+// A text data URL (an @-attached file, inlined by OpenCode 2) is decoded,
+// redacted and encoded back the same way; anything else is redacted as is.
+function redactUri(uri: string, redact: (s: string) => string): string {
+  const m = /^data:([^,;]*)((?:;[^,;]*)*),([\s\S]*)$/.exec(uri);
+  if (!m) return redact(uri);
+  const [, mime, params, payload] = m;
+  if (!TEXT_MIME.test(mime!.toLowerCase())) return uri;
+  const base64 = /;base64$/i.test(params!);
+  let text: string;
+  try {
+    text = base64 ? Buffer.from(payload!, "base64").toString("utf8") : decodeURIComponent(payload!);
+  } catch {
+    return redact(uri);
+  }
+  const redacted = redact(text);
+  if (redacted === text) return uri;
+  return `data:${mime}${params},${base64 ? Buffer.from(redacted, "utf8").toString("base64") : encodeURIComponent(redacted)}`;
+}
+
+// Every context call hands back the whole history, so each string would be
+// scanned again on every turn — quadratic in the session, and past the scan
+// budget for a long one. Results are remembered by content (bounded), and
+// forgotten when the allowlist changes.
+const REMEMBER_CHARS = 32 * 1024 * 1024;
+function redactionMemo() {
+  let key = "";
+  let size = 0;
+  const seen = new Map<string, string>();
+  return (allowlist: UserAllowlist, redact: (s: string) => string): ((s: string) => string) => {
+    const k = JSON.stringify(allowlist);
+    if (k !== key) {
+      key = k;
+      seen.clear();
+      size = 0;
+    }
+    return (s) => {
+      const known = seen.get(s);
+      if (known !== undefined) return known;
+      const out = s.startsWith("data:") ? redactUri(s, redact) : redact(s);
+      if (size + s.length > REMEMBER_CHARS) {
+        seen.clear();
+        size = 0;
+      }
+      seen.set(s, out);
+      size += s.length;
+      return out;
+    };
+  };
 }
 
 const WITHHELD = "[secretgate withheld this tool output: scan failed or output exceeded the scan budget]";
 
-async function buildHooks(ctx: unknown) {
-  const { cwd, isOff, configFor } = projectState(ctx);
+async function buildHooks(ctx: unknown, state: ReturnType<typeof projectState> = projectState(ctx)) {
+  const { cwd, isOff, stateFor } = state;
+  const remembered = redactionMemo();
+  // Typed text a prompt sent with [allow-secret]: the history must not redact
+  // it afterwards (OpenCode 2 replays user text through the context hook).
+  const bypassed = new Set<string>();
   const client = (ctx as { client?: { session?: { get?: (req: { path: { id: string } }) => Promise<{ data?: { parentID?: unknown } }> } } } | undefined)
     ?.client;
-  // Fails SAFE: a session that cannot be looked up — no session API, or the
-  // lookup fails — counts as a subsession, so the off switch is refused and
-  // the user falls back to `secretgate disable` in a terminal. (Without a
-  // session id nothing can be paused anyway.)
-  const isSubsession = async (sessionId: unknown): Promise<boolean> => {
-    if (typeof sessionId !== "string") return false;
-    if (typeof client?.session?.get !== "function") return true;
+  // Whether a session is a subagent's: "unknown" when there is no session API
+  // or the lookup fails. The off switch treats "unknown" as a subsession (it
+  // fails SAFE: the user falls back to `secretgate disable` in a terminal).
+  // (Without a session id nothing can be paused anyway.)
+  const sessionKind = async (sessionId: unknown): Promise<"root" | "sub" | "unknown"> => {
+    if (typeof sessionId !== "string") return "root";
+    if (typeof client?.session?.get !== "function") return "unknown";
     try {
       const res = await client.session.get({ path: { id: sessionId } });
-      return typeof res?.data?.parentID === "string" && res.data.parentID.length > 0;
+      return typeof res?.data?.parentID === "string" && res.data.parentID.length > 0 ? "sub" : "root";
     } catch {
-      return true;
+      return "unknown";
     }
   };
   return {
     // OpenCode keeps rewritten args in tool history, including failed calls.
     // Redact that history immediately before it is converted to model messages.
     "experimental.chat.messages.transform": async (_input: unknown, output: { messages?: Array<{ info?: { sessionID?: string }; parts?: unknown[] }> }) => {
+      // One pause check per session, one config, vault and budget per call.
+      const off = new Map<string | undefined, boolean>();
+      let redact: ((s: string) => string) | undefined;
       for (const message of output.messages ?? []) {
-        if (isOff(message.info?.sessionID)) continue;
+        const sessionID = message.info?.sessionID;
+        if (!off.has(sessionID)) off.set(sessionID, isOff(sessionID));
+        if (off.get(sessionID)) continue;
         try {
-          const cfg = loadConfig(cwd);
-          const vault = new Vault();
           for (const part of message.parts ?? []) {
-            // User text has already passed chat.message (including explicit bypass).
-            if ((part as { type?: string })?.type === "tool") mutateStringsInPlace(part, eventRedactor(vault, "opencode:history", cfg.allowlist));
+            // V1 user text has already passed chat.message (including explicit
+            // bypass); OpenCode 2 hands user content here as "user-content".
+            const type = (part as { type?: string })?.type;
+            if (type !== "tool" && type !== "user-content") continue;
+            if (type === "user-content" && bypassed.has(String((part as { state?: { text?: unknown } }).state?.text))) continue;
+            if (!redact) {
+              const { allowlist } = loadConfig(cwd);
+              redact = remembered(allowlist, eventRedactor(new Vault(), "opencode:history", allowlist));
+            }
+            mutateStringsInPlace(part, redact);
           }
         } catch {
           throw new Error("secretgate: tool history could not be scanned safely; start a fresh session.");
@@ -142,25 +214,24 @@ async function buildHooks(ctx: unknown) {
     },
     "chat.message": async (input: { sessionID?: unknown } | undefined, output: { message?: unknown; parts?: PromptPart[] }) => {
       const sessionID = input?.sessionID;
-      recordSession(typeof sessionID === "string" ? sessionID : undefined, cwd);
       const parts = output?.parts;
+      // A subagent's prompt is written by the model (TaskTool feeds it through
+      // chat.message): it is neither the session `secretgate disable` should
+      // find, nor one allowed to switch secretgate off.
+      const kind = await sessionKind(sessionID);
+      if (kind !== "sub") recordSession(typeof sessionID === "string" ? sessionID : undefined, cwd);
       if (!Array.isArray(parts)) return;
       // `/secretgate off` typed by the user pauses this session. OpenCode
       // has no user-facing hook message, so the confirmation rides along in
       // the prompt for the model to relay.
-      const said = parts.find(
-        (p) => typeof p?.text === "string" && !p.synthetic && (p.type === undefined || p.type === "text") && promptDirective(String(p.text)),
-      );
-      // A subagent's prompt is written by the model (TaskTool feeds it through
-      // chat.message): only the user's own, top-level session may switch
-      // secretgate off.
-      if (said && (await isSubsession(sessionID))) {
+      const said = parts.find((p) => typedText(p) && promptDirective(String(p.text)));
+      if (said && kind !== "root") {
         said.text = `${said.text}\n\n[secretgate: ignored an off-switch — this session could not be confirmed as your main session (a subagent prompt is written by the model). Run \`secretgate disable --session\` in a terminal instead]`;
       } else if (said) {
         const notice = applyPromptDirective(promptDirective(String(said.text))!, typeof sessionID === "string" ? sessionID : undefined, cwd);
         said.text = `${said.text}\n\n[${notice}]`;
       }
-      const cfg = configFor(sessionID);
+      const { off, cfg } = stateFor(sessionID);
       // Scope first — it holds while secretgate is disabled. Out-of-scope
       // attachments are replaced by a note (OpenCode can rewrite the prompt).
       if (cfg.scopes.length > 0) {
@@ -180,7 +251,7 @@ async function buildHooks(ctx: unknown) {
           }
         }
       }
-      if (isOff(sessionID)) return;
+      if (off) return;
       // An attached sensitive file (an @mention) is replaced by a note; test
       // fixtures are exempt, as for the read tool.
       for (const part of parts) {
@@ -193,12 +264,15 @@ async function buildHooks(ctx: unknown) {
       }
       // [allow-secret] exempts only what the user typed — never attached file
       // content, which could otherwise carry the tag itself.
-      const typed = (p: PromptPart): boolean => typeof p?.text === "string" && !p.synthetic && (p.type === undefined || p.type === "text");
-      const bypass = parts.some((p) => typed(p) && String(p.text).includes(ALLOW_TAG));
+      const bypass = parts.some((p) => typedText(p) && String(p.text).includes(ALLOW_TAG));
+      if (bypass) {
+        for (const p of parts) if (typedText(p)) bypassed.add(String(p.text));
+        if (bypassed.size > 64) bypassed.delete(bypassed.values().next().value!);
+      }
       try {
         const vault = new Vault();
         const redact = eventRedactor(vault, "opencode:prompt", cfg.allowlist);
-        const mapped = parts.map((part) => (typeof part?.text === "string" && !(bypass && typed(part)) ? redact(part.text) : undefined));
+        const mapped = parts.map((part) => (typeof part?.text === "string" && !(bypass && typedText(part)) ? redact(part.text) : undefined));
         parts.forEach((part, i) => {
           if (mapped[i] !== undefined) part.text = mapped[i];
         });
@@ -210,10 +284,10 @@ async function buildHooks(ctx: unknown) {
     "tool.execute.before": async (input: { tool?: string; sessionID?: unknown }, output: { args?: Record<string, any> }) => {
       const tool = String(input?.tool ?? "").toLowerCase();
       const args = output?.args ?? {};
-      const cfg = configFor(input?.sessionID);
+      const { off, cfg } = stateFor(input?.sessionID);
       // Disabled: skip the secret checks, but keep the scope and keep restoring
       // placeholders so a disabled run never writes a dead SECRETGATE_ token.
-      const decision = preToolPolicy(extractToolCall(tool, args), cfg, cwd, { disabled: isOff(input?.sessionID) });
+      const decision = preToolPolicy(extractToolCall(tool, args), cfg, cwd, { disabled: off });
       if (decision) {
         throw new Error(
           decision.action === "ask"
@@ -234,7 +308,7 @@ async function buildHooks(ctx: unknown) {
     ) => {
       const tool = String(input?.tool ?? "").toLowerCase();
       try {
-        const cfg = configFor(input?.sessionID);
+        const { off, cfg } = stateFor(input?.sessionID);
         // glob/grep/list over a partly in-scope tree: drop out-of-scope entries.
         const kind = extractToolCall(tool, input?.args).kind;
         if (cfg.scopes.length > 0 && (kind === "search" || kind === "list") && typeof output?.output === "string") {
@@ -245,7 +319,7 @@ async function buildHooks(ctx: unknown) {
             restateMetadataCounts(output.metadata, counts.matches, counts.files);
           }
         }
-        if (isOff(input?.sessionID)) return;
+        if (off) return;
         const vault = new Vault();
         mutateStringsInPlace(output, eventRedactor(vault, `opencode:${tool}`, cfg.allowlist));
       } catch {
@@ -331,23 +405,28 @@ const SecretgatePlugin = {
   // implementation expects, except tool results (see execute.after).
   async setup(ctx: V2Context) {
     const view = v1ContextView(ctx);
-    const hooks = await buildHooks(view);
-    const { cwd, isOff, configFor } = projectState(view);
+    const state = projectState(view);
+    const hooks = await buildHooks(view, state);
+    const { cwd, stateFor } = state;
 
     // The context messages are AI-SDK shaped: no per-message info, and tool
     // history lives in `tool-call` / `tool-result` content parts. Present each
     // message the way the transform implementation sees it, the real parts
-    // wrapped as V1 tool parts so the redaction mutates them in place.
+    // wrapped so the redaction mutates them in place. A user message carries
+    // the files @-attached to it (as text, or as a text data URL): those never
+    // went through the prompt hook, which only saw their names.
     await ctx.session.hook("context", async (event) => {
-      const messages: Array<{ content?: unknown }> = Array.isArray(event?.messages) ? event.messages : [];
+      const messages: Array<{ role?: unknown; content?: unknown }> = Array.isArray(event?.messages) ? event.messages : [];
       await hooks["experimental.chat.messages.transform"](
         {},
         {
           messages: messages.map((message) => ({
             info: { sessionID: event?.sessionID },
-            parts: (Array.isArray(message?.content) ? message.content : [])
-              .filter((part) => part?.type === "tool-call" || part?.type === "tool-result")
-              .map((part) => ({ type: "tool", state: part })),
+            parts: (Array.isArray(message?.content) ? message.content : []).flatMap((part) => {
+              if (part?.type === "tool-call" || part?.type === "tool-result") return [{ type: "tool", state: part }];
+              if (message?.role === "user" && (part?.type === "text" || part?.type === "file")) return [{ type: "user-content", state: part }];
+              return [];
+            }),
           })),
         },
       );
@@ -403,10 +482,10 @@ const SecretgatePlugin = {
       if (!result || typeof result !== "object") throw new Error(WITHHELD);
       const tool = String(event?.tool ?? "").toLowerCase();
       try {
-        const cfg = configFor(event?.sessionID);
+        const { off, cfg } = stateFor(event?.sessionID);
         const kind = extractToolCall(tool, event?.input).kind;
         if (cfg.scopes.length > 0 && (kind === "search" || kind === "list")) filterListingResult(cfg.scopes, result, cwd, kind === "search");
-        if (isOff(event?.sessionID)) return;
+        if (off) return;
         mutateStringsInPlace(result, eventRedactor(new Vault(), `opencode:${tool}`, cfg.allowlist));
       } catch {
         // Keep `output`'s type for consumers of the structured result.

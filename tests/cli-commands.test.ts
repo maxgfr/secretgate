@@ -439,6 +439,20 @@ describe("secretgate status", () => {
     expect(await run(["status"], io)).toBe(0);
   });
 
+  it("flags a hook whose node is gone", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const command = `"${join(home, "gone", "node")}" "${join(home, "x.mjs")}" hook claude-code pre-tool-use`;
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command }] }] } }),
+    );
+    const { io, text } = capture();
+    expect(await run(["status"], io)).toBe(0);
+    expect(text()).toMatch(/hooks start .*gone\/node, which is NOT FOUND/);
+  });
+
   it("names the env var when that is what is off", async () => {
     process.env.HOME = home;
     process.chdir(work);

@@ -1,3 +1,4 @@
+import { parse as parseToml } from "smol-toml";
 import { describe, expect, it } from "vitest";
 import { disableHooksFeature, enableHooksFeature, removeHookTrust, upsertHookTrust } from "../../src/install/toml-touch.js";
 
@@ -146,5 +147,61 @@ describe("Codex hook trust state — targeted config.toml editing", () => {
     expect(r.content).toContain(`[hooks.state."${first.key}"]\nenabled = false`);
     expect(r.content).not.toContain(first.trustedHash);
     expect(r.content).not.toContain(second.key);
+  });
+});
+
+describe("enableHooksFeature — every way TOML can spell [features]", () => {
+  const valid = (content: string) => expect(() => parseToml(content)).not.toThrow();
+
+  it("recognises a header with spaces inside the brackets", () => {
+    const r = enableHooksFeature("[ features ]\nweb_search = true\n");
+    valid(r.content);
+    expect(parseToml(r.content).features).toEqual({ web_search: true, hooks: true });
+    expect(r.content.match(/\[\s*features\s*\]/g)).toHaveLength(1);
+  });
+
+  it("adds a dotted key next to root-level dotted feature keys, never a second table", () => {
+    const r = enableHooksFeature('model = "o4"\nfeatures.web_search = true\n\n[mcp_servers.x]\ncommand = "y"\n');
+    valid(r.content);
+    expect(parseToml(r.content).features).toEqual({ web_search: true, hooks: true });
+    expect(r.content).not.toMatch(/^\s*\[features\]/m);
+    expect(enableHooksFeature(r.content).changed).toBe(false);
+  });
+
+  it("extends a one-line inline table in place", () => {
+    const r = enableHooksFeature("features = { web_search = true }\n");
+    valid(r.content);
+    expect(parseToml(r.content).features).toEqual({ web_search: true, hooks: true });
+    expect(enableHooksFeature(r.content).changed).toBe(false);
+  });
+
+  it("refuses what it cannot edit safely, with the snippet to paste", () => {
+    expect(() => enableHooksFeature("features = { web_search = true } # mine\n")).toThrow(/hooks = true/);
+    expect(() => enableHooksFeature("features.hooks = false\n")).toThrow(/hooks = false/);
+    expect(() => enableHooksFeature("features = { hooks = false }\n")).toThrow(/hooks = false/);
+  });
+
+  it("is a no-op when a dotted or inline hooks = true is there", () => {
+    expect(enableHooksFeature("features.hooks = true\n").changed).toBe(false);
+    expect(enableHooksFeature("features = { hooks = true }\n").changed).toBe(false);
+  });
+
+  it("uninstall removes what it added in those forms", () => {
+    for (const before of ["features.web_search = true\n", "features = { web_search = true }\n"]) {
+      const after = disableHooksFeature(enableHooksFeature(before).content).content;
+      valid(after);
+      expect(parseToml(after).features).toEqual({ web_search: true });
+    }
+  });
+
+  it("keeps CRLF line endings and compares trust entries without the \\r", () => {
+    const crlf = "[features]\r\nweb_search = true\r\n";
+    const r = enableHooksFeature(crlf);
+    expect(r.content).not.toMatch(/[^\r]\n/);
+    const entry = { key: "/x/hooks.json:pre_tool_use:0:0", trustedHash: "sha256:abc" };
+    const once = upsertHookTrust(r.content, [entry]);
+    expect(once.content).not.toMatch(/[^\r]\n/);
+    expect(upsertHookTrust(once.content, [entry]).changed).toBe(false);
+    valid(once.content);
   });
 });
