@@ -2,14 +2,14 @@
 
 // src/cli.ts
 import { execFileSync } from "child_process";
-import { copyFileSync as copyFileSync4, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync3, realpathSync as realpathSync4, rmSync as rmSync5, statSync as statSync3 } from "fs";
+import { copyFileSync as copyFileSync4, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync10, readdirSync as readdirSync3, realpathSync as realpathSync4, rmSync as rmSync6, statSync as statSync3 } from "fs";
 import { homedir as homedir7, tmpdir as tmpdir3 } from "os";
 import { dirname as dirname7, isAbsolute as isAbsolute4, join as join12, relative as relative3, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync3, writeFileSync } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 
@@ -1795,32 +1795,43 @@ function secretgateInvocation(argv) {
 }
 
 // src/vault/vault.ts
-import { randomBytes } from "crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "fs";
+import { randomBytes as randomBytes2 } from "crypto";
+import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync, unlinkSync } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
+
+// src/fs-atomic.ts
+import { randomBytes } from "crypto";
+import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
+function writeFileAtomic(path, content, mode = 420) {
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  const fd = openSync(tmp, "wx", mode);
+  try {
+    try {
+      writeSync(fd, content);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
 
 // src/vault/placeholder.ts
 import { createHmac } from "crypto";
 function placeholderFor(secret, salt, hexLen = 12) {
   const digest = createHmac("sha256", salt).update(secret).digest("hex");
-  return `SECRETGATE_${digest.slice(0, hexLen)}`;
+  return `${PLACEHOLDER_PREFIX}${digest.slice(0, hexLen)}`;
 }
+var PLACEHOLDER_PREFIX = "SECRETGATE_";
+var PLACEHOLDER_LENGTHS = [16, 12];
 var PLACEHOLDER_RE = /SECRETGATE_[0-9a-f]{12,16}/g;
 
 // src/vault/vault.ts
 function defaultVaultHome() {
   return process.env.SECRETGATE_HOME ?? join2(homedir2(), ".secretgate");
-}
-function writeFileAtomic(path, content, mode) {
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tmp, "w", mode);
-  try {
-    writeSync(fd, content);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
 }
 var LOCK_WAIT_MS = 3e3;
 var LOCK_STALE_MS = 1e4;
@@ -1830,7 +1841,7 @@ function withLock(lockPath, fn) {
   let fd;
   while (fd === void 0) {
     try {
-      fd = openSync(lockPath, "wx", 384);
+      fd = openSync2(lockPath, "wx", 384);
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       try {
@@ -1844,7 +1855,7 @@ function withLock(lockPath, fn) {
   try {
     return fn();
   } finally {
-    closeSync(fd);
+    closeSync2(fd);
     try {
       unlinkSync(lockPath);
     } catch {
@@ -1869,52 +1880,87 @@ var Vault = class {
     try {
       this.saltValue = readFileSync(saltPath, "utf8").trim();
     } catch {
-      this.saltValue = randomBytes(32).toString("hex");
+      this.saltValue = randomBytes2(32).toString("hex");
       writeFileAtomic(saltPath, this.saltValue, 384);
     }
     if (!this.saltValue) throw new Error(`empty salt file: ${saltPath}`);
     return this.saltValue;
   }
+  // A missing vault is an empty one. An unreadable or malformed one is too —
+  // a corrupt vault must never break a hook — but it is reported, so the next
+  // write can set it aside instead of silently replacing every mapping in it.
   read() {
+    let raw;
     try {
-      const parsed = JSON.parse(readFileSync(this.vaultPath, "utf8"));
-      if (parsed && parsed.version === 1 && parsed.entries) return parsed;
+      raw = readFileSync(this.vaultPath, "utf8");
+    } catch {
+      return { file: { version: 1, entries: {} }, corrupt: false };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.version === 1 && parsed.entries && typeof parsed.entries === "object") return { file: parsed, corrupt: false };
     } catch {
     }
-    return { version: 1, entries: {} };
+    return { file: { version: 1, entries: {} }, corrupt: true };
+  }
+  // Keep the unreadable file (it may hold the only copy of mappings still in
+  // use) under a name nothing reads, before a fresh vault takes its place.
+  setAside() {
+    const aside = `${this.vaultPath}.corrupt-${(/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-")}-${randomBytes2(2).toString("hex")}`;
+    renameSync2(this.vaultPath, aside);
+    chmodSync(aside, 384);
   }
   // A read-merge-write cycle under the vault lock, so concurrent hook
   // processes (tool calls in flight) never drop each other's entries.
   recordSecret(secret, ruleId, source) {
-    this.ensureHome();
-    return withLock(`${this.vaultPath}.lock`, () => this.recordLocked(secret, ruleId, source));
+    return this.recordSecrets([{ secret, ruleId, source }])[0];
   }
-  recordLocked(secret, ruleId, source) {
-    const salt = this.salt();
-    const file = this.read();
-    let placeholder = "";
-    for (const hexLen of [12, 16]) {
-      placeholder = placeholderFor(secret, salt, hexLen);
-      const existing = file.entries[placeholder];
-      if (!existing || existing.secret === secret) break;
-    }
-    const entry = file.entries[placeholder];
-    if (entry && entry.secret === secret) {
-      if (!entry.sources.includes(source)) {
-        entry.sources.push(source);
+  /** Record many secrets in ONE locked read-merge-write cycle (a tool output
+   *  can carry thousands); returns their placeholders, in order. */
+  recordSecrets(items) {
+    if (items.length === 0) return [];
+    this.ensureHome();
+    return withLock(`${this.vaultPath}.lock`, () => {
+      const salt = this.salt();
+      const { file, corrupt } = this.read();
+      let dirty = false;
+      const placeholders = items.map(({ secret, ruleId, source }) => {
+        let placeholder = "";
+        for (const hexLen of [12, 16]) {
+          placeholder = placeholderFor(secret, salt, hexLen);
+          const existing = file.entries[placeholder];
+          if (!existing || existing.secret === secret) break;
+        }
+        const entry = file.entries[placeholder];
+        if (entry && entry.secret === secret) {
+          if (!entry.sources.includes(source)) {
+            entry.sources.push(source);
+            dirty = true;
+          }
+        } else {
+          file.entries[placeholder] = { secret, ruleId, firstSeen: (/* @__PURE__ */ new Date()).toISOString(), sources: [source] };
+          dirty = true;
+        }
+        return placeholder;
+      });
+      if (dirty) {
+        if (corrupt) this.setAside();
         writeFileAtomic(this.vaultPath, JSON.stringify(file, null, 2), 384);
       }
-      return placeholder;
-    }
-    file.entries[placeholder] = { secret, ruleId, firstSeen: (/* @__PURE__ */ new Date()).toISOString(), sources: [source] };
-    writeFileAtomic(this.vaultPath, JSON.stringify(file, null, 2), 384);
-    return placeholder;
+      return placeholders;
+    });
   }
   secretFor(placeholder) {
-    return this.read().entries[placeholder]?.secret;
+    return this.lookup()(placeholder);
+  }
+  /** A placeholder → secret resolver over ONE read of the vault, for callers
+   *  that resolve many placeholders at once. */
+  lookup() {
+    const { entries } = this.read().file;
+    return (placeholder) => Object.hasOwn(entries, placeholder) ? entries[placeholder]?.secret : void 0;
   }
   list() {
-    return Object.entries(this.read().entries).map(([placeholder, e]) => ({
+    return Object.entries(this.read().file.entries).map(([placeholder, e]) => ({
       placeholder,
       ruleId: e.ruleId,
       firstSeen: e.firstSeen,
@@ -2234,7 +2280,7 @@ function setTrust(files, revoke = false) {
   mkdirSync2(defaultVaultHome(), { recursive: true, mode: 448 });
   const tmp = `${trustPath()}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify({ version: 1, files: trust }, null, 2), { mode: 384 });
-  renameSync2(tmp, trustPath());
+  renameSync3(tmp, trustPath());
 }
 function allowlistPath() {
   return join4(defaultVaultHome(), "allowlist.json");
@@ -2725,8 +2771,8 @@ function describeScope(scope) {
 }
 
 // src/disable.ts
-import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync as closeSync2, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync3, renameSync as renameSync3, writeSync as writeSync2 } from "fs";
+import { randomBytes as randomBytes3 } from "crypto";
+import { closeSync as closeSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync3, renameSync as renameSync4, writeSync as writeSync2 } from "fs";
 import { join as join6 } from "path";
 var NOT_DISABLED = { disabled: false };
 var SESSION_INDEX_MAX = 20;
@@ -2740,14 +2786,14 @@ function sessionIndexPath() {
 }
 function writeFileAtomic2(path, content, mode) {
   mkdirSync3(defaultVaultHome(), { recursive: true, mode: 448 });
-  const tmp = `${path}.${process.pid}.${randomBytes2(4).toString("hex")}.tmp`;
-  const fd = openSync2(tmp, "w", mode);
+  const tmp = `${path}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
+  const fd = openSync3(tmp, "w", mode);
   try {
     writeSync2(fd, content);
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
-  renameSync3(tmp, path);
+  renameSync4(tmp, path);
 }
 function readJson(path) {
   try {
@@ -2904,7 +2950,7 @@ function shannonEntropy(s) {
 
 // src/engine/gitleaks-bin.ts
 import { spawn } from "child_process";
-import { existsSync as existsSync2, mkdtempSync, readFileSync as readFileSync4, rmSync } from "fs";
+import { existsSync as existsSync2, mkdtempSync, readFileSync as readFileSync4, rmSync as rmSync2 } from "fs";
 import { tmpdir as tmpdir2 } from "os";
 import { delimiter, join as join7 } from "path";
 var cachedPath;
@@ -2936,7 +2982,7 @@ function scanWithGitleaks(text, opts = {}) {
       stderr += d;
     });
     child.on("error", (err) => {
-      rmSync(dir, { recursive: true, force: true });
+      rmSync2(dir, { recursive: true, force: true });
       reject(err);
     });
     child.on("close", (code) => {
@@ -2950,12 +2996,20 @@ function scanWithGitleaks(text, opts = {}) {
           return;
         }
         const raw = JSON.parse(readFileSync4(report, "utf8"));
-        resolve8(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
+        resolve8(
+          raw.map((f) => ({
+            ruleId: f.RuleID,
+            secret: f.Secret,
+            ...typeof f.StartLine === "number" && f.StartLine > 0 ? { startLine: f.StartLine } : {}
+          }))
+        );
       } catch (err) {
         reject(err);
       } finally {
-        rmSync(dir, { recursive: true, force: true });
+        rmSync2(dir, { recursive: true, force: true });
       }
+    });
+    child.stdin.on("error", () => {
     });
     child.stdin.end(text);
   });
@@ -7358,7 +7412,7 @@ var BUILTIN_RULES = [
     // (`"password": "Client Secret"` in Airflow's connection-form metadata).
     // The cost is a spaced passphrase, which this rule now leaves to a real
     // password manager — the same trade-off the README already states.
-    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret)
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !PLACEHOLDER_ONLY.test(secret)
   }
 ];
 var COMPILED = [
@@ -7373,16 +7427,17 @@ var COMPILED = [
   })),
   ...BUILTIN_RULES
 ];
-var RULE_SOURCE_TEXTS;
+var RULE_SOURCE_BLOB;
 function isRuleSourceText(secret) {
-  RULE_SOURCE_TEXTS ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]);
-  return RULE_SOURCE_TEXTS.some((s) => s.includes(secret));
+  RULE_SOURCE_BLOB ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]).join("\0");
+  return !secret.includes("\0") && RULE_SOURCE_BLOB.includes(secret);
 }
 function isNonSecret(secret) {
   return PLACEHOLDER_ONLY.test(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
 }
+var PATH_RULES_COMPILED = PATH_RULES.map((r) => ({ id: r.id, re: new RegExp(r.path.source, r.path.flags.replaceAll(/[gy]/g, "")) }));
 function sensitiveFileNameRule(path) {
-  return PATH_RULES.find((r) => new RegExp(r.path.source, r.path.flags).test(path))?.id;
+  return PATH_RULES_COMPILED.find((r) => r.re.test(path))?.id;
 }
 var GLOBAL_PATHS = GLOBAL_ALLOWLIST.paths.map((p) => new RegExp(p));
 var GLOBAL_REGEXES = GLOBAL_ALLOWLIST.regexes.map((r) => new RegExp(r.source, r.flags));
@@ -7456,10 +7511,10 @@ function scan(text, cfg = {}) {
       const { secret, start, end } = pickSecret(match, rule.secretGroup);
       if (secret.length === 0) continue;
       if (PLACEHOLDER_ONLY.test(secret)) continue;
-      if (isRuleSourceText(secret)) continue;
-      if (looksLikePlaceholder(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
       if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
+      if (isRuleSourceText(secret)) continue;
+      if (looksLikePlaceholder(secret)) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
       const line = lineAt(starts, start);
@@ -7486,18 +7541,17 @@ function dedupe(findings) {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
   const kept = [];
   for (const f of sorted) {
-    const clash = kept.findIndex((k) => f.start < k.end && k.start < f.end);
-    if (clash === -1) {
+    const other = kept[kept.length - 1];
+    if (other === void 0 || f.start >= other.end) {
       kept.push(f);
       continue;
     }
-    const other = kept[clash];
     const fGeneric = f.ruleId === "generic-api-key";
     const oGeneric = other.ruleId === "generic-api-key";
     const preferF = oGeneric && !fGeneric || fGeneric === oGeneric && f.end - f.start > other.end - other.start;
-    if (preferF) kept[clash] = f;
+    if (preferF) kept[kept.length - 1] = f;
   }
-  return kept.sort((a, b) => a.start - b.start);
+  return kept;
 }
 
 // src/prompt-directive.ts
@@ -7553,23 +7607,31 @@ function applyPromptDirective(directive, sessionId, cwd) {
 function redactText(text, vault, source, cfg = {}) {
   const findings = scan(text, { ...cfg, pragmas: cfg.pragmas ?? false });
   if (findings.length === 0) return { text, findings, replaced: [] };
-  let out = text;
-  const replaced = [];
-  for (const f of [...findings].sort((a, b) => b.start - a.start)) {
-    const placeholder = vault.recordSecret(f.secret, f.ruleId, source);
-    out = out.slice(0, f.start) + placeholder + out.slice(f.end);
-    replaced.push({ placeholder, ruleId: f.ruleId });
-  }
-  replaced.reverse();
-  return { text: out, findings, replaced };
+  const ordered = [...findings].sort((a, b) => a.start - b.start);
+  const placeholders = vault.recordSecrets(ordered.map((f) => ({ secret: f.secret, ruleId: f.ruleId, source })));
+  const pieces = [];
+  let at = 0;
+  ordered.forEach((f, i) => {
+    pieces.push(text.slice(at, f.start), placeholders[i]);
+    at = f.end;
+  });
+  pieces.push(text.slice(at));
+  return { text: pieces.join(""), findings, replaced: ordered.map((f, i) => ({ placeholder: placeholders[i], ruleId: f.ruleId })) };
 }
 function restorePlaceholders(text, vault) {
+  if (!text.includes(PLACEHOLDER_PREFIX)) return { text, restored: 0 };
+  const lookup = vault.lookup();
   let restored = 0;
-  const out = text.replace(PLACEHOLDER_RE, (placeholder) => {
-    const secret = vault.secretFor(placeholder);
-    if (secret === void 0) return placeholder;
-    restored++;
-    return secret;
+  const out = text.replace(PLACEHOLDER_RE, (match) => {
+    const hex = match.slice(PLACEHOLDER_PREFIX.length);
+    for (const len of PLACEHOLDER_LENGTHS) {
+      if (hex.length < len) continue;
+      const secret = lookup(PLACEHOLDER_PREFIX + hex.slice(0, len));
+      if (secret === void 0) continue;
+      restored++;
+      return secret + hex.slice(len);
+    }
+    return match;
   });
   return { text: out, restored };
 }
@@ -8102,8 +8164,8 @@ ${text}`
 }
 
 // src/install/allow-store.ts
-import { randomBytes as randomBytes3 } from "crypto";
-import { closeSync as closeSync3, mkdirSync as mkdirSync5, openSync as openSync3, readFileSync as readFileSync5, renameSync as renameSync4, writeSync as writeSync3 } from "fs";
+import { randomBytes as randomBytes4 } from "crypto";
+import { closeSync as closeSync4, mkdirSync as mkdirSync5, openSync as openSync4, readFileSync as readFileSync5, renameSync as renameSync5, writeSync as writeSync3 } from "fs";
 import { dirname as dirname5 } from "path";
 function writeAllow(add) {
   const path = allowlistPath();
@@ -8118,14 +8180,14 @@ function writeAllow(add) {
     rules: [.../* @__PURE__ */ new Set([...current.rules ?? [], ...add.rules ?? []])],
     paths: [.../* @__PURE__ */ new Set([...current.paths ?? [], ...add.paths ?? []])]
   };
-  const tmp = `${path}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
-  const fd = openSync3(tmp, "w", 384);
+  const tmp = `${path}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
+  const fd = openSync4(tmp, "w", 384);
   try {
     writeSync3(fd, JSON.stringify(merged, null, 2));
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
-  renameSync4(tmp, path);
+  renameSync5(tmp, path);
   return merged;
 }
 
@@ -8136,8 +8198,8 @@ function isSecretgateHook(command, agent) {
 }
 
 // src/install/json-merge.ts
-import { randomBytes as randomBytes4 } from "crypto";
-import { closeSync as closeSync4, copyFileSync, existsSync as existsSync4, openSync as openSync4, readFileSync as readFileSync6, renameSync as renameSync5, writeSync as writeSync4 } from "fs";
+import { randomBytes as randomBytes5 } from "crypto";
+import { closeSync as closeSync5, copyFileSync, existsSync as existsSync4, openSync as openSync5, readFileSync as readFileSync6, renameSync as renameSync6, writeSync as writeSync4 } from "fs";
 var SettingsParseError = class extends Error {
   constructor(path, cause) {
     super(`refusing to edit ${path}: it is not valid JSON (${cause}). Fix it manually, then re-run.`);
@@ -8183,19 +8245,19 @@ function editJsonFile(path, mutate) {
     backupPath = `${path}.secretgate-backup-${stamp}`;
     copyFileSync(path, backupPath);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes4(4).toString("hex")}.tmp`;
-  const fd = openSync4(tmp, "w", 420);
+  const tmp = `${path}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
+  const fd = openSync5(tmp, "w", 420);
   try {
     writeSync4(fd, next);
   } finally {
-    closeSync4(fd);
+    closeSync5(fd);
   }
-  renameSync5(tmp, path);
+  renameSync6(tmp, path);
   return { path, changed: true, backupPath };
 }
 
 // src/install/claude-code.ts
-import { existsSync as existsSync5, readFileSync as readFileSync7, rmSync as rmSync2 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7, rmSync as rmSync3 } from "fs";
 var CC_DENY_RULES = [
   "Read(**/.env)",
   "Read(**/.env.local)",
@@ -8308,13 +8370,13 @@ function uninstallClaudeCode({ settingsPath }) {
       if (Object.keys(s.permissions).length === 0) delete s.permissions;
     }
   });
-  if (existsSync5(ownershipPath)) rmSync2(ownershipPath);
+  if (existsSync5(ownershipPath)) rmSync3(ownershipPath);
   return report;
 }
 
 // src/install/codex.ts
-import { createHash as createHash4, randomBytes as randomBytes5 } from "crypto";
-import { closeSync as closeSync5, copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, openSync as openSync5, readFileSync as readFileSync8, realpathSync as realpathSync2, renameSync as renameSync6, writeSync as writeSync5 } from "fs";
+import { createHash as createHash4, randomBytes as randomBytes6 } from "crypto";
+import { closeSync as closeSync6, copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, openSync as openSync6, readFileSync as readFileSync8, realpathSync as realpathSync2, renameSync as renameSync7, writeSync as writeSync5 } from "fs";
 import { homedir as homedir5 } from "os";
 import { join as join9, resolve as resolve6 } from "path";
 
@@ -8557,14 +8619,14 @@ function writeTextWithBackup(path, content) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync2(path, `${path}.secretgate-backup-${stamp}`);
   }
-  const tmp = `${path}.${process.pid}.${randomBytes5(4).toString("hex")}.tmp`;
-  const fd = openSync5(tmp, "w", 420);
+  const tmp = `${path}.${process.pid}.${randomBytes6(4).toString("hex")}.tmp`;
+  const fd = openSync6(tmp, "w", 420);
   try {
     writeSync5(fd, content);
   } finally {
-    closeSync5(fd);
+    closeSync6(fd);
   }
-  renameSync6(tmp, path);
+  renameSync7(tmp, path);
 }
 function installCodex({ codexDir, command }) {
   mkdirSync6(codexDir, { recursive: true });
@@ -8630,7 +8692,7 @@ function uninstallCodex({ codexDir }) {
 }
 
 // src/install/opencode.ts
-import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync9, rmSync as rmSync3, writeFileSync as writeFileSync3 } from "fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync9, rmSync as rmSync4, writeFileSync as writeFileSync3 } from "fs";
 import { homedir as homedir6 } from "os";
 import { join as join10 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
@@ -8659,7 +8721,7 @@ function uninstallOpencode({ configDir }) {
   let changed = false;
   const target = join10(configDir, "plugin", "secretgate.js");
   if (existsSync7(target) && readFileSync9(target, "utf8").includes(OWNERSHIP_MARKER)) {
-    rmSync3(target);
+    rmSync4(target);
     changed = true;
   }
   const configPath = join10(configDir, "opencode.json");
@@ -8676,7 +8738,7 @@ function uninstallOpencode({ configDir }) {
 }
 
 // src/self.ts
-import { chmodSync, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync7, rmSync as rmSync4 } from "fs";
+import { chmodSync as chmodSync2, copyFileSync as copyFileSync3, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync8, rmSync as rmSync5 } from "fs";
 import { basename as basename5, dirname as dirname6, join as join11 } from "path";
 import { fileURLToPath } from "url";
 function currentContext() {
@@ -8718,10 +8780,10 @@ function atomicCopy(source, target) {
   const tmp = `${target}.${process.pid}.tmp`;
   try {
     copyFileSync3(source, tmp);
-    chmodSync(tmp, 493);
-    renameSync7(tmp, target);
+    chmodSync2(tmp, 493);
+    renameSync8(tmp, target);
   } catch (err) {
-    rmSync4(tmp, { force: true });
+    rmSync5(tmp, { force: true });
     throw err;
   }
 }
@@ -8843,11 +8905,14 @@ function hashPrefix(secret) {
 async function gitleaksExtra(bin, text, found, allowlist) {
   const known = new Set(found.map((f) => f.secret));
   const extra = [];
+  let lineStarts2;
   for (const g of await scanWithGitleaks(text, { bin })) {
     if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
     known.add(g.secret);
-    const start = Math.max(0, text.indexOf(g.secret));
-    const line = text.slice(0, start).split("\n").length - 1;
+    lineStarts2 ??= [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
+    const reported = g.startLine !== void 0 && g.startLine <= lineStarts2.length ? text.indexOf(g.secret, lineStarts2[g.startLine - 1]) : -1;
+    const start = reported !== -1 ? reported : Math.max(0, text.indexOf(g.secret));
+    const line = g.startLine !== void 0 && reported !== -1 ? g.startLine - 1 : text.slice(0, start).split("\n").length - 1;
     extra.push({
       ruleId: `gitleaks:${g.ruleId}`,
       match: g.secret,
@@ -8890,20 +8955,23 @@ async function cmdScan(args, io) {
   const cfg = loadConfig(process.cwd());
   const allowlist = cfg.scanAllowlist;
   const gitleaks = hybrid && cfg.hybrid === "auto" ? gitleaksPath() : null;
-  const hits = [];
+  const groups = [];
   const extra = [];
   const tooLarge = [];
   let gitleaksError;
   const scanText = (text, sourcePath, label) => {
     const found = scan(text, { sourcePath, allowlist });
-    for (const finding of found) hits.push({ finding, path: label });
+    const group = groups.push(found.map((finding) => ({ finding, path: label }))) - 1;
     if (gitleaks)
-      extra.push(async () => {
-        try {
-          return (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label }));
-        } catch (err) {
-          gitleaksError ??= err instanceof Error ? err.message.split("\n")[0] : String(err);
-          return [];
+      extra.push({
+        group,
+        run: async () => {
+          try {
+            return (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label }));
+          } catch (err) {
+            gitleaksError ??= err instanceof Error ? err.message.split("\n")[0] : String(err);
+            return [];
+          }
         }
       });
   };
@@ -8925,7 +8993,7 @@ async function cmdScan(args, io) {
       if (allowlist.paths?.some((g) => pathMatchesGlob(rel, g) || pathMatchesGlob(fromCwd, g))) continue;
       const nameRule = sensitiveFileNameRule(rel);
       if (nameRule) {
-        hits.push({ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel });
+        groups.push([{ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel }]);
         continue;
       }
       const read = readTextFile(file);
@@ -8936,16 +9004,16 @@ async function cmdScan(args, io) {
       scanText(read.text, fromCwd.startsWith("..") ? rel : fromCwd, rel);
     }
   }
-  const added = new Array(extra.length);
   let next = 0;
   const worker = async () => {
     while (next < extra.length) {
-      const i = next++;
-      added[i] = await extra[i]();
+      const { group, run: run2 } = extra[next++];
+      const added = await run2();
+      if (added.length > 0) groups[group] = [...groups[group], ...added].sort((a, b) => a.finding.line - b.finding.line || a.finding.start - b.finding.start);
     }
   };
   await Promise.all(Array.from({ length: Math.min(8, extra.length) }, worker));
-  hits.push(...added.flat());
+  const hits = groups.flat();
   if (gitleaksError) io.stderr(`secretgate: gitleaks failed (${gitleaksError}) \u2014 these results come from the JS engine only
 `);
   if (tooLarge.length > 0)
@@ -9438,7 +9506,7 @@ TOKEN=${fake}
 `);
     ok = false;
   } finally {
-    rmSync5(tmpHome, { recursive: true, force: true });
+    rmSync6(tmpHome, { recursive: true, force: true });
   }
   return ok;
 }
@@ -9503,7 +9571,7 @@ TOKEN=${fake}
 `);
     ok = false;
   } finally {
-    rmSync5(tmpHome, { recursive: true, force: true });
+    rmSync6(tmpHome, { recursive: true, force: true });
   }
   return ok;
 }
@@ -9574,7 +9642,7 @@ function verifyOpencodeBundle(io) {
     io.stdout("  \u2717 opencode: installed plugin verification failed; reinstall and retry.\n");
     return false;
   } finally {
-    rmSync5(scratch, { recursive: true, force: true });
+    rmSync6(scratch, { recursive: true, force: true });
   }
 }
 async function cmdInit(args, io) {

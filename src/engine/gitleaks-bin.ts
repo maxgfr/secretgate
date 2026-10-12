@@ -26,6 +26,8 @@ export function gitleaksPath(): string | null {
 export interface GitleaksFinding {
   ruleId: string;
   secret: string;
+  /** 1-based line gitleaks reports the secret on, when it does */
+  startLine?: number;
 }
 
 // Exit codes: 0 = clean, LEAK_EXIT (via --exit-code) = leaks found, anything
@@ -60,14 +62,24 @@ export function scanWithGitleaks(text: string, opts: { bin?: string; timeoutMs?:
           reject(new Error(`gitleaks exited ${code}: ${stderr.slice(0, 500)}`));
           return;
         }
-        const raw = JSON.parse(readFileSync(report, "utf8")) as Array<{ RuleID: string; Secret: string }>;
-        resolve(raw.map((f) => ({ ruleId: f.RuleID, secret: f.Secret })));
+        const raw = JSON.parse(readFileSync(report, "utf8")) as Array<{ RuleID: string; Secret: string; StartLine?: unknown }>;
+        resolve(
+          raw.map((f) => ({
+            ruleId: f.RuleID,
+            secret: f.Secret,
+            ...(typeof f.StartLine === "number" && f.StartLine > 0 ? { startLine: f.StartLine } : {}),
+          })),
+        );
       } catch (err) {
         reject(err);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
     });
+    // gitleaks may exit before reading everything (a config error, a crash):
+    // the write then fails with EPIPE, which must not crash `scan` — the exit
+    // code, handled on close, says what happened.
+    child.stdin.on("error", () => {});
     child.stdin.end(text);
   });
 }

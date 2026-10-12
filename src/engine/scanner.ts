@@ -257,7 +257,7 @@ const BUILTIN_RULES: CompiledRule[] = [
     // (`"password": "Client Secret"` in Airflow's connection-form metadata).
     // The cost is a spaced passphrase, which this rule now leaves to a real
     // password manager — the same trade-off the README already states.
-    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret),
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !PLACEHOLDER_ONLY.test(secret),
   },
 ];
 
@@ -282,10 +282,12 @@ const COMPILED: CompiledRule[] = [
 // (raw, or JSON-escaped as in the generated table) is never a finding. A real
 // credential cannot hide behind this: it would have to BE a substring of a
 // fixed public regex, i.e. not be a secret at all.
-let RULE_SOURCE_TEXTS: string[] | undefined;
+// All sources joined once by a byte no candidate contains (scanned text with a
+// NUL is binary and never reaches a rule), so one search covers them all.
+let RULE_SOURCE_BLOB: string | undefined;
 function isRuleSourceText(secret: string): boolean {
-  RULE_SOURCE_TEXTS ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]);
-  return RULE_SOURCE_TEXTS.some((s) => s.includes(secret));
+  RULE_SOURCE_BLOB ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]).join("\u0000");
+  return !secret.includes("\u0000") && RULE_SOURCE_BLOB.includes(secret);
 }
 
 // File names that ARE the finding (e.g. a .p12 bundle) — used by callers that
@@ -297,8 +299,10 @@ export function isNonSecret(secret: string): boolean {
   return PLACEHOLDER_ONLY.test(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
 }
 
+const PATH_RULES_COMPILED = PATH_RULES.map((r) => ({ id: r.id, re: new RegExp(r.path.source, r.path.flags.replaceAll(/[gy]/g, "")) }));
+
 export function sensitiveFileNameRule(path: string): string | undefined {
-  return PATH_RULES.find((r) => new RegExp(r.path.source, r.path.flags).test(path))?.id;
+  return PATH_RULES_COMPILED.find((r) => r.re.test(path))?.id;
 }
 
 const GLOBAL_PATHS = GLOBAL_ALLOWLIST.paths.map((p) => new RegExp(p));
@@ -390,6 +394,10 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
       const { secret, start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
       if (secret.length === 0) continue;
       if (PLACEHOLDER_ONLY.test(secret)) continue; // our own already-redacted marker
+      // Every gate below must pass, so the cheap, rule-specific ones (Luhn,
+      // IIN, the URL username) run before the ones that search shared tables.
+      if (rule.post && !rule.post(secret)) continue;
+      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
       if (isRuleSourceText(secret)) continue; // our own detection patterns
       // PLACEHOLDER_WORDS encodes "this string is not a real secret", so it
       // holds no matter which rule matched. It used to be consulted only by
@@ -398,8 +406,6 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
       // flagged by hashicorp-tf-password — the single most canonical placeholder
       // in existence, redacted out of the user's own file.
       if (looksLikePlaceholder(secret)) continue;
-      if (rule.post && !rule.post(secret)) continue;
-      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
 
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== undefined && entropy <= rule.entropy) continue;
@@ -430,20 +436,21 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
 
 // When two findings' secret spans overlap, keep the more specific one:
 // a named vendor rule beats generic-api-key, then the longer secret wins.
+// Findings are visited by start, so the kept spans stay sorted and disjoint:
+// only the last one kept can reach the next finding.
 function dedupe(findings: Finding[]): Finding[] {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
   const kept: Finding[] = [];
   for (const f of sorted) {
-    const clash = kept.findIndex((k) => f.start < k.end && k.start < f.end);
-    if (clash === -1) {
+    const other = kept[kept.length - 1];
+    if (other === undefined || f.start >= other.end) {
       kept.push(f);
       continue;
     }
-    const other = kept[clash]!;
     const fGeneric = f.ruleId === "generic-api-key";
     const oGeneric = other.ruleId === "generic-api-key";
     const preferF = (oGeneric && !fGeneric) || (fGeneric === oGeneric && f.end - f.start > other.end - other.start);
-    if (preferF) kept[clash] = f;
+    if (preferF) kept[kept.length - 1] = f;
   }
-  return kept.sort((a, b) => a.start - b.start);
+  return kept;
 }

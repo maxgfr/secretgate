@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { RULES } from "../../src/engine/rules.gen.js";
-import { ScanBudgetError, scan } from "../../src/engine/scanner.js";
+import { isNonSecret, ScanBudgetError, scan, sensitiveFileNameRule } from "../../src/engine/scanner.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
 const sha256hex = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -336,5 +336,30 @@ describe("scan — never flags its own rule database", () => {
   it("still flags a real secret-shaped token on the same line as rule-source text", () => {
     const findings = scan(`"source": "harmless", "leak": "${FAKE.githubPat}"`);
     expect(findings.map((f) => f.ruleId)).toContain("github-pat");
+  });
+});
+
+describe("scanner at volume", () => {
+  it("scans 5000 distinct tokens in well under a second and keeps them all", () => {
+    const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let x = 11;
+    const tok = (): string => `ghp${"_"}${Array.from({ length: 36 }, () => ALNUM[(x = (x * 1103515245 + 12345) & 0x7fffffff) % 62]).join("")}`;
+    const text = Array.from({ length: 5000 }, (_, i) => `T${i}=${tok()}`).join("\n");
+    const started = performance.now();
+    const found = scan(text);
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(found).toHaveLength(5000);
+    expect(found.every((f, i) => i === 0 || f.start >= found[i - 1]!.end)).toBe(true);
+  });
+
+  it("names a sensitive file the same way on every call", () => {
+    for (let i = 0; i < 3; i++) {
+      expect(sensitiveFileNameRule("certs/client.p12")).toBe("pkcs12-file");
+      expect(sensitiveFileNameRule("src/index.ts")).toBeUndefined();
+    }
+  });
+
+  it("never treats a secret as rule text because it spans two rule sources", () => {
+    expect(isNonSecret(`${FAKE.githubPat}\u0000x`)).toBe(false);
   });
 });

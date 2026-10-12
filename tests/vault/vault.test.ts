@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -86,5 +86,38 @@ describe("Vault", () => {
     vault.recordSecret("tok-value", "github-pat", "prompt");
     const raw = readFileSync(join(home, "vault.json"), "utf8");
     expect(() => JSON.parse(raw)).not.toThrow();
+  });
+
+  it("sets a corrupt vault aside before starting a fresh one", () => {
+    writeFileSync(join(home, "vault.json"), "{ not json");
+    const vault = new Vault(home);
+    const p = vault.recordSecret("tok-value", "github-pat", "prompt");
+    const aside = readdirSync(home).filter((f) => f.startsWith("vault.json.corrupt-"));
+    expect(aside).toHaveLength(1);
+    expect(readFileSync(join(home, aside[0]!), "utf8")).toBe("{ not json");
+    expect(statSync(join(home, aside[0]!)).mode & 0o777).toBe(0o600);
+    expect(new Vault(home).secretFor(p)).toBe("tok-value");
+  });
+
+  it("a vault with the wrong shape is set aside too, and reads never throw", () => {
+    writeFileSync(join(home, "vault.json"), JSON.stringify({ version: 2 }));
+    const vault = new Vault(home);
+    expect(vault.secretFor("SECRETGATE_000000000000")).toBeUndefined();
+    vault.recordSecret("tok-value", "github-pat", "prompt");
+    expect(readdirSync(home).filter((f) => f.startsWith("vault.json.corrupt-"))).toHaveLength(1);
+  });
+
+  it("recordSecrets writes every mapping in one locked cycle", () => {
+    const vault = new Vault(home);
+    const placeholders = vault.recordSecrets([
+      { secret: "s-one", ruleId: "a", source: "x" },
+      { secret: "s-two", ruleId: "b", source: "x" },
+      { secret: "s-one", ruleId: "a", source: "y" },
+    ]);
+    expect(placeholders[0]).toBe(placeholders[2]);
+    expect(placeholders[0]).not.toBe(placeholders[1]);
+    const listed = vault.list().find((e) => e.placeholder === placeholders[0]);
+    expect(listed?.sources).toEqual(["x", "y"]);
+    expect(vault.secretFor(placeholders[1]!)).toBe("s-two");
   });
 });

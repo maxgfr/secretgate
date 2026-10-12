@@ -164,11 +164,16 @@ interface ScanHit {
 async function gitleaksExtra(bin: string, text: string, found: Finding[], allowlist: UserAllowlist): Promise<Finding[]> {
   const known = new Set(found.map((f) => f.secret));
   const extra: Finding[] = [];
+  let lineStarts: number[] | undefined;
   for (const g of await scanWithGitleaks(text, { bin })) {
     if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
     known.add(g.secret);
-    const start = Math.max(0, text.indexOf(g.secret));
-    const line = text.slice(0, start).split("\n").length - 1;
+    // gitleaks says which line; the first occurrence is only a fallback (a
+    // repeated secret would otherwise always point at its first line).
+    lineStarts ??= [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
+    const reported = g.startLine !== undefined && g.startLine <= lineStarts.length ? text.indexOf(g.secret, lineStarts[g.startLine - 1]) : -1;
+    const start = reported !== -1 ? reported : Math.max(0, text.indexOf(g.secret));
+    const line = g.startLine !== undefined && reported !== -1 ? g.startLine - 1 : text.slice(0, start).split("\n").length - 1;
     extra.push({
       ruleId: `gitleaks:${g.ruleId}`,
       match: g.secret,
@@ -214,24 +219,28 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
   // allowlist applies here, trusted or not.
   const allowlist = cfg.scanAllowlist;
   const gitleaks = hybrid && cfg.hybrid === "auto" ? gitleaksPath() : null;
-  const hits: ScanHit[] = [];
-  // The gitleaks pass spawns one process per file: queue them and run a few at
-  // a time, then append what they add in file order (deterministic output).
-  const extra: Array<() => Promise<ScanHit[]>> = [];
+  // One group per file, in walk order. The gitleaks pass spawns one process
+  // per file: queue them and run a few at a time, then merge what each adds
+  // into its own file's group by line (deterministic output).
+  const groups: ScanHit[][] = [];
+  const extra: Array<{ group: number; run: () => Promise<ScanHit[]> }> = [];
   const tooLarge: string[] = [];
   let gitleaksError: string | undefined;
   const scanText = (text: string, sourcePath: string | undefined, label: string): void => {
     const found = scan(text, { sourcePath, allowlist });
-    for (const finding of found) hits.push({ finding, path: label });
+    const group = groups.push(found.map((finding) => ({ finding, path: label }))) - 1;
     if (gitleaks)
-      extra.push(async () => {
-        try {
-          return (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label }));
-        } catch (err) {
-          // A broken gitleaks must not cost the JS engine's findings.
-          gitleaksError ??= err instanceof Error ? err.message.split("\n")[0] : String(err);
-          return [];
-        }
+      extra.push({
+        group,
+        run: async () => {
+          try {
+            return (await gitleaksExtra(gitleaks, text, found, allowlist)).map((finding) => ({ finding, path: label }));
+          } catch (err) {
+            // A broken gitleaks must not cost the JS engine's findings.
+            gitleaksError ??= err instanceof Error ? err.message.split("\n")[0] : String(err);
+            return [];
+          }
+        },
       });
   };
 
@@ -254,7 +263,7 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
       if (allowlist.paths?.some((g) => pathMatchesGlob(rel, g) || pathMatchesGlob(fromCwd, g))) continue;
       const nameRule = sensitiveFileNameRule(rel);
       if (nameRule) {
-        hits.push({ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel });
+        groups.push([{ finding: { ruleId: nameRule, match: rel, secret: "", start: 0, end: 0, entropy: 0, line: 0 }, path: rel }]);
         continue;
       }
       const read = readTextFile(file);
@@ -265,16 +274,16 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
       scanText(read.text, fromCwd.startsWith("..") ? rel : fromCwd, rel);
     }
   }
-  const added: ScanHit[][] = new Array(extra.length);
   let next = 0;
   const worker = async (): Promise<void> => {
     while (next < extra.length) {
-      const i = next++;
-      added[i] = await extra[i]!();
+      const { group, run } = extra[next++]!;
+      const added = await run();
+      if (added.length > 0) groups[group] = [...groups[group]!, ...added].sort((a, b) => a.finding.line - b.finding.line || a.finding.start - b.finding.start);
     }
   };
   await Promise.all(Array.from({ length: Math.min(8, extra.length) }, worker));
-  hits.push(...added.flat());
+  const hits = groups.flat();
   if (gitleaksError) io.stderr(`secretgate: gitleaks failed (${gitleaksError}) — these results come from the JS engine only\n`);
   if (tooLarge.length > 0)
     io.stderr(

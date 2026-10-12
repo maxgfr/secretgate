@@ -32,4 +32,14 @@ describe("scanWithGitleaks", () => {
     const bin = stubGitleaks(`cat > /dev/null; echo 'boom' >&2; exit 3`);
     await expect(scanWithGitleaks("whatever", { bin })).rejects.toThrow(/exited 3/);
   });
+
+  it("survives a binary that exits before reading its input (EPIPE)", async () => {
+    const bin = stubGitleaks(`exit 3`);
+    await expect(scanWithGitleaks("x".repeat(8 * 1024 * 1024), { bin })).rejects.toThrow(/exited 3/);
+  });
+
+  it("reports the line gitleaks found the secret on", async () => {
+    const bin = stubGitleaks(`cat > /dev/null; echo '[{"RuleID":"r","Secret":"tok123","StartLine":3}]' > "${REPORT_ARG}"; exit 99`);
+    await expect(scanWithGitleaks("tok123\nx\ntok123\n", { bin })).resolves.toEqual([{ ruleId: "r", secret: "tok123", startLine: 3 }]);
+  });
 });

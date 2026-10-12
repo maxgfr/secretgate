@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 
 // src/config.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync2, writeFileSync } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync2, renameSync as renameSync3, writeFileSync } from "fs";
 import { homedir as homedir3 } from "os";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 
@@ -1791,32 +1791,43 @@ function secretgateInvocation(argv) {
 }
 
 // src/vault/vault.ts
-import { randomBytes } from "crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "fs";
+import { randomBytes as randomBytes2 } from "crypto";
+import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync, unlinkSync } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
+
+// src/fs-atomic.ts
+import { randomBytes } from "crypto";
+import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
+function writeFileAtomic(path, content, mode = 420) {
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  const fd = openSync(tmp, "wx", mode);
+  try {
+    try {
+      writeSync(fd, content);
+    } finally {
+      closeSync(fd);
+    }
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+}
 
 // src/vault/placeholder.ts
 import { createHmac } from "crypto";
 function placeholderFor(secret, salt, hexLen = 12) {
   const digest = createHmac("sha256", salt).update(secret).digest("hex");
-  return `SECRETGATE_${digest.slice(0, hexLen)}`;
+  return `${PLACEHOLDER_PREFIX}${digest.slice(0, hexLen)}`;
 }
+var PLACEHOLDER_PREFIX = "SECRETGATE_";
+var PLACEHOLDER_LENGTHS = [16, 12];
 var PLACEHOLDER_RE = /SECRETGATE_[0-9a-f]{12,16}/g;
 
 // src/vault/vault.ts
 function defaultVaultHome() {
   return process.env.SECRETGATE_HOME ?? join2(homedir2(), ".secretgate");
-}
-function writeFileAtomic(path, content, mode) {
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tmp, "w", mode);
-  try {
-    writeSync(fd, content);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
 }
 var LOCK_WAIT_MS = 3e3;
 var LOCK_STALE_MS = 1e4;
@@ -1826,7 +1837,7 @@ function withLock(lockPath, fn) {
   let fd;
   while (fd === void 0) {
     try {
-      fd = openSync(lockPath, "wx", 384);
+      fd = openSync2(lockPath, "wx", 384);
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       try {
@@ -1840,7 +1851,7 @@ function withLock(lockPath, fn) {
   try {
     return fn();
   } finally {
-    closeSync(fd);
+    closeSync2(fd);
     try {
       unlinkSync(lockPath);
     } catch {
@@ -1865,52 +1876,87 @@ var Vault = class {
     try {
       this.saltValue = readFileSync(saltPath, "utf8").trim();
     } catch {
-      this.saltValue = randomBytes(32).toString("hex");
+      this.saltValue = randomBytes2(32).toString("hex");
       writeFileAtomic(saltPath, this.saltValue, 384);
     }
     if (!this.saltValue) throw new Error(`empty salt file: ${saltPath}`);
     return this.saltValue;
   }
+  // A missing vault is an empty one. An unreadable or malformed one is too —
+  // a corrupt vault must never break a hook — but it is reported, so the next
+  // write can set it aside instead of silently replacing every mapping in it.
   read() {
+    let raw;
     try {
-      const parsed = JSON.parse(readFileSync(this.vaultPath, "utf8"));
-      if (parsed && parsed.version === 1 && parsed.entries) return parsed;
+      raw = readFileSync(this.vaultPath, "utf8");
+    } catch {
+      return { file: { version: 1, entries: {} }, corrupt: false };
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.version === 1 && parsed.entries && typeof parsed.entries === "object") return { file: parsed, corrupt: false };
     } catch {
     }
-    return { version: 1, entries: {} };
+    return { file: { version: 1, entries: {} }, corrupt: true };
+  }
+  // Keep the unreadable file (it may hold the only copy of mappings still in
+  // use) under a name nothing reads, before a fresh vault takes its place.
+  setAside() {
+    const aside = `${this.vaultPath}.corrupt-${(/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-")}-${randomBytes2(2).toString("hex")}`;
+    renameSync2(this.vaultPath, aside);
+    chmodSync(aside, 384);
   }
   // A read-merge-write cycle under the vault lock, so concurrent hook
   // processes (tool calls in flight) never drop each other's entries.
   recordSecret(secret, ruleId, source) {
-    this.ensureHome();
-    return withLock(`${this.vaultPath}.lock`, () => this.recordLocked(secret, ruleId, source));
+    return this.recordSecrets([{ secret, ruleId, source }])[0];
   }
-  recordLocked(secret, ruleId, source) {
-    const salt = this.salt();
-    const file = this.read();
-    let placeholder = "";
-    for (const hexLen of [12, 16]) {
-      placeholder = placeholderFor(secret, salt, hexLen);
-      const existing = file.entries[placeholder];
-      if (!existing || existing.secret === secret) break;
-    }
-    const entry = file.entries[placeholder];
-    if (entry && entry.secret === secret) {
-      if (!entry.sources.includes(source)) {
-        entry.sources.push(source);
+  /** Record many secrets in ONE locked read-merge-write cycle (a tool output
+   *  can carry thousands); returns their placeholders, in order. */
+  recordSecrets(items) {
+    if (items.length === 0) return [];
+    this.ensureHome();
+    return withLock(`${this.vaultPath}.lock`, () => {
+      const salt = this.salt();
+      const { file, corrupt } = this.read();
+      let dirty = false;
+      const placeholders = items.map(({ secret, ruleId, source }) => {
+        let placeholder = "";
+        for (const hexLen of [12, 16]) {
+          placeholder = placeholderFor(secret, salt, hexLen);
+          const existing = file.entries[placeholder];
+          if (!existing || existing.secret === secret) break;
+        }
+        const entry = file.entries[placeholder];
+        if (entry && entry.secret === secret) {
+          if (!entry.sources.includes(source)) {
+            entry.sources.push(source);
+            dirty = true;
+          }
+        } else {
+          file.entries[placeholder] = { secret, ruleId, firstSeen: (/* @__PURE__ */ new Date()).toISOString(), sources: [source] };
+          dirty = true;
+        }
+        return placeholder;
+      });
+      if (dirty) {
+        if (corrupt) this.setAside();
         writeFileAtomic(this.vaultPath, JSON.stringify(file, null, 2), 384);
       }
-      return placeholder;
-    }
-    file.entries[placeholder] = { secret, ruleId, firstSeen: (/* @__PURE__ */ new Date()).toISOString(), sources: [source] };
-    writeFileAtomic(this.vaultPath, JSON.stringify(file, null, 2), 384);
-    return placeholder;
+      return placeholders;
+    });
   }
   secretFor(placeholder) {
-    return this.read().entries[placeholder]?.secret;
+    return this.lookup()(placeholder);
+  }
+  /** A placeholder → secret resolver over ONE read of the vault, for callers
+   *  that resolve many placeholders at once. */
+  lookup() {
+    const { entries } = this.read().file;
+    return (placeholder) => Object.hasOwn(entries, placeholder) ? entries[placeholder]?.secret : void 0;
   }
   list() {
-    return Object.entries(this.read().entries).map(([placeholder, e]) => ({
+    return Object.entries(this.read().file.entries).map(([placeholder, e]) => ({
       placeholder,
       ruleId: e.ruleId,
       firstSeen: e.firstSeen,
@@ -2221,8 +2267,8 @@ function readTrust() {
 }
 
 // src/disable.ts
-import { randomBytes as randomBytes2 } from "crypto";
-import { closeSync as closeSync2, mkdirSync as mkdirSync3, openSync as openSync2, readFileSync as readFileSync3, renameSync as renameSync3, writeSync as writeSync2 } from "fs";
+import { randomBytes as randomBytes3 } from "crypto";
+import { closeSync as closeSync3, mkdirSync as mkdirSync3, openSync as openSync3, readFileSync as readFileSync3, renameSync as renameSync4, writeSync as writeSync2 } from "fs";
 import { join as join5 } from "path";
 var NOT_DISABLED = { disabled: false };
 var SESSION_INDEX_MAX = 20;
@@ -2235,14 +2281,14 @@ function sessionIndexPath() {
 }
 function writeFileAtomic2(path, content, mode) {
   mkdirSync3(defaultVaultHome(), { recursive: true, mode: 448 });
-  const tmp = `${path}.${process.pid}.${randomBytes2(4).toString("hex")}.tmp`;
-  const fd = openSync2(tmp, "w", mode);
+  const tmp = `${path}.${process.pid}.${randomBytes3(4).toString("hex")}.tmp`;
+  const fd = openSync3(tmp, "w", mode);
   try {
     writeSync2(fd, content);
   } finally {
-    closeSync2(fd);
+    closeSync3(fd);
   }
-  renameSync3(tmp, path);
+  renameSync4(tmp, path);
 }
 function readJson(path) {
   try {
@@ -7096,6 +7142,15 @@ var RULES = [
     ]
   }
 ];
+var PATH_RULES = [
+  {
+    "id": "pkcs12-file",
+    "path": {
+      "source": "(?:^|\\/)[^\\/]+\\.p(?:12|fx)$",
+      "flags": "i"
+    }
+  }
+];
 var GLOBAL_ALLOWLIST = {
   "paths": [
     "gitleaks\\.toml",
@@ -7327,7 +7382,7 @@ var BUILTIN_RULES = [
     // (`"password": "Client Secret"` in Airflow's connection-form metadata).
     // The cost is a spaced passphrase, which this rule now leaves to a real
     // password manager — the same trade-off the README already states.
-    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !/^SECRETGATE_[0-9a-f]{12,16}$/.test(secret)
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !PLACEHOLDER_ONLY.test(secret)
   }
 ];
 var COMPILED = [
@@ -7342,11 +7397,12 @@ var COMPILED = [
   })),
   ...BUILTIN_RULES
 ];
-var RULE_SOURCE_TEXTS;
+var RULE_SOURCE_BLOB;
 function isRuleSourceText(secret) {
-  RULE_SOURCE_TEXTS ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]);
-  return RULE_SOURCE_TEXTS.some((s) => s.includes(secret));
+  RULE_SOURCE_BLOB ??= COMPILED.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]).join("\0");
+  return !secret.includes("\0") && RULE_SOURCE_BLOB.includes(secret);
 }
+var PATH_RULES_COMPILED = PATH_RULES.map((r) => ({ id: r.id, re: new RegExp(r.path.source, r.path.flags.replaceAll(/[gy]/g, "")) }));
 var GLOBAL_PATHS = GLOBAL_ALLOWLIST.paths.map((p) => new RegExp(p));
 var GLOBAL_REGEXES = GLOBAL_ALLOWLIST.regexes.map((r) => new RegExp(r.source, r.flags));
 var GLOBAL_STOPWORDS = GLOBAL_ALLOWLIST.stopwords;
@@ -7419,10 +7475,10 @@ function scan(text, cfg = {}) {
       const { secret, start, end } = pickSecret(match, rule.secretGroup);
       if (secret.length === 0) continue;
       if (PLACEHOLDER_ONLY.test(secret)) continue;
-      if (isRuleSourceText(secret)) continue;
-      if (looksLikePlaceholder(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
       if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
+      if (isRuleSourceText(secret)) continue;
+      if (looksLikePlaceholder(secret)) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
       const line = lineAt(starts, start);
@@ -7449,41 +7505,48 @@ function dedupe(findings) {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
   const kept = [];
   for (const f of sorted) {
-    const clash = kept.findIndex((k) => f.start < k.end && k.start < f.end);
-    if (clash === -1) {
+    const other = kept[kept.length - 1];
+    if (other === void 0 || f.start >= other.end) {
       kept.push(f);
       continue;
     }
-    const other = kept[clash];
     const fGeneric = f.ruleId === "generic-api-key";
     const oGeneric = other.ruleId === "generic-api-key";
     const preferF = oGeneric && !fGeneric || fGeneric === oGeneric && f.end - f.start > other.end - other.start;
-    if (preferF) kept[clash] = f;
+    if (preferF) kept[kept.length - 1] = f;
   }
-  return kept.sort((a, b) => a.start - b.start);
+  return kept;
 }
 
 // src/redact.ts
 function redactText(text, vault, source, cfg = {}) {
   const findings = scan(text, { ...cfg, pragmas: cfg.pragmas ?? false });
   if (findings.length === 0) return { text, findings, replaced: [] };
-  let out = text;
-  const replaced = [];
-  for (const f of [...findings].sort((a, b) => b.start - a.start)) {
-    const placeholder = vault.recordSecret(f.secret, f.ruleId, source);
-    out = out.slice(0, f.start) + placeholder + out.slice(f.end);
-    replaced.push({ placeholder, ruleId: f.ruleId });
-  }
-  replaced.reverse();
-  return { text: out, findings, replaced };
+  const ordered = [...findings].sort((a, b) => a.start - b.start);
+  const placeholders = vault.recordSecrets(ordered.map((f) => ({ secret: f.secret, ruleId: f.ruleId, source })));
+  const pieces = [];
+  let at = 0;
+  ordered.forEach((f, i) => {
+    pieces.push(text.slice(at, f.start), placeholders[i]);
+    at = f.end;
+  });
+  pieces.push(text.slice(at));
+  return { text: pieces.join(""), findings, replaced: ordered.map((f, i) => ({ placeholder: placeholders[i], ruleId: f.ruleId })) };
 }
 function restorePlaceholders(text, vault) {
+  if (!text.includes(PLACEHOLDER_PREFIX)) return { text, restored: 0 };
+  const lookup = vault.lookup();
   let restored = 0;
-  const out = text.replace(PLACEHOLDER_RE, (placeholder) => {
-    const secret = vault.secretFor(placeholder);
-    if (secret === void 0) return placeholder;
-    restored++;
-    return secret;
+  const out = text.replace(PLACEHOLDER_RE, (match) => {
+    const hex = match.slice(PLACEHOLDER_PREFIX.length);
+    for (const len of PLACEHOLDER_LENGTHS) {
+      if (hex.length < len) continue;
+      const secret = lookup(PLACEHOLDER_PREFIX + hex.slice(0, len));
+      if (secret === void 0) continue;
+      restored++;
+      return secret + hex.slice(len);
+    }
+    return match;
   });
   return { text: out, restored };
 }

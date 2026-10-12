@@ -1,8 +1,9 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { redactText, restorePlaceholders } from "../../src/redact.js";
+import { placeholderFor } from "../../src/vault/placeholder.js";
 import { Vault } from "../../src/vault/vault.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
@@ -75,5 +76,68 @@ describe("restorePlaceholders", () => {
     const twice = redactText(once.text, vault, "test");
     expect(twice.findings).toEqual([]);
     expect(twice.text).toBe(once.text);
+  });
+});
+
+describe("redaction at volume", () => {
+  const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  const token = (i: number): string => {
+    let s = "";
+    let x = i * 7919 + 97;
+    for (let k = 0; k < 36; k++) {
+      x = (x * 1103515245 + 12345) & 0x7fffffff;
+      s += ALNUM[x % ALNUM.length];
+    }
+    return `ghp${"_"}${s}`;
+  };
+
+  it("redacts 3000 distinct secrets in one text in under a second", () => {
+    const secrets = Array.from({ length: 3000 }, (_, i) => token(i));
+    const text = secrets.map((s, i) => `T${i}=${s}`).join("\n");
+    const started = performance.now();
+    const r = redactText(text, vault, "bulk");
+    expect(performance.now() - started).toBeLessThan(1000);
+    expect(r.replaced).toHaveLength(3000);
+    for (const s of secrets.slice(0, 50)) expect(r.text).not.toContain(s);
+    expect(restorePlaceholders(r.text, vault).text).toBe(text);
+  });
+
+  it("gives each secret the same placeholder as one-at-a-time recording", () => {
+    const otherHome = mkdtempSync(join(tmpdir(), "secretgate-redact-b-"));
+    try {
+      const secrets = [FAKE.githubPat, FAKE.awsKeyId];
+      const bulk = redactText(secrets.join("\n"), vault, "bulk").replaced.map((r) => r.placeholder);
+      writeFileSync(join(otherHome, "salt"), readFileSync(join(home, "salt"), "utf8"));
+      const other = new Vault(otherHome);
+      expect(secrets.map((s) => other.recordSecret(s, "x", "one"))).toEqual(bulk);
+    } finally {
+      rmSync(otherHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("restorePlaceholders next to hex characters", () => {
+  it.each(["cafe", "0", "beef42", "0123456789abcdef"])("restores a placeholder followed by %j", (suffix) => {
+    const { text } = redactText(`k: ${FAKE.githubPat}`, vault, "test");
+    const placeholder = /SECRETGATE_[0-9a-f]+/.exec(text)![0];
+    expect(restorePlaceholders(`${placeholder}${suffix}`, vault).text).toBe(`${FAKE.githubPat}${suffix}`);
+  });
+
+  it("restores a 16-hex placeholder (collision form) even when followed by hex", () => {
+    // Occupy the secret's 12-hex slot with another value so it is recorded under 16.
+    vault.recordSecret("seed-value-1", "x", "t");
+    const salt = readFileSync(join(home, "salt"), "utf8");
+    const short = placeholderFor(FAKE.githubPat, salt, 12);
+    const file = JSON.parse(readFileSync(join(home, "vault.json"), "utf8"));
+    file.entries[short] = { secret: "occupant", ruleId: "x", firstSeen: "", sources: [] };
+    writeFileSync(join(home, "vault.json"), JSON.stringify(file));
+    const long = vault.recordSecret(FAKE.githubPat, "x", "t");
+    expect(long).toBe(placeholderFor(FAKE.githubPat, salt, 16));
+    expect(restorePlaceholders(`${long}ff`, vault).text).toBe(`${FAKE.githubPat}ff`);
+    expect(restorePlaceholders(`${short}ff`, vault).text).toBe("occupantff");
+  });
+
+  it("leaves unknown placeholders untouched", () => {
+    expect(restorePlaceholders("SECRETGATE_0123456789abcdef00", vault).text).toBe("SECRETGATE_0123456789abcdef00");
   });
 });

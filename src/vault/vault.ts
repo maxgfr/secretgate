@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { writeFileAtomic } from "../fs-atomic.js";
 import { placeholderFor } from "./placeholder.js";
 
 // The vault holds placeholder -> secret mappings in ~/.secretgate/vault.json.
@@ -28,21 +29,15 @@ interface VaultFile {
   entries: Record<string, VaultEntry>;
 }
 
-export function defaultVaultHome(): string {
-  return process.env.SECRETGATE_HOME ?? join(homedir(), ".secretgate");
+/** One secret to record, and where it was seen. */
+export interface SecretRecord {
+  secret: string;
+  ruleId: string;
+  source: string;
 }
 
-// Write with the final permissions from the very first byte: open(mode) then
-// write — never write-then-chmod. Renamed into place for atomicity.
-function writeFileAtomic(path: string, content: string, mode: number): void {
-  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-  const fd = openSync(tmp, "w", mode);
-  try {
-    writeSync(fd, content);
-  } finally {
-    closeSync(fd);
-  }
-  renameSync(tmp, path);
+export function defaultVaultHome(): string {
+  return process.env.SECRETGATE_HOME ?? join(homedir(), ".secretgate");
 }
 
 const LOCK_WAIT_MS = 3000;
@@ -112,52 +107,89 @@ export class Vault {
     return this.saltValue;
   }
 
-  private read(): VaultFile {
+  // A missing vault is an empty one. An unreadable or malformed one is too —
+  // a corrupt vault must never break a hook — but it is reported, so the next
+  // write can set it aside instead of silently replacing every mapping in it.
+  private read(): { file: VaultFile; corrupt: boolean } {
+    let raw: string;
     try {
-      const parsed = JSON.parse(readFileSync(this.vaultPath, "utf8")) as VaultFile;
-      if (parsed && parsed.version === 1 && parsed.entries) return parsed;
+      raw = readFileSync(this.vaultPath, "utf8");
     } catch {
-      // missing or corrupt -> start fresh (corrupt vault must never break a hook)
+      return { file: { version: 1, entries: {} }, corrupt: false };
     }
-    return { version: 1, entries: {} };
+    try {
+      const parsed = JSON.parse(raw) as VaultFile;
+      if (parsed && parsed.version === 1 && parsed.entries && typeof parsed.entries === "object") return { file: parsed, corrupt: false };
+    } catch {
+      // fall through
+    }
+    return { file: { version: 1, entries: {} }, corrupt: true };
+  }
+
+  // Keep the unreadable file (it may hold the only copy of mappings still in
+  // use) under a name nothing reads, before a fresh vault takes its place.
+  private setAside(): void {
+    const aside = `${this.vaultPath}.corrupt-${new Date().toISOString().replaceAll(/[:.]/g, "-")}-${randomBytes(2).toString("hex")}`;
+    renameSync(this.vaultPath, aside);
+    chmodSync(aside, 0o600);
   }
 
   // A read-merge-write cycle under the vault lock, so concurrent hook
   // processes (tool calls in flight) never drop each other's entries.
   recordSecret(secret: string, ruleId: string, source: string): string {
-    this.ensureHome();
-    return withLock(`${this.vaultPath}.lock`, () => this.recordLocked(secret, ruleId, source));
+    return this.recordSecrets([{ secret, ruleId, source }])[0]!;
   }
 
-  private recordLocked(secret: string, ruleId: string, source: string): string {
-    const salt = this.salt();
-    const file = this.read();
-    // Collision handling: lengthen the placeholder until it's free or ours.
-    let placeholder = "";
-    for (const hexLen of [12, 16]) {
-      placeholder = placeholderFor(secret, salt, hexLen);
-      const existing = file.entries[placeholder];
-      if (!existing || existing.secret === secret) break;
-    }
-    const entry = file.entries[placeholder];
-    if (entry && entry.secret === secret) {
-      if (!entry.sources.includes(source)) {
-        entry.sources.push(source);
+  /** Record many secrets in ONE locked read-merge-write cycle (a tool output
+   *  can carry thousands); returns their placeholders, in order. */
+  recordSecrets(items: SecretRecord[]): string[] {
+    if (items.length === 0) return [];
+    this.ensureHome();
+    return withLock(`${this.vaultPath}.lock`, () => {
+      const salt = this.salt();
+      const { file, corrupt } = this.read();
+      let dirty = false;
+      const placeholders = items.map(({ secret, ruleId, source }) => {
+        // Collision handling: lengthen the placeholder until it's free or ours.
+        let placeholder = "";
+        for (const hexLen of [12, 16]) {
+          placeholder = placeholderFor(secret, salt, hexLen);
+          const existing = file.entries[placeholder];
+          if (!existing || existing.secret === secret) break;
+        }
+        const entry = file.entries[placeholder];
+        if (entry && entry.secret === secret) {
+          if (!entry.sources.includes(source)) {
+            entry.sources.push(source);
+            dirty = true;
+          }
+        } else {
+          file.entries[placeholder] = { secret, ruleId, firstSeen: new Date().toISOString(), sources: [source] };
+          dirty = true;
+        }
+        return placeholder;
+      });
+      if (dirty) {
+        if (corrupt) this.setAside();
         writeFileAtomic(this.vaultPath, JSON.stringify(file, null, 2), 0o600);
       }
-      return placeholder;
-    }
-    file.entries[placeholder] = { secret, ruleId, firstSeen: new Date().toISOString(), sources: [source] };
-    writeFileAtomic(this.vaultPath, JSON.stringify(file, null, 2), 0o600);
-    return placeholder;
+      return placeholders;
+    });
   }
 
   secretFor(placeholder: string): string | undefined {
-    return this.read().entries[placeholder]?.secret;
+    return this.lookup()(placeholder);
+  }
+
+  /** A placeholder → secret resolver over ONE read of the vault, for callers
+   *  that resolve many placeholders at once. */
+  lookup(): (placeholder: string) => string | undefined {
+    const { entries } = this.read().file;
+    return (placeholder) => (Object.hasOwn(entries, placeholder) ? entries[placeholder]?.secret : undefined);
   }
 
   list(): VaultListing[] {
-    return Object.entries(this.read().entries).map(([placeholder, e]) => ({
+    return Object.entries(this.read().file.entries).map(([placeholder, e]) => ({
       placeholder,
       ruleId: e.ruleId,
       firstSeen: e.firstSeen,
