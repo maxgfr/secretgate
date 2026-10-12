@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.6.4](https://github.com/maxgfr/secretgate/compare/v1.6.3...v1.6.4) (2026-10-12)
+
+
+### Bug Fixes
+
+* close the gaps a review of the audit fixes found ([073ac99](https://github.com/maxgfr/secretgate/commit/073ac999513a7f67d555400bd0b26ef7b41159d2))
+* **engine:** record a text's secrets in one vault cycle and restore hex-adjacent placeholders ([4fc01b9](https://github.com/maxgfr/secretgate/commit/4fc01b9f67701cd27dc7b23381ffd12e49768dfe))
+* **hooks:** only a first-line /secretgate directive pauses a session; harden config, allow and status ([87b6473](https://github.com/maxgfr/secretgate/commit/87b6473faa022304095c819ae1e1c36925e88494))
+* **install:** valid Codex TOML, JSONC-safe OpenCode uninstall, absolute node in hooks ([098ca40](https://github.com/maxgfr/secretgate/commit/098ca40a5dd75ed5fad3da8bdb2702be949db21c))
+* **shell:** close the analyser bypasses found in the audit ([328f595](https://github.com/maxgfr/secretgate/commit/328f5953791219e5360441095da2c96b68a0a7bb))
+
 ## [1.6.3](https://github.com/maxgfr/secretgate/compare/v1.6.2...v1.6.3) (2026-10-11)
 
 
