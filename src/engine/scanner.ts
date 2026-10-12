@@ -259,6 +259,39 @@ const BUILTIN_RULES: CompiledRule[] = [
     // password manager — the same trade-off the README already states.
     post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !PLACEHOLDER_ONLY.test(secret),
   },
+  // Credentials a coding agent's .env commonly holds and gitleaks ships no rule
+  // for (fed one by one to both engines, gitleaks 8.30 missed all four). The
+  // vendor prefix carries the confidence, so no keyword context is required;
+  // the length ranges absorb a format revision, the entropy gate a dummy.
+  {
+    id: "groq-api-key",
+    re: /(?<![A-Za-z0-9_])(gsk_[A-Za-z0-9]{48,60})(?![A-Za-z0-9])/dg,
+    keywords: ["gsk_"],
+    entropy: 3,
+    allowlists: [],
+  },
+  {
+    id: "replicate-api-token",
+    re: /(?<![A-Za-z0-9_])(r8_[A-Za-z0-9]{35,40})(?![A-Za-z0-9])/dg,
+    keywords: ["r8_"],
+    entropy: 3,
+    allowlists: [],
+  },
+  {
+    id: "xai-api-key",
+    re: /(?<![A-Za-z0-9_-])(xai-[A-Za-z0-9]{70,100})(?![A-Za-z0-9])/dg,
+    keywords: ["xai-"],
+    entropy: 3,
+    allowlists: [],
+  },
+  // Anyone holding the URL can post as the webhook; the token is its last part.
+  {
+    id: "discord-webhook-url",
+    re: /https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/(?:v\d{1,2}\/)?webhooks\/\d{17,20}\/([\w-]{60,80})(?![\w-])/dgi,
+    keywords: ["discord"],
+    entropy: 3,
+    allowlists: [],
+  },
 ];
 
 const COMPILED: CompiledRule[] = [
@@ -435,7 +468,9 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
 }
 
 // When two findings' secret spans overlap, keep the more specific one:
-// a named vendor rule beats generic-api-key, then the longer secret wins.
+// a named vendor rule beats password-assignment, which beats generic-api-key,
+// then the longer secret wins.
+const specificity = (ruleId: string): number => (ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2);
 // Findings are visited by start, so the kept spans stay sorted and disjoint:
 // only the last one kept can reach the next finding.
 function dedupe(findings: Finding[]): Finding[] {
@@ -447,9 +482,9 @@ function dedupe(findings: Finding[]): Finding[] {
       kept.push(f);
       continue;
     }
-    const fGeneric = f.ruleId === "generic-api-key";
-    const oGeneric = other.ruleId === "generic-api-key";
-    const preferF = (oGeneric && !fGeneric) || (fGeneric === oGeneric && f.end - f.start > other.end - other.start);
+    const fRank = specificity(f.ruleId);
+    const oRank = specificity(other.ruleId);
+    const preferF = fRank > oRank || (fRank === oRank && f.end - f.start > other.end - other.start);
     if (preferF) kept[kept.length - 1] = f;
   }
   return kept;

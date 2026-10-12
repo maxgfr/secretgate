@@ -65,8 +65,9 @@ anything per-use.
   default config (vendored, pinned, `pnpm run rules:sync` to refresh) + per-rule
   entropy thresholds + upstream stopword allowlists + secretgate built-ins for
   Luhn/IIN-gated credit cards, **URL-embedded credentials** (`postgres://user:pass@…`,
-  basic-auth URLs) and **quoted passwords with punctuation** that gitleaks' generic
-  rule misses. Zero runtime dependencies, single bundled `.mjs`, ~50ms per scan.
+  basic-auth URLs), **quoted passwords with punctuation** that gitleaks' generic
+  rule misses, and Groq, Replicate and xAI keys and Discord webhook URLs, which
+  gitleaks has no rule for. Zero runtime dependencies, single bundled `.mjs`, ~50ms per scan.
   If the real `gitleaks` binary is installed, `secretgate scan` runs it as a
   second engine and reports what it adds (`--no-gitleaks`, or `"hybrid": "off"`
   in `~/.secretgate/config.json`, to skip it). Hooks always use the JS engine only.

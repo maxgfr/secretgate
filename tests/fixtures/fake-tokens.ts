@@ -19,6 +19,14 @@ export const FAKE = {
   // Checksum-valid Visa-prefixed PAN (classic test number) and a near-miss
   visaPan: "4111" + "1111" + "1111" + "1111",
   visaPanInvalid: "4111" + "1111" + "1111" + "1112",
+  // groq-api-key: gsk_ + 52 alphanumerics
+  groqKey: "gsk" + "_" + "kQ9zX2mP7vB4wL8nR3tY6hG5jD1fC0aSeUiO" + "aB3dE6gH9jK2mN5p",
+  // replicate-api-token: r8_ + 37 alphanumerics
+  replicateToken: "r8" + "_" + "kQ9zX2mP7vB4wL8nR3tY6hG5jD1fC0aSeUiOq",
+  // xai-api-key: xai- + 80 alphanumerics
+  xaiKey: "xai" + "-" + "kQ9zX2mP7vB4wL8nR3tY6hG5jD1fC0aSeUiOaB3d".repeat(2),
+  // discord-webhook-url: the 68-character token after the numeric webhook id
+  discordWebhook: "https://discord.com/api/web" + "hooks/" + "1203948576102938475" + "/" + "kQ9zX2mP7vB4wL8nR3tY6hG5jD1fC0aS_eU-iO" + "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0",
 };
 
 // Sanity: anthropic body must be exactly 93 chars between "api03-" and "AA".

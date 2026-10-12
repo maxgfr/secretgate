@@ -127,6 +127,48 @@ describe("scan — credit cards (Luhn + IIN gated)", () => {
   });
 });
 
+// Credentials a coding agent's .env commonly holds and gitleaks ships no rule
+// for: measured by feeding each one alone to both engines.
+describe("scan — AI-provider keys and webhooks (secretgate builtin)", () => {
+  it("has fixtures of the documented lengths", () => {
+    expect(FAKE.groqKey.length).toBe(4 + 52);
+    expect(FAKE.replicateToken.length).toBe(3 + 37);
+    expect(FAKE.xaiKey.length).toBe(4 + 80);
+    expect(FAKE.discordWebhook.split("/").at(-1)!.length).toBe(68);
+  });
+
+  for (const [rule, bare, text, secret] of [
+    ["groq-api-key", FAKE.groqKey, `GROQ_API_KEY=${FAKE.groqKey}`, FAKE.groqKey],
+    ["replicate-api-token", FAKE.replicateToken, `export REPLICATE_API_TOKEN="${FAKE.replicateToken}"`, FAKE.replicateToken],
+    ["xai-api-key", FAKE.xaiKey, `client = Client(api_key="${FAKE.xaiKey}")`, FAKE.xaiKey],
+    ["discord-webhook-url", FAKE.discordWebhook, `curl -X POST ${FAKE.discordWebhook} -d '{}'`, FAKE.discordWebhook.split("/").at(-1)!],
+  ] as const) {
+    it(`finds a ${rule} on its own and in context`, () => {
+      for (const t of [bare, text]) {
+        const f = scan(t).find((x) => x.ruleId === rule);
+        expect(f, t).toBeDefined();
+        expect(f!.secret).toBe(secret);
+      }
+    });
+  }
+
+  it("ignores low-entropy and truncated look-alikes", () => {
+    for (const text of [
+      `gsk_${"x".repeat(52)}`,
+      "gsk_short",
+      `r8_${"0".repeat(37)}`,
+      `xai-${"a".repeat(80)}`,
+      "https://discord.com/api/webhooks/1203948576102938475/abc",
+      "see https://discord.com/developers/docs/resources/webhook",
+    ]) {
+      expect(
+        scan(text).filter((f) => ["groq-api-key", "replicate-api-token", "xai-api-key", "discord-webhook-url"].includes(f.ruleId)),
+        text,
+      ).toEqual([]);
+    }
+  });
+});
+
 describe("scan — url credentials (secretgate builtin)", () => {
   const cases: Array<[string, string]> = [
     ["postgres", "DATABASE_URL=postgres://admin:Xk9mQ2vL7pR4tY6h@db:5432/prod"],
