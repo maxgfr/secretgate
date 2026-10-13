@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.7.1](https://github.com/maxgfr/secretgate/compare/v1.7.0...v1.7.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **install:** uninstall removes the deny rules a <= 1.4 install left unrecorded ([#12](https://github.com/maxgfr/secretgate/issues/12)) ([ea41b72](https://github.com/maxgfr/secretgate/commit/ea41b7220a9621ccf8dda50d49bddd38c139b615))
+
 # [1.7.0](https://github.com/maxgfr/secretgate/compare/v1.6.4...v1.7.0) (2026-10-12)
 
 
