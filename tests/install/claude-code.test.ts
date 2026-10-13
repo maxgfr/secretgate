@@ -118,6 +118,28 @@ describe("uninstallClaudeCode", () => {
   });
 });
 
+// Everything secretgate <= 1.4 installed, before it recorded ownership.
+const LEGACY = [
+  "Read(**/.env)",
+  "Read(**/.env.local)",
+  "Read(**/.env.*.local)",
+  "Read(**/*.pem)",
+  "Read(**/*.key)",
+  "Read(**/id_rsa*)",
+  "Read(**/id_ed25519*)",
+  "Read(**/id_ecdsa*)",
+  "Read(~/.aws/**)",
+  "Read(**/.aws/**)",
+  "Read(~/.ssh/**)",
+  "Read(**/.ssh/**)",
+  "Read(~/.kube/config)",
+  "Read(**/.kube/config)",
+  "Read(**/.netrc)",
+  "Read(**/.npmrc)",
+  "Read(**/.docker/config.json)",
+  "Read(**/credentials.json)",
+];
+
 describe("uninstallClaudeCode — leaves nothing behind", () => {
   it("drops a hooks object it emptied", () => {
     writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }));
@@ -134,33 +156,29 @@ describe("uninstallClaudeCode — leaves nothing behind", () => {
   });
 
   it("recognises a complete <= 1.4 deny set as its own when no ownership file exists", () => {
-    const legacy = [
-      "Read(**/.env)",
-      "Read(**/.env.local)",
-      "Read(**/.env.*.local)",
-      "Read(**/*.pem)",
-      "Read(**/*.key)",
-      "Read(**/id_rsa*)",
-      "Read(**/id_ed25519*)",
-      "Read(**/id_ecdsa*)",
-      "Read(~/.aws/**)",
-      "Read(**/.aws/**)",
-      "Read(~/.ssh/**)",
-      "Read(**/.ssh/**)",
-      "Read(~/.kube/config)",
-      "Read(**/.kube/config)",
-      "Read(**/.netrc)",
-      "Read(**/.npmrc)",
-      "Read(**/.docker/config.json)",
-      "Read(**/credentials.json)",
-    ];
     writeFileSync(
       settingsPath,
       JSON.stringify({
-        permissions: { deny: [...legacy, "Read(./mine/**)"] },
+        permissions: { deny: [...LEGACY, "Read(./mine/**)"] },
         hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: `${command} hook claude-code pre-tool-use` }] }] },
       }),
     );
+    uninstallClaudeCode({ settingsPath });
+    expect(read()).toEqual({ permissions: { deny: ["Read(./mine/**)"] } });
+  });
+
+  it("removes the <= 1.4 rules after an upgrade recorded ownership", () => {
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { deny: [...LEGACY, "Read(./mine/**)"] } }));
+    installClaudeCode({ settingsPath, command });
+    uninstallClaudeCode({ settingsPath });
+    expect(read()).toEqual({ permissions: { deny: ["Read(./mine/**)"] } });
+  });
+
+  it("removes the <= 1.4 rules an earlier upgrade left out of its ownership record", () => {
+    const kept = LEGACY.filter((r) => CC_DENY_RULES.includes(r));
+    const addedLater = CC_DENY_RULES.filter((r) => !kept.includes(r));
+    writeFileSync(settingsPath, JSON.stringify({ permissions: { deny: [...kept, ...addedLater, "Read(./mine/**)"] } }));
+    writeFileSync(`${settingsPath}.secretgate-ownership.json`, JSON.stringify({ deny: addedLater }));
     uninstallClaudeCode({ settingsPath });
     expect(read()).toEqual({ permissions: { deny: ["Read(./mine/**)"] } });
   });

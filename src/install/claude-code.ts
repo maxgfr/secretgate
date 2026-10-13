@@ -67,6 +67,21 @@ const LEGACY_DENY_RULES = [
   "Read(**/credentials.json)",
 ];
 
+// The <= 1.4 rules secretgate still ships. An upgrade leaves them in place, so
+// they never show up among the rules it adds.
+const LEGACY_KEPT_RULES = LEGACY_DENY_RULES.filter((r) => CC_DENY_RULES.includes(r));
+
+/**
+ * Pre-ownership (<= 1.4) rules that are secretgate's although no record names
+ * them: the complete legacy set when there is no record yet, or every legacy
+ * rule still shipped — all present, none recorded — when an upgrade wrote a
+ * record listing only the rules it added (secretgate 1.5 – 1.7.0).
+ */
+function unrecordedLegacyRules(deny: readonly unknown[], recorded: string[] | undefined): string[] {
+  if (recorded === undefined) return LEGACY_DENY_RULES.every((r) => deny.includes(r)) ? LEGACY_DENY_RULES : [];
+  return LEGACY_KEPT_RULES.every((r) => deny.includes(r) && !recorded.includes(r)) ? LEGACY_KEPT_RULES : [];
+}
+
 /**
  * Retired rules that are secretgate's to remove: recorded as installed by it,
  * or part of a complete pre-ownership (<= 1.4) rule set — all 18 of those
@@ -122,6 +137,7 @@ export function installClaudeCode({ settingsPath, command }: InstallOptions): Ed
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
   const previous = existsSync(ownershipPath) ? JSON.parse(readFileSync(ownershipPath, "utf8")) : {};
   const added: string[] = [];
+  const adopted: string[] = [];
   const report = editJsonFile(settingsPath, (s) => {
     s.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS) {
@@ -139,12 +155,15 @@ export function installClaudeCode({ settingsPath, command }: InstallOptions): Ed
     const retired = new Set([...owned.filter((r) => !CC_DENY_RULES.includes(r)), ...retiredRulesToRemove(current, owned)]);
     const deny = current.filter((r) => !retired.has(r));
     added.push(...CC_DENY_RULES.filter((r) => !deny.includes(r)));
+    // Rules an older secretgate installed are recorded too, or uninstall would
+    // leave them behind once a record exists.
+    adopted.push(...unrecordedLegacyRules(current, previous.deny));
     s.permissions.deny = [...deny, ...added];
   });
   editJsonFile(
     ownershipPath,
     (state) => {
-      state.deny = [...new Set([...(previous.deny ?? []), ...added])].filter((r) => CC_DENY_RULES.includes(r));
+      state.deny = [...new Set([...(previous.deny ?? []), ...added, ...adopted])].filter((r) => CC_DENY_RULES.includes(r));
     },
     { latestBackupOnly: true },
   );
@@ -165,10 +184,10 @@ export function uninstallClaudeCode({ settingsPath }: { settingsPath: string }):
       if (Object.keys(s.hooks).length === 0) delete s.hooks;
     }
     if (Array.isArray(s.permissions?.deny)) {
-      // Without an ownership record (secretgate <= 1.4 kept none), a complete
-      // set of the rules those versions installed can only be ours.
+      // secretgate <= 1.4 kept no ownership record, and the upgrades that
+      // started one did not adopt its rules (see unrecordedLegacyRules).
       const deny: unknown[] = s.permissions.deny;
-      const owned = recorded ?? (LEGACY_DENY_RULES.every((r) => deny.includes(r)) ? LEGACY_DENY_RULES : []);
+      const owned = [...(recorded ?? []), ...unrecordedLegacyRules(deny, recorded)];
       s.permissions.deny = deny.filter((r) => !(typeof r === "string" && owned.includes(r)));
       if (s.permissions.deny.length === 0) delete s.permissions.deny;
       if (Object.keys(s.permissions).length === 0) delete s.permissions;

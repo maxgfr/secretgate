@@ -9638,6 +9638,11 @@ var LEGACY_DENY_RULES = [
   "Read(**/.docker/config.json)",
   "Read(**/credentials.json)"
 ];
+var LEGACY_KEPT_RULES = LEGACY_DENY_RULES.filter((r) => CC_DENY_RULES.includes(r));
+function unrecordedLegacyRules(deny2, recorded) {
+  if (recorded === void 0) return LEGACY_DENY_RULES.every((r) => deny2.includes(r)) ? LEGACY_DENY_RULES : [];
+  return LEGACY_KEPT_RULES.every((r) => deny2.includes(r) && !recorded.includes(r)) ? LEGACY_KEPT_RULES : [];
+}
 function retiredRulesToRemove(deny2, owned) {
   const legacyInstall = LEGACY_DENY_RULES.every((r) => deny2.includes(r));
   return RETIRED_DENY_RULES.filter((r) => deny2.includes(r) && (owned.includes(r) || legacyInstall));
@@ -9661,6 +9666,7 @@ function installClaudeCode({ settingsPath, command }) {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
   const previous = existsSync5(ownershipPath) ? JSON.parse(readFileSync8(ownershipPath, "utf8")) : {};
   const added = [];
+  const adopted = [];
   const report = editJsonFile(settingsPath, (s) => {
     s.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS) {
@@ -9675,12 +9681,13 @@ function installClaudeCode({ settingsPath, command }) {
     const retired = /* @__PURE__ */ new Set([...owned.filter((r) => !CC_DENY_RULES.includes(r)), ...retiredRulesToRemove(current, owned)]);
     const deny2 = current.filter((r) => !retired.has(r));
     added.push(...CC_DENY_RULES.filter((r) => !deny2.includes(r)));
+    adopted.push(...unrecordedLegacyRules(current, previous.deny));
     s.permissions.deny = [...deny2, ...added];
   });
   editJsonFile(
     ownershipPath,
     (state) => {
-      state.deny = [.../* @__PURE__ */ new Set([...previous.deny ?? [], ...added])].filter((r) => CC_DENY_RULES.includes(r));
+      state.deny = [.../* @__PURE__ */ new Set([...previous.deny ?? [], ...added, ...adopted])].filter((r) => CC_DENY_RULES.includes(r));
     },
     { latestBackupOnly: true }
   );
@@ -9700,7 +9707,7 @@ function uninstallClaudeCode({ settingsPath }) {
     }
     if (Array.isArray(s.permissions?.deny)) {
       const deny2 = s.permissions.deny;
-      const owned = recorded ?? (LEGACY_DENY_RULES.every((r) => deny2.includes(r)) ? LEGACY_DENY_RULES : []);
+      const owned = [...recorded ?? [], ...unrecordedLegacyRules(deny2, recorded)];
       s.permissions.deny = deny2.filter((r) => !(typeof r === "string" && owned.includes(r)));
       if (s.permissions.deny.length === 0) delete s.permissions.deny;
       if (Object.keys(s.permissions).length === 0) delete s.permissions;
