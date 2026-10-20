@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.8.0](https://github.com/maxgfr/secretgate/compare/v1.7.1...v1.8.0) (2026-10-20)
+
+
+### Features
+
+* support OpenCode 2 only ([#13](https://github.com/maxgfr/secretgate/issues/13)) ([22c2715](https://github.com/maxgfr/secretgate/commit/22c27157a4b94f26cedc43cf0ec11feb679ad448))
+
 ## [1.7.1](https://github.com/maxgfr/secretgate/compare/v1.7.0...v1.7.1) (2026-10-13)
 
 

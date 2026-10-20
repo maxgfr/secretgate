@@ -3,7 +3,7 @@ name: secretgate
 description: Install, verify, and manage Secretgate protections or scan text, files, and repositories for exposed credentials.
 license: MIT
 metadata:
-  version: 1.7.1
+  version: 1.8.0
 ---
 
 # Secretgate
