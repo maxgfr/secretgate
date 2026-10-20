@@ -13,7 +13,7 @@ and macOS CI keep the sandbox. Installed agent configuration is unchanged.
 | --- | --- | --- |
 | Claude Code | 2.1.263 | Prompt interception, native Read/Write round trip, MCP output, outgoing model requests |
 | Codex CLI | 0.153.4 | Prompt interception, shell/apply_patch round trip, MCP output, outgoing model requests, symlinked config trust |
-| OpenCode | 1.18.29 | Prompt rewrite, read/write round trip, MCP output, restored arguments remasked in outgoing history |
+| OpenCode | 2.1.0 | Prompt rewrite, read/write round trip, MCP output, restored arguments remasked in outgoing history (OpenCode 1 is not supported) |
 
 The deterministic tests use a loopback model endpoint and synthetic tokens.
 They assert that outgoing requests contain no raw fixture token, that the next

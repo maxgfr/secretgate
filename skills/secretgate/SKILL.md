@@ -4,7 +4,6 @@ description: Install, verify, and manage Secretgate protections or scan text, fi
 license: MIT
 metadata:
   version: 1.7.1
-  opencode/autoinvoke: 'true'
 ---
 
 # Secretgate
@@ -34,8 +33,8 @@ needed when requested or included in the task.
 
 Install pins the program that ran it under `~/.secretgate/bin/`: `secretgate`
 (binary) or `secretgate.mjs` (bundle). The hooks run that copy, so the last
-`init` decides which one. It also copies a standalone plugin into OpenCode's
-config directory. These survive `brew upgrade` and eviction of the skill cache.
+`init` decides which one. It also copies a standalone plugin into OpenCode 2's
+config directory (`plugins/`; OpenCode 1 is not supported). These survive `brew upgrade` and eviction of the skill cache.
 `--project` scopes only Claude Code settings to the current project.
 
 ## Everyday behavior

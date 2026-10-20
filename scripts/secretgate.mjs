@@ -4,7 +4,7 @@
 import { execFileSync } from "child_process";
 import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync11, readdirSync as readdirSync4, realpathSync as realpathSync4, rmSync as rmSync7, statSync as statSync4 } from "fs";
 import { homedir as homedir8, tmpdir as tmpdir3 } from "os";
-import { delimiter as delimiter3, dirname as dirname8, isAbsolute as isAbsolute5, join as join13, relative as relative4, resolve as resolve7 } from "path";
+import { delimiter as delimiter3, dirname as dirname9, isAbsolute as isAbsolute5, join as join13, relative as relative4, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config.ts
@@ -10117,7 +10117,7 @@ function uninstallCodex({ codexDir }) {
 // src/install/opencode.ts
 import { copyFileSync as copyFileSync3, existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync10, rmSync as rmSync5 } from "fs";
 import { homedir as homedir7 } from "os";
-import { join as join11 } from "path";
+import { dirname as dirname7, join as join11 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
   const custom = process.env.OPENCODE_CONFIG_DIR;
@@ -10125,19 +10125,29 @@ function opencodeConfigDir() {
   const xdg = process.env.XDG_CONFIG_HOME;
   return join11(xdg && xdg !== "" ? xdg : join11(homedir7(), ".config"), "opencode");
 }
+function opencodePluginFile(configDir) {
+  return join11(configDir, "plugins", "secretgate.js");
+}
+function removeStalePlugin(configDir) {
+  const stale = join11(configDir, "plugin", "secretgate.js");
+  if (!existsSync7(stale) || !readFileSync10(stale, "utf8").includes(OWNERSHIP_MARKER)) return false;
+  rmSync5(stale);
+  return true;
+}
 function installOpencode(options) {
   const { configDir } = options;
-  const target = join11(configDir, "plugin", "secretgate.js");
+  const target = opencodePluginFile(configDir);
   const content = "pluginContent" in options ? options.pluginContent : readFileSync10(options.pluginSource, "utf8");
   if (existsSync7(target)) {
     const existing = readFileSync10(target, "utf8");
     if (!existing.includes(OWNERSHIP_MARKER)) {
       throw new Error(`refusing to overwrite ${target}: the existing file is not ours (foreign plugin?). Remove it manually first.`);
     }
-    if (existing === content) return { path: target, changed: false };
+    if (existing === content) return { path: target, changed: removeStalePlugin(configDir) };
   }
-  mkdirSync7(join11(configDir, "plugin"), { recursive: true });
+  mkdirSync7(dirname7(target), { recursive: true });
   writeFileAtomic(target, content, 420);
+  removeStalePlugin(configDir);
   return { path: target, changed: true };
 }
 function withoutNpmPin(path) {
@@ -10155,7 +10165,7 @@ function withoutNpmPin(path) {
   return applyEdits(text, modify(text, ["plugin"], kept.length > 0 ? kept : void 0, fmt));
 }
 function uninstallOpencode({ configDir }) {
-  const target = join11(configDir, "plugin", "secretgate.js");
+  const target = opencodePluginFile(configDir);
   const edits = [];
   for (const name of ["opencode.json", "opencode.jsonc"]) {
     const path = join11(configDir, name);
@@ -10168,6 +10178,7 @@ function uninstallOpencode({ configDir }) {
     rmSync5(target);
     changed = true;
   }
+  if (removeStalePlugin(configDir)) changed = true;
   for (const { path, text } of edits) {
     copyFileSync3(path, `${path}.secretgate-backup-${(/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-")}`);
     writeFileAtomic(path, text, 420);
@@ -10178,7 +10189,7 @@ function uninstallOpencode({ configDir }) {
 
 // src/self.ts
 import { chmodSync as chmodSync2, copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync3, rmSync as rmSync6 } from "fs";
-import { basename as basename6, delimiter as delimiter2, dirname as dirname7, isAbsolute as isAbsolute4, join as join12 } from "path";
+import { basename as basename6, delimiter as delimiter2, dirname as dirname8, isAbsolute as isAbsolute4, join as join12 } from "path";
 import { fileURLToPath } from "url";
 function currentContext() {
   const modulePath = fileURLToPath(import.meta.url);
@@ -10229,7 +10240,7 @@ function runningInvocation(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   if (form === "binary") return { file: ctx.execPath, args: [] };
   if (form === "bundle") return { file: ctx.execPath, args: [ctx.modulePath] };
-  return { file: "node", args: [join12(dirname7(ctx.modulePath), "main.ts")] };
+  return { file: "node", args: [join12(dirname8(ctx.modulePath), "main.ts")] };
 }
 function samePath(a, b) {
   try {
@@ -10253,7 +10264,7 @@ function pinSelf(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   if (form === "dev") return selfInvocation(ctx);
   const [source, target] = form === "binary" ? [ctx.execPath, pinnedBinaryPath(ctx.home)] : [ctx.modulePath, pinnedBundlePath(ctx.home)];
-  mkdirSync8(dirname7(target), { recursive: true, mode: 448 });
+  mkdirSync8(dirname8(target), { recursive: true, mode: 448 });
   if (!samePath(source, target)) atomicCopy(source, target);
   return form === "binary" ? { file: target, args: [] } : { file: ctx.execPath, args: [target] };
 }
@@ -10825,7 +10836,7 @@ function parseAgentFlags(args, io) {
 }
 function opencodePlugin() {
   if (embeddedOpencodePlugin !== void 0) return { pluginContent: embeddedOpencodePlugin };
-  const selfDir = dirname8(fileURLToPath2(import.meta.url));
+  const selfDir = dirname9(fileURLToPath2(import.meta.url));
   const candidates = [join13(selfDir, "secretgate-opencode.mjs"), join13(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
   const found = candidates.find((c) => existsSync9(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
@@ -10864,7 +10875,7 @@ function installForAgents(flags, io) {
       if (flags.project && projectSettingsAliasesGlobal()) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
-      mkdirSync9(dirname8(settingsPath), { recursive: true });
+      mkdirSync9(dirname9(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
@@ -11058,43 +11069,25 @@ async function cmdVerifyOpencode(args, io) {
   }
   try {
     const plugin = (await import(pathToFileURL(resolve7(file)).href)).default;
-    if (typeof plugin?.setup !== "function" || typeof plugin?.server !== "function" || typeof plugin?.id !== "string") {
-      throw new Error("plugin does not export an { id, setup, server } definition");
+    if (typeof plugin?.setup !== "function" || typeof plugin?.id !== "string") {
+      throw new Error("plugin does not export an { id, setup } definition");
     }
-    const hooks = await plugin.server({ directory: process.cwd() });
+    const registered = {};
+    const hook = async (name, callback) => {
+      registered[name] = callback;
+    };
+    await plugin.setup({ location: { directory: process.cwd() }, session: { hook, get: async () => ({}) }, tool: { hook } });
     const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-    const prompt = { parts: [{ text: fake }] };
-    await hooks["chat.message"]({}, prompt);
-    const token = prompt.parts[0].text;
+    const prompt = { text: fake, files: [] };
+    await registered.prompt({ sessionID: "verify", prompt });
+    const token = String(prompt.text);
     if (!token.startsWith("SECRETGATE_")) throw new Error("prompt redaction failed");
     const result = { content: [{ type: "text", text: fake }] };
-    await hooks["tool.execute.after"]({ tool: "mcp_verify" }, result);
+    await registered["execute.after"]({ tool: "mcp_verify", sessionID: "verify", status: "completed", input: {}, result });
     if (JSON.stringify(result).includes(fake)) throw new Error("MCP redaction failed");
     const patch = { patchText: token };
-    await hooks["tool.execute.before"]({ tool: "apply_patch" }, { args: patch });
+    await registered["execute.before"]({ tool: "apply_patch", sessionID: "verify", input: patch });
     if (patch.patchText !== fake) throw new Error("patch restore failed");
-    const registered = {};
-    const ctx = {
-      location: { directory: process.cwd() },
-      session: {
-        hook: async (name, callback) => {
-          registered[name] = callback;
-        },
-        get: async () => ({})
-      },
-      tool: {
-        hook: async (name, callback) => {
-          registered[name] = callback;
-        }
-      }
-    };
-    await plugin.setup(ctx);
-    const promptV2 = { text: fake, files: [] };
-    await registered.prompt({ sessionID: "verify", prompt: promptV2 });
-    if (!String(promptV2.text).startsWith("SECRETGATE_")) throw new Error("prompt redaction failed (OpenCode 2 path)");
-    const resultV2 = { content: [{ type: "text", text: fake }] };
-    await registered["execute.after"]({ tool: "mcp_verify", status: "completed", input: {}, result: resultV2 });
-    if (JSON.stringify(resultV2).includes(fake)) throw new Error("MCP redaction failed (OpenCode 2 path)");
   } catch (err) {
     io.stderr(`opencode verification failed: ${err instanceof Error ? err.message : String(err)}
 `);
@@ -11104,7 +11097,7 @@ async function cmdVerifyOpencode(args, io) {
 }
 function verifyOpencodeBundle(io) {
   const scratch = mkdtempSync2(join13(tmpdir3(), "secretgate-verify-opencode-"));
-  const plugin = join13(opencodeConfigDir(), "plugin", "secretgate.js");
+  const plugin = opencodePluginFile(opencodeConfigDir());
   const verificationModule = join13(scratch, "secretgate.mjs");
   try {
     copyFileSync5(plugin, verificationModule);
@@ -11323,7 +11316,7 @@ async function cmdStatus(_args, io) {
     );
   if (codexWired > 0) io.stdout("codex     output protection: PostToolUse block-and-replace (native output rewrite is still unsupported).\n");
   reportMissingPrograms(codexCommands, "codex     ", io);
-  const ocPlugin = join13(opencodeConfigDir(), "plugin", "secretgate.js");
+  const ocPlugin = opencodePluginFile(opencodeConfigDir());
   const ocPinned = ["opencode.json", "opencode.jsonc"].some((name) => {
     const read = readJsonFile(join13(opencodeConfigDir(), name));
     const plugin = read.ok ? read.value?.plugin : void 0;

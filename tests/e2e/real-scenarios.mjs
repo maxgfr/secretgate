@@ -292,7 +292,7 @@ scenario("opencode: uninstall keeps comments and never half-uninstalls", (sb) =>
   cli(sb, ["install", "--opencode"]);
   writeFileSync(join(dir, "opencode.json"), '{ "plugin": [');
   const bad = cli(sb, ["uninstall", "--opencode"]);
-  check(bad.code !== 0 && existsSync(join(dir, "plugin", "secretgate.js")), "a failed uninstall removed the plugin anyway");
+  check(bad.code !== 0 && existsSync(join(dir, "plugins", "secretgate.js")), "a failed uninstall removed the plugin anyway");
 });
 
 scenario("claude-code: hooks run an absolute node and uninstall leaves no empty hooks", (sb) => {

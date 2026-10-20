@@ -4,7 +4,7 @@
 file reads and tool output **before they are sent to the LLM API**, redacts
 them to stable placeholders, and restores the real values locally when the
 agent writes them back. Works with **Claude Code**, **OpenAI Codex CLI** and
-**OpenCode**. 100% local — no proxy, no network calls, no keys.
+**OpenCode 2**. 100% local — no proxy, no network calls, no keys.
 
 ```
 you paste a token in a prompt        -> BLOCKED, with a redacted copy to resend
@@ -384,8 +384,9 @@ Distributed as a skill and a Homebrew binary — no npm package. Releases
 (GitHub, via semantic-release) publish the install-free bundle plus the
 Bun-compiled binaries for macOS and Linux (arm64, x64) with their
 `SHA256SUMS`; the [tap](https://github.com/maxgfr/homebrew-tap) installs those.
-The `OpenCode` install writes a self-contained plugin file (embedded in the
-binary); there is no npm-pin mode.
+The `OpenCode` install writes a self-contained OpenCode 2 plugin file,
+`<config>/plugins/secretgate.js` (embedded in the binary); there is no npm-pin
+mode. OpenCode 1 is not supported.
 
 MIT — rule definitions derived from [gitleaks](https://github.com/gitleaks/gitleaks) (MIT).
 
@@ -403,9 +404,8 @@ The shipped skill is also model-invocable, so the agent can reach
 
 | Host | Shipped, automatic | Explicit-only |
 | --- | --- | --- |
-| Claude Code | no `disable-model-invocation` in `SKILL.md` | add `disable-model-invocation: true` |
+| Claude Code, OpenCode | no `disable-model-invocation` in `SKILL.md` | add `disable-model-invocation: true` |
 | Codex | `allow_implicit_invocation: true` under `policy:` in `agents/openai.yaml` | set it to `false` |
-| OpenCode | `metadata.opencode/autoinvoke: 'true'` in `SKILL.md` | set it to `'false'` |
 
 Claude Code can do it without touching the file:
 `"skillOverrides": { "secretgate": "user-invocable-only" }` in `settings.json`
@@ -413,20 +413,3 @@ leaves `/secretgate` working while hiding the skill from the model. Plugin insta
 ignore `skillOverrides`, so edit the frontmatter there. Updating or reinstalling
 restores the shipped default, so reapply the change afterwards.
 
-OpenCode V1 reads no `autoinvoke` metadata; `permission.skill` in
-`~/.config/opencode/opencode.json` or the project configuration is how you force
-explicit-only there. Retain unrelated permissions:
-
-```json
-{
-  "permission": {
-    "skill": {
-      "secretgate": "deny"
-    }
-  }
-}
-```
-
-On OpenCode 1.18.30 that rule hides the skill from the agent and rejects
-skill-tool loading, while the explicit `/secretgate` command still works.
-Installation with `skills add` does not write this OpenCode V1 configuration.

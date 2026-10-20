@@ -8528,19 +8528,15 @@ function mutateStringsInPlace(container, fn) {
 }
 var RESTORE_TOOLS = /* @__PURE__ */ new Set(["write", "edit", "patch", "apply_patch", "multiedit"]);
 function attachedPath(part) {
-  if (typeof part.url === "string" && part.url.startsWith("file:")) {
-    try {
-      return fileURLToPath(part.url);
-    } catch {
-      return void 0;
-    }
+  if (typeof part.url !== "string" || !part.url.startsWith("file:")) return void 0;
+  try {
+    return fileURLToPath(part.url);
+  } catch {
+    return void 0;
   }
-  if (typeof part.source?.path === "string") return part.source.path;
-  if (part.synthetic && typeof part.text === "string") return /"filePath":\s*"((?:[^"\\]|\\.)*)"/.exec(part.text)?.[1];
-  return void 0;
 }
 function projectState(ctx) {
-  const directory = ctx?.directory;
+  const directory = ctx?.location?.directory;
   const cwd = typeof directory === "string" ? directory : process.cwd();
   const isOff = (sessionId) => disableState({ cwd, sessionId: typeof sessionId === "string" ? sessionId : void 0 }).disabled;
   const stateFor = (sessionId) => {
@@ -8550,7 +8546,7 @@ function projectState(ctx) {
   };
   return { cwd, isOff, stateFor };
 }
-var typedText = (p) => typeof p?.text === "string" && !p.synthetic && (p.type === void 0 || p.type === "text");
+var typedText = (p) => typeof p?.text === "string" && (p.type === void 0 || p.type === "text");
 var TEXT_MIME = /^(?:text\/|application\/(?:json|xml|javascript|x-yaml|yaml|toml|x-sh|x-www-form-urlencoded)\b|$)/;
 function redactUri(uri, redact) {
   const m = /^data:([^,;]*)((?:;[^,;]*)*),([\s\S]*)$/.exec(uri);
@@ -8595,166 +8591,6 @@ function redactionMemo() {
   };
 }
 var WITHHELD = "[secretgate withheld this tool output: scan failed or output exceeded the scan budget]";
-async function buildHooks(ctx, state = projectState(ctx)) {
-  const { cwd, isOff, stateFor } = state;
-  const remembered = redactionMemo();
-  const bypassed = /* @__PURE__ */ new Set();
-  const client = ctx?.client;
-  const sessionKind = async (sessionId) => {
-    if (typeof sessionId !== "string") return "root";
-    if (typeof client?.session?.get !== "function") return "unknown";
-    try {
-      const res = await client.session.get({ path: { id: sessionId } });
-      return typeof res?.data?.parentID === "string" && res.data.parentID.length > 0 ? "sub" : "root";
-    } catch {
-      return "unknown";
-    }
-  };
-  return {
-    // OpenCode keeps rewritten args in tool history, including failed calls.
-    // Redact that history immediately before it is converted to model messages.
-    "experimental.chat.messages.transform": async (_input, output) => {
-      const off = /* @__PURE__ */ new Map();
-      let redact;
-      for (const message of output.messages ?? []) {
-        const sessionID = message.info?.sessionID;
-        if (!off.has(sessionID)) off.set(sessionID, isOff(sessionID));
-        if (off.get(sessionID)) continue;
-        try {
-          for (const part of message.parts ?? []) {
-            const type = part?.type;
-            if (type !== "tool" && type !== "user-content") continue;
-            if (type === "user-content" && bypassed.has(String(part.state?.text))) continue;
-            if (!redact) {
-              const { allowlist } = loadConfig(cwd);
-              redact = remembered(allowlist, eventRedactor(new Vault(), "opencode:history", allowlist));
-            }
-            mutateStringsInPlace(part, redact);
-          }
-        } catch {
-          throw new Error("secretgate: tool history could not be scanned safely; start a fresh session.");
-        }
-      }
-    },
-    "chat.message": async (input, output) => {
-      const sessionID = input?.sessionID;
-      const parts = output?.parts;
-      const kind = await sessionKind(sessionID);
-      if (kind !== "sub") recordSession(typeof sessionID === "string" ? sessionID : void 0, cwd);
-      if (!Array.isArray(parts)) return;
-      const said = parts.find((p) => typedText(p) && promptDirective(String(p.text)));
-      if (said && kind !== "root") {
-        said.text = `${said.text}
-
-[secretgate: ignored an off-switch \u2014 this session could not be confirmed as your main session (a subagent prompt is written by the model). Run \`secretgate disable --session\` in a terminal instead]`;
-      } else if (said) {
-        const notice = applyPromptDirective(promptDirective(String(said.text)), typeof sessionID === "string" ? sessionID : void 0, cwd);
-        said.text = `${said.text}
-
-[${notice}]`;
-      }
-      const { off, cfg } = stateFor(sessionID);
-      if (cfg.scopes.length > 0) {
-        for (const part of parts) {
-          if (!part || typeof part !== "object") continue;
-          const path = attachedPath(part);
-          const why = path ? cfg.scopes.map((s) => accessViolation(s, path, cwd, "read")).find(Boolean) : void 0;
-          if (why) {
-            for (const key of ["url", "filename", "mime", "source"]) delete part[key];
-            part.type = "text";
-            part.text = `[secretgate: an attachment was removed \u2014 ${why}]`;
-            continue;
-          }
-          if (typeof part.text === "string" && !part.synthetic) {
-            const mention = promptScopeViolation(cfg.scopes, part.text, cwd);
-            if (mention) throw new Error(mention);
-          }
-        }
-      }
-      if (off) return;
-      for (const part of parts) {
-        const path = part && typeof part === "object" && part.type === "file" ? attachedPath(part) : void 0;
-        if (path && sensitivePathMatch(path, cfg.allowlist, cwd)) {
-          for (const key of ["url", "filename", "mime", "source"]) delete part[key];
-          part.type = "text";
-          part.text = `[secretgate: an attachment was removed \u2014 '${path}' looks sensitive; reference its values as env vars instead]`;
-        }
-      }
-      const bypass = parts.some((p) => typedText(p) && String(p.text).includes(ALLOW_TAG));
-      if (bypass) {
-        for (const p of parts) if (typedText(p)) bypassed.add(String(p.text));
-        if (bypassed.size > 64) bypassed.delete(bypassed.values().next().value);
-      }
-      try {
-        const vault = new Vault();
-        const redact = eventRedactor(vault, "opencode:prompt", cfg.allowlist);
-        const mapped = parts.map((part) => typeof part?.text === "string" && !(bypass && typedText(part)) ? redact(part.text) : void 0);
-        parts.forEach((part, i) => {
-          if (mapped[i] !== void 0) part.text = mapped[i];
-        });
-      } catch {
-        throw new Error("secretgate: prompt could not be scanned safely; shorten it and retry.");
-      }
-    },
-    "tool.execute.before": async (input, output) => {
-      const tool = String(input?.tool ?? "").toLowerCase();
-      const args = output?.args ?? {};
-      const { off, cfg } = stateFor(input?.sessionID);
-      const decision = preToolPolicy(extractToolCall(tool, args), cfg, cwd, { disabled: off });
-      if (decision) {
-        throw new Error(
-          decision.action === "ask" ? `${decision.reason} OpenCode plugins cannot ask for approval, so this was refused: run it yourself if you meant it.` : decision.reason
-        );
-      }
-      const restoreThis = RESTORE_TOOLS.has(tool) || tool === "bash" && cfg.restoreBash;
-      if (restoreThis) {
-        const vault = new Vault();
-        mutateStringsInPlace(args, (s) => restorePlaceholders(s, vault).text);
-      }
-    },
-    "tool.execute.after": async (input, output) => {
-      const tool = String(input?.tool ?? "").toLowerCase();
-      try {
-        const { off, cfg } = stateFor(input?.sessionID);
-        const kind = extractToolCall(tool, input?.args).kind;
-        if (cfg.scopes.length > 0 && (kind === "search" || kind === "list") && typeof output?.output === "string") {
-          const filtered = filterSearchOutput(cfg.scopes, output.output, cwd);
-          output.output = filtered.value;
-          if (filtered.changed && kind === "search") {
-            const counts = searchTextCounts(output.output, cwd);
-            restateMetadataCounts(output.metadata, counts.matches, counts.files);
-          }
-        }
-        if (off) return;
-        const vault = new Vault();
-        mutateStringsInPlace(output, eventRedactor(vault, `opencode:${tool}`, cfg.allowlist));
-      } catch {
-        const notice = WITHHELD;
-        if (!output || typeof output !== "object") throw new Error(notice);
-        const mcp = "content" in output;
-        for (const key of Object.keys(output)) delete output[key];
-        if (mcp) {
-          output.content = [{ type: "text", text: notice }];
-          output.isError = true;
-        } else {
-          output.output = notice;
-          output.title = "secretgate: output withheld";
-          output.metadata = {};
-        }
-      }
-    }
-  };
-}
-function v1ContextView(ctx) {
-  return {
-    directory: ctx?.location?.directory,
-    client: {
-      session: {
-        get: async ({ path }) => ({ data: await ctx.session.get({ sessionID: path.id }) })
-      }
-    }
-  };
-}
 function restateMetadataCounts(metadata, matches, files) {
   if (!metadata || typeof metadata !== "object") return;
   const m = metadata;
@@ -8777,34 +8613,100 @@ function filterListingResult(scopes, result, cwd, search) {
 }
 var SecretgatePlugin = {
   id: "secretgate",
-  // OpenCode 1: return the legacy hook map.
-  async server(ctx) {
-    return buildHooks(ctx);
-  },
-  // OpenCode 2: register hooks on the domains that own the operation. Each
-  // registration adapts the V2 event into the (input, output) call the shared
-  // implementation expects, except tool results (see execute.after).
+  // Register hooks on the domains that own the operation.
   async setup(ctx) {
-    const view = v1ContextView(ctx);
-    const state = projectState(view);
-    const hooks = await buildHooks(view, state);
-    const { cwd, stateFor } = state;
+    const { cwd, isOff, stateFor } = projectState(ctx);
+    const remembered = redactionMemo();
+    const bypassed = /* @__PURE__ */ new Set();
+    const sessionKind = async (sessionId) => {
+      if (typeof sessionId !== "string") return "root";
+      if (typeof ctx?.session?.get !== "function") return "unknown";
+      try {
+        const session = await ctx.session.get({ sessionID: sessionId });
+        return typeof session?.parentID === "string" && session.parentID.length > 0 ? "sub" : "root";
+      } catch {
+        return "unknown";
+      }
+    };
     await ctx.session.hook("context", async (event) => {
       const messages = Array.isArray(event?.messages) ? event.messages : [];
-      await hooks["experimental.chat.messages.transform"](
-        {},
-        {
-          messages: messages.map((message) => ({
-            info: { sessionID: event?.sessionID },
-            parts: (Array.isArray(message?.content) ? message.content : []).flatMap((part) => {
-              if (part?.type === "tool-call" || part?.type === "tool-result") return [{ type: "tool", state: part }];
-              if (message?.role === "user" && (part?.type === "text" || part?.type === "file")) return [{ type: "user-content", state: part }];
-              return [];
-            })
-          }))
+      if (isOff(event?.sessionID)) return;
+      let redact;
+      for (const message of messages) {
+        try {
+          for (const part of Array.isArray(message?.content) ? message.content : []) {
+            const tool = part?.type === "tool-call" || part?.type === "tool-result";
+            const user = message?.role === "user" && (part?.type === "text" || part?.type === "file");
+            if (!tool && !user) continue;
+            if (user && bypassed.has(String(part?.text))) continue;
+            if (!redact) {
+              const { allowlist } = loadConfig(cwd);
+              redact = remembered(allowlist, eventRedactor(new Vault(), "opencode:history", allowlist));
+            }
+            mutateStringsInPlace(part, redact);
+          }
+        } catch {
+          throw new Error("secretgate: tool history could not be scanned safely; start a fresh session.");
         }
-      );
+      }
     });
+    const screenPrompt = async (sessionID, parts) => {
+      const kind = await sessionKind(sessionID);
+      if (kind !== "sub") recordSession(typeof sessionID === "string" ? sessionID : void 0, cwd);
+      const said = parts.find((p) => typedText(p) && promptDirective(String(p.text)));
+      if (said && kind !== "root") {
+        said.text = `${said.text}
+
+[secretgate: ignored an off-switch \u2014 this session could not be confirmed as your main session (a subagent prompt is written by the model). Run \`secretgate disable --session\` in a terminal instead]`;
+      } else if (said) {
+        const notice = applyPromptDirective(promptDirective(String(said.text)), typeof sessionID === "string" ? sessionID : void 0, cwd);
+        said.text = `${said.text}
+
+[${notice}]`;
+      }
+      const { off, cfg } = stateFor(sessionID);
+      if (cfg.scopes.length > 0) {
+        for (const part of parts) {
+          if (!part || typeof part !== "object") continue;
+          const path = attachedPath(part);
+          const why = path ? cfg.scopes.map((s) => accessViolation(s, path, cwd, "read")).find(Boolean) : void 0;
+          if (why) {
+            for (const key of ["url", "filename", "mime"]) delete part[key];
+            part.type = "text";
+            part.text = `[secretgate: an attachment was removed \u2014 ${why}]`;
+            continue;
+          }
+          if (typeof part.text === "string") {
+            const mention = promptScopeViolation(cfg.scopes, part.text, cwd);
+            if (mention) throw new Error(mention);
+          }
+        }
+      }
+      if (off) return;
+      for (const part of parts) {
+        const path = part && typeof part === "object" && part.type === "file" ? attachedPath(part) : void 0;
+        if (path && sensitivePathMatch(path, cfg.allowlist, cwd)) {
+          for (const key of ["url", "filename", "mime"]) delete part[key];
+          part.type = "text";
+          part.text = `[secretgate: an attachment was removed \u2014 '${path}' looks sensitive; reference its values as env vars instead]`;
+        }
+      }
+      const bypass = parts.some((p) => typedText(p) && String(p.text).includes(ALLOW_TAG));
+      if (bypass) {
+        for (const p of parts) if (typedText(p)) bypassed.add(String(p.text));
+        if (bypassed.size > 64) bypassed.delete(bypassed.values().next().value);
+      }
+      try {
+        const vault = new Vault();
+        const redact = eventRedactor(vault, "opencode:prompt", cfg.allowlist);
+        const mapped = parts.map((part) => typeof part?.text === "string" && !(bypass && typedText(part)) ? redact(part.text) : void 0);
+        parts.forEach((part, i) => {
+          if (mapped[i] !== void 0) part.text = mapped[i];
+        });
+      } catch {
+        throw new Error("secretgate: prompt could not be scanned safely; shorten it and retry.");
+      }
+    };
     await ctx.session.hook("prompt", async (event) => {
       const prompt = event && typeof event === "object" ? event.prompt ?? {} : {};
       const files = Array.isArray(prompt.files) ? prompt.files : [];
@@ -8813,7 +8715,7 @@ var SecretgatePlugin = {
       for (const file of files) {
         parts.push({ type: "file", url: file?.uri, filename: file?.filename, mime: file?.mime });
       }
-      await hooks["chat.message"]({ sessionID: event?.sessionID }, { parts });
+      await screenPrompt(event?.sessionID, parts);
       const kept = [];
       const notes = [];
       for (let i = 0; i < files.length; i++) {
@@ -8834,8 +8736,20 @@ ${notes.join("\n\n")}`;
       }
     });
     await ctx.tool.hook("execute.before", async (event) => {
-      const tool = String(event?.tool ?? "").toLowerCase() === "shell" ? "bash" : event?.tool;
-      await hooks["tool.execute.before"]({ tool, sessionID: event?.sessionID }, { args: event?.input ?? {} });
+      const tool = String(event?.tool ?? "").toLowerCase();
+      const args = event?.input ?? {};
+      const { off, cfg } = stateFor(event?.sessionID);
+      const decision = preToolPolicy(extractToolCall(tool, args), cfg, cwd, { disabled: off });
+      if (decision) {
+        throw new Error(
+          decision.action === "ask" ? `${decision.reason} OpenCode plugins cannot ask for approval, so this was refused: run it yourself if you meant it.` : decision.reason
+        );
+      }
+      const restoreThis = RESTORE_TOOLS.has(tool) || (tool === "shell" || tool === "bash") && cfg.restoreBash;
+      if (restoreThis) {
+        const vault = new Vault();
+        mutateStringsInPlace(args, (s) => restorePlaceholders(s, vault).text);
+      }
     });
     await ctx.tool.hook("execute.after", async (event) => {
       if (event?.status !== "completed") return;

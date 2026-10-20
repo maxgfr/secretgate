@@ -22,16 +22,16 @@ afterEach(() => {
 const configDir = () => join(dir, "opencode");
 
 describe("installOpencode (self-contained plugin file)", () => {
-  it("copies the plugin bundle into plugin/secretgate.js", () => {
+  it("copies the plugin bundle into plugins/secretgate.js", () => {
     const r = installOpencode({ configDir: configDir(), pluginSource: bundle });
     expect(r.changed).toBe(true);
-    expect(readFileSync(join(configDir(), "plugin", "secretgate.js"), "utf8")).toBe(bundleContent);
+    expect(readFileSync(join(configDir(), "plugins", "secretgate.js"), "utf8")).toBe(bundleContent);
   });
 
   it("writes plugin text handed over directly (the standalone binary embeds it)", () => {
     const r = installOpencode({ configDir: configDir(), pluginContent: bundleContent });
     expect(r.changed).toBe(true);
-    expect(readFileSync(join(configDir(), "plugin", "secretgate.js"), "utf8")).toBe(bundleContent);
+    expect(readFileSync(join(configDir(), "plugins", "secretgate.js"), "utf8")).toBe(bundleContent);
     // same content as the file-based install: nothing to change
     expect(installOpencode({ configDir: configDir(), pluginSource: bundle }).changed).toBe(false);
   });
@@ -43,9 +43,44 @@ describe("installOpencode (self-contained plugin file)", () => {
   });
 
   it("refuses to overwrite a foreign file at the target path", () => {
-    mkdirSync(join(configDir(), "plugin"), { recursive: true });
-    writeFileSync(join(configDir(), "plugin", "secretgate.js"), "// someone else's plugin\n");
+    mkdirSync(join(configDir(), "plugins"), { recursive: true });
+    writeFileSync(join(configDir(), "plugins", "secretgate.js"), "// someone else's plugin\n");
     expect(() => installOpencode({ configDir: configDir(), pluginSource: bundle })).toThrow(/foreign|not ours/i);
+  });
+});
+
+describe("the plugin/ (singular) copy earlier releases wrote", () => {
+  const stale = () => join(configDir(), "plugin", "secretgate.js");
+  const writeStale = (text: string) => {
+    mkdirSync(join(configDir(), "plugin"), { recursive: true });
+    writeFileSync(stale(), text);
+  };
+
+  it("is removed by install, so OpenCode does not load the plugin twice", () => {
+    writeStale("// old SecretgatePlugin bundle\n");
+    expect(installOpencode({ configDir: configDir(), pluginSource: bundle }).changed).toBe(true);
+    expect(existsSync(stale())).toBe(false);
+    expect(existsSync(join(configDir(), "plugins", "secretgate.js"))).toBe(true);
+  });
+
+  it("is removed even when the new file is already up to date", () => {
+    installOpencode({ configDir: configDir(), pluginSource: bundle });
+    writeStale("// old SecretgatePlugin bundle\n");
+    expect(installOpencode({ configDir: configDir(), pluginSource: bundle }).changed).toBe(true);
+    expect(existsSync(stale())).toBe(false);
+  });
+
+  it("is removed by uninstall", () => {
+    writeStale("// old SecretgatePlugin bundle\n");
+    expect(uninstallOpencode({ configDir: configDir() }).changed).toBe(true);
+    expect(existsSync(stale())).toBe(false);
+  });
+
+  it("is left alone when it is not ours", () => {
+    writeStale("// someone else's plugin\n");
+    installOpencode({ configDir: configDir(), pluginSource: bundle });
+    uninstallOpencode({ configDir: configDir() });
+    expect(existsSync(stale())).toBe(true);
   });
 });
 
@@ -54,7 +89,7 @@ describe("uninstallOpencode", () => {
     installOpencode({ configDir: configDir(), pluginSource: bundle });
     const r = uninstallOpencode({ configDir: configDir() });
     expect(r.changed).toBe(true);
-    expect(existsSync(join(configDir(), "plugin", "secretgate.js"))).toBe(false);
+    expect(existsSync(join(configDir(), "plugins", "secretgate.js"))).toBe(false);
   });
 
   it("still cleans up a legacy opencode.json npm pin if present", () => {
@@ -67,10 +102,10 @@ describe("uninstallOpencode", () => {
   });
 
   it("does not delete a foreign secretgate.js", () => {
-    mkdirSync(join(configDir(), "plugin"), { recursive: true });
-    writeFileSync(join(configDir(), "plugin", "secretgate.js"), "// someone else's plugin\n");
+    mkdirSync(join(configDir(), "plugins"), { recursive: true });
+    writeFileSync(join(configDir(), "plugins", "secretgate.js"), "// someone else's plugin\n");
     uninstallOpencode({ configDir: configDir() });
-    expect(existsSync(join(configDir(), "plugin", "secretgate.js"))).toBe(true);
+    expect(existsSync(join(configDir(), "plugins", "secretgate.js"))).toBe(true);
   });
 });
 
@@ -90,11 +125,11 @@ describe("uninstallOpencode — JSONC configs", () => {
     installOpencode({ configDir: configDir(), pluginSource: bundle });
     writeFileSync(join(configDir(), "opencode.json"), '{ "plugin": [');
     expect(() => uninstallOpencode({ configDir: configDir() })).toThrow(SettingsParseError);
-    expect(existsSync(join(configDir(), "plugin", "secretgate.js"))).toBe(true);
+    expect(existsSync(join(configDir(), "plugins", "secretgate.js"))).toBe(true);
   });
 
   it("writes the plugin file atomically (no temp file left behind)", () => {
     installOpencode({ configDir: configDir(), pluginSource: bundle });
-    expect(readdirSync(join(configDir(), "plugin"))).toEqual(["secretgate.js"]);
+    expect(readdirSync(join(configDir(), "plugins"))).toEqual(["secretgate.js"]);
   });
 });

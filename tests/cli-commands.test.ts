@@ -513,8 +513,8 @@ describe("secretgate status", () => {
   it("asks for a pinned program only when a hook that runs one is wired (not for OpenCode alone)", async () => {
     process.env.HOME = home;
     process.chdir(work);
-    mkdirSync(join(home, ".config", "opencode", "plugin"), { recursive: true });
-    writeFileSync(join(home, ".config", "opencode", "plugin", "secretgate.js"), "// SecretgatePlugin\n");
+    mkdirSync(join(home, ".config", "opencode", "plugins"), { recursive: true });
+    writeFileSync(join(home, ".config", "opencode", "plugins", "secretgate.js"), "// SecretgatePlugin\n");
     const oc = capture();
     await run(["status"], oc.io);
     expect(oc.text()).toContain("opencode  wired (plugin file)");
@@ -533,13 +533,13 @@ describe("secretgate status", () => {
     const ocDir = join(work, "oc-config");
     process.env.OPENCODE_CONFIG_DIR = ocDir;
     expect(await run(["install", "--opencode"], capture().io)).toBe(0);
-    expect(existsSync(join(ocDir, "plugin", "secretgate.js"))).toBe(true);
+    expect(existsSync(join(ocDir, "plugins", "secretgate.js"))).toBe(true);
     expect(existsSync(join(home, ".config", "opencode"))).toBe(false);
     const { io, text } = capture();
     await run(["status"], io);
     expect(text()).toContain(`opencode  wired (plugin file)  ${ocDir}`);
     expect(await run(["uninstall", "--opencode"], capture().io)).toBe(0);
-    expect(existsSync(join(ocDir, "plugin", "secretgate.js"))).toBe(false);
+    expect(existsSync(join(ocDir, "plugins", "secretgate.js"))).toBe(false);
   });
 
   it("does not ask to refresh an outdated pinned copy that no wired hook runs", async () => {
@@ -673,20 +673,20 @@ describe("secretgate __verify-opencode", () => {
 
   it("fails on a plugin that does not redact", async () => {
     const plugin = join(work, "noop.mjs");
-    writeFileSync(plugin, "export default { id: 'fake', async setup() {}, async server() { return { 'chat.message': async () => {} }; } };\n");
+    writeFileSync(plugin, "export default { id: 'fake', async setup(ctx) { await ctx.session.hook('prompt', async () => {}); } };\n");
     const c = capture();
     expect(await run(["__verify-opencode", plugin], c.io)).toBe(1);
     expect(c.errText()).toContain("prompt redaction failed");
   });
 
-  it("fails on a plugin without the { id, setup, server } definition", async () => {
+  it("fails on a plugin without the { id, setup } definition", async () => {
     // Regression guard: OpenCode 2 ignores named exports, so an old-style
     // `export const SecretgatePlugin` bundle would silently load nothing.
     const plugin = join(work, "legacy.mjs");
     writeFileSync(plugin, "export const SecretgatePlugin = async () => ({});\n");
     const c = capture();
     expect(await run(["__verify-opencode", plugin], c.io)).toBe(1);
-    expect(c.errText()).toContain("{ id, setup, server }");
+    expect(c.errText()).toContain("{ id, setup }");
   });
 
   it("stays out of --help", async () => {

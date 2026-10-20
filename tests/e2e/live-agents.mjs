@@ -135,7 +135,8 @@ for (const agent of agents) {
   };
   for (const key of ["ANTHROPIC_AUTH_TOKEN", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR"]) delete env[key];
   let phase = "prompt",
-    turn = 0;
+    turn = 0,
+    mcpWaits = 0;
   const requests = [];
   const scopeMarker = "SCOPE" + "_MARKER_" + Math.random().toString(36).slice(2);
   const scopeDenials = [];
@@ -172,8 +173,6 @@ for (const agent of agents) {
           : [])
       ).flatMap((t) => (t.type === "namespace" ? t.tools.map((x) => ({ ...x, namespace: t.name })) : [t]));
       const names = tools.map((t) => t.name);
-      // OpenCode 2's file tools take `path`; OpenCode 1's took `filePath`.
-      const fileArg = (name) => (tools.find((t) => t.name === name)?.input_schema?.properties?.path ? "path" : "filePath");
       let tool;
       if (phase === "skill") {
         // The pause is applied by the prompt hook; the model just answers.
@@ -204,7 +203,7 @@ for (const agent of agents) {
               agent === "claude-code"
                 ? { file_path: join(project, "private", "notes.txt") }
                 : agent === "opencode"
-                  ? { [fileArg(name)]: join(project, "private", "notes.txt") }
+                  ? { path: join(project, "private", "notes.txt") }
                   : name === "exec_command"
                     ? { cmd: "cat private/notes.txt" }
                     : { command: ["cat", "private/notes.txt"] },
@@ -218,6 +217,13 @@ for (const agent of agents) {
       if (!tools.length) {
         if (agent === "codex") responses(res, body.model);
         else anthropic(res, body.model);
+        return;
+      }
+      // OpenCode 2 connects MCP servers in the background: until the audit
+      // tool is listed, hold the turn with a short shell call.
+      if (phase === "mcp" && turn === 0 && agent === "opencode" && !names.some((n) => n.endsWith("_emit"))) {
+        assert(mcpWaits++ < 30, `opencode: the audit MCP tool never appeared: ${names.join(",")}`);
+        anthropic(res, body.model, { name: "shell", args: { command: "sleep 1" } });
         return;
       }
       if (turn++ === 0) {
@@ -238,7 +244,7 @@ for (const agent of agents) {
               : agent === "claude-code"
                 ? { file_path: join(project, "ci-values.txt") }
                 : agent === "opencode"
-                  ? { [fileArg(name)]: join(project, "ci-values.txt") }
+                  ? { path: join(project, "ci-values.txt") }
                   : name === "exec_command"
                     ? { cmd: "cat ci-values.txt" }
                     : { command: ["cat", "ci-values.txt"] },
@@ -259,7 +265,7 @@ for (const agent of agents) {
             args:
               agent === "claude-code"
                 ? { file_path: join(project, "copy.txt"), content: `CI_TOKEN=${placeholder}\n` }
-                : { [fileArg("write")]: join(project, "copy.txt"), content: `CI_TOKEN=${placeholder}\n` },
+                : { path: join(project, "copy.txt"), content: `CI_TOKEN=${placeholder}\n` },
           };
       }
       if (agent === "codex") responses(res, body.model, tool);
@@ -321,13 +327,15 @@ for (const agent of agents) {
         join(env.XDG_CONFIG_HOME, "opencode", "opencode.json"),
         JSON.stringify({
           model: "anthropic/claude-fable-5-1",
-          provider: { anthropic: { options: { baseURL: url + "/v1", apiKey: "test" } } },
-          permission: "allow",
-          mcp: { audit: { type: "local", command: ["node", mcp], enabled: true } },
+          providers: { anthropic: { settings: { baseURL: url + "/v1", apiKey: "test" } } },
+          permissions: [{ action: "*", resource: "*", effect: "allow" }],
+          mcp: { servers: { audit: { type: "local", command: ["node", mcp], disabled: false, codemode: false } } },
         }),
       );
       command = "opencode";
-      args = ["run", "--format", "json"];
+      // A private server per run: the background service would keep another
+      // configuration (and plugin set) than this fixture's.
+      args = ["run", "--standalone", "--auto", "--format", "json"];
     }
     const version = execFileSync(command, ["--version"], { encoding: "utf8" }).trim();
     const pasted = await run(command, [...args, "Token " + fake], { cwd: project, env });
