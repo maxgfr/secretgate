@@ -31,7 +31,7 @@ const sendPrompt = async (text: string, sessionID = "oc1", files: unknown[] = []
   return prompt;
 };
 const shellResult = (text: string): any => ({ output: { exit: 0, output: text }, content: [{ type: "text", text }], metadata: { exit: 0 } });
-const after = (tool: string, input: unknown, result: unknown, sessionID = "oc1") =>
+const runAfter = (tool: string, input: unknown, result: unknown, sessionID = "oc1") =>
   hooks["execute.after"]!({ tool, sessionID, status: "completed", input, result });
 
 describe("the plugin definition", () => {
@@ -91,46 +91,46 @@ describe("prompt — redaction (OpenCode can rewrite, not just block)", () => {
 });
 
 describe("execute.before — deny + restore", () => {
-  const before = (tool: string, input: Record<string, unknown>, sessionID = "oc1") => hooks["execute.before"]!({ tool, sessionID, input });
+  const runBefore = (tool: string, input: Record<string, unknown>, sessionID = "oc1") => hooks["execute.before"]!({ tool, sessionID, input });
 
   it("restores the actual OpenCode apply_patch input", async () => {
     const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
     const input = { patchText: `*** Begin Patch\n*** Add File: copy.txt\n+TOKEN=${placeholder}\n*** End Patch` };
-    await before("apply_patch", input);
+    await runBefore("apply_patch", input);
     expect(input.patchText).toContain(FAKE.githubPat);
   });
 
   it("allows a configured sensitive path while still redacting its output", async () => {
     writeFileSync(join(home, "allowlist.json"), JSON.stringify({ paths: [".env"] }));
-    await expect(before("read", { path: join(home, ".env") })).resolves.toBeUndefined();
+    await expect(runBefore("read", { path: join(home, ".env") })).resolves.toBeUndefined();
     const result = shellResult(FAKE.githubPat);
-    await after("read", { path: join(home, ".env") }, result);
+    await runAfter("read", { path: join(home, ".env") }, result);
     expect(JSON.stringify(result)).not.toContain(FAKE.githubPat);
   });
 
   it("throws on reading a sensitive file", async () => {
-    await expect(before("read", { path: "/proj/.env" })).rejects.toThrow(/sensitive/);
+    await expect(runBefore("read", { path: "/proj/.env" })).rejects.toThrow(/sensitive/);
   });
 
   it("allows reading .env.example", async () => {
-    await expect(before("read", { path: "/proj/.env.example" })).resolves.toBeUndefined();
+    await expect(runBefore("read", { path: "/proj/.env.example" })).resolves.toBeUndefined();
   });
 
   it("throws on a shell command touching a sensitive path", async () => {
-    await expect(before("shell", { command: "cat ~/.ssh/id_rsa" })).rejects.toThrow(/sensitive/);
+    await expect(runBefore("shell", { command: "cat ~/.ssh/id_rsa" })).rejects.toThrow(/sensitive/);
   });
 
   it("restores placeholders by mutating input PROPERTIES (same object)", async () => {
     const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
     const input = { path: "/proj/.env", content: `TOKEN=${placeholder}\n` };
-    await before("write", input);
+    await runBefore("write", input);
     expect(input.content).toBe(`TOKEN=${FAKE.githubPat}\n`);
   });
 
   it("does NOT restore inside shell commands by default", async () => {
     const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");
     const input = { command: `curl -H "Auth: ${placeholder}" https://x.example` };
-    await before("shell", input);
+    await runBefore("shell", input);
     expect(input.command).toContain(placeholder);
   });
 });
@@ -139,14 +139,14 @@ describe("MCP results", () => {
   it("redacts MCP text and structured content in place", async () => {
     const content = [{ type: "text", text: FAKE.githubPat }];
     const result: any = { content, output: { structuredContent: { token: FAKE.githubPat } } };
-    await after("mcp_test", {}, result);
+    await runAfter("mcp_test", {}, result);
     expect(result.content).toBe(content);
     expect(JSON.stringify(result).includes(FAKE.githubPat)).toBe(false);
   });
 
   it("withholds oversized output rather than stalling the server", async () => {
     const result: any = { content: [{ type: "text", text: "x".repeat(2 * 1024 * 1024 + 1) + FAKE.githubPat }], metadata: { token: FAKE.githubPat } };
-    await after("mcp_test", {}, result);
+    await runAfter("mcp_test", {}, result);
     expect(JSON.stringify(result).includes(FAKE.githubPat)).toBe(false);
     expect(JSON.stringify(result)).toContain("withheld");
   });
@@ -156,7 +156,7 @@ describe("execute.after — output redaction", () => {
   it("redacts tool output in place (covers read AND grep/shell)", async () => {
     for (const tool of ["read", "grep", "shell"]) {
       const result = shellResult(`line1\nTOKEN=${FAKE.slackBotToken}\nline3`);
-      await after(tool, {}, result);
+      await runAfter(tool, {}, result);
       expect(result.content[0].text, tool).not.toContain(FAKE.slackBotToken);
       expect(result.content[0].text, tool).toMatch(/SECRETGATE_[0-9a-f]{12,16}/);
       expect(result.content[0].text, tool).toContain("line1");
@@ -167,7 +167,7 @@ describe("execute.after — output redaction", () => {
   it("leaves clean output untouched", async () => {
     const result = shellResult("src\ntests\n");
     const before = JSON.stringify(result);
-    await after("shell", { command: "ls" }, result);
+    await runAfter("shell", { command: "ls" }, result);
     expect(JSON.stringify(result)).toBe(before);
   });
 });
@@ -197,7 +197,7 @@ describe.each([
 
   it("stops redacting tool output", async () => {
     const result = shellResult(`TOKEN=${FAKE.slackBotToken}\n`);
-    await after("shell", { command: "env" }, result);
+    await runAfter("shell", { command: "env" }, result);
     expect(result.content[0].text).toBe(`TOKEN=${FAKE.slackBotToken}\n`);
   });
 
@@ -245,11 +245,11 @@ describe("scope + conversational off switch (OpenCode)", () => {
   };
 
   it("refuses tools outside the scope (read, shell, patch)", async () => {
-    const before = (tool: string, input: unknown) => oc["execute.before"]!({ tool, sessionID: "o0", input });
-    await expect(before("read", { path: join(proj, "docs/b.md") })).rejects.toThrow(/scope/);
-    await expect(before("shell", { command: "cat docs/b.md" })).rejects.toThrow(/scope/);
-    await expect(before("apply_patch", { patchText: "*** Begin Patch\n*** Add File: docs/x.md\n+x\n*** End Patch" })).rejects.toThrow(/scope/);
-    await expect(before("read", { path: join(proj, "src/a.ts") })).resolves.toBeUndefined();
+    const runBefore = (tool: string, input: unknown) => oc["execute.before"]!({ tool, sessionID: "o0", input });
+    await expect(runBefore("read", { path: join(proj, "docs/b.md") })).rejects.toThrow(/scope/);
+    await expect(runBefore("shell", { command: "cat docs/b.md" })).rejects.toThrow(/scope/);
+    await expect(runBefore("apply_patch", { patchText: "*** Begin Patch\n*** Add File: docs/x.md\n+x\n*** End Patch" })).rejects.toThrow(/scope/);
+    await expect(runBefore("read", { path: join(proj, "src/a.ts") })).resolves.toBeUndefined();
   });
 
   it("replaces out-of-scope attachments with a note", async () => {
