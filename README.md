@@ -101,7 +101,7 @@ anything per-use.
 | Surface | Claude Code | Codex CLI | OpenCode |
 |---|---|---|---|
 | Secret pasted in a prompt | ✅ blocked + redacted copy | ✅ blocked + redacted copy | ✅ redacted in place |
-| Agent reads a sensitive file | ✅ hook deny + `permissions.deny` | ✅ hook deny | ✅ hook deny (`.env` also denied by OpenCode itself) |
+| Agent reads a sensitive file | ✅ hook deny + `permissions.deny` | ✅ hook deny | ✅ hook deny (`.env` also needs approval in OpenCode itself) |
 | Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
 | Placeholder written to a file | ✅ real value restored (built-in file tools; never through MCP tools, which may write remotely) | ✅ real value restored (`apply_patch`) | ✅ real value restored (built-in file tools) |
 | Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ✅ **withheld** via block-and-replace | ✅ withheld on scan failure |
@@ -405,10 +405,10 @@ The shipped skill is also model-invocable, so the agent can reach
 | Host | Shipped, automatic | Explicit-only |
 | --- | --- | --- |
 | Claude Code, OpenCode | no `disable-model-invocation` in `SKILL.md` | add `disable-model-invocation: true` |
+| Codex | no `agents/openai.yaml` (implicit invocation is Codex's default) | add `agents/openai.yaml` with `allow_implicit_invocation: false` under `policy:` |
 
 Claude Code can do it without touching the file:
 `"skillOverrides": { "secretgate": "user-invocable-only" }` in `settings.json`
-leaves `/secretgate` working while hiding the skill from the model. Plugin installs
-ignore `skillOverrides`, so edit the frontmatter there. Updating or reinstalling
-restores the shipped default, so reapply the change afterwards.
+leaves `/secretgate` working while hiding the skill from the model. Updating or
+reinstalling the skill restores the shipped default, so reapply a file edit afterwards.
 
