@@ -29,7 +29,7 @@ import { claudeCodeMatcherCurrent, installClaudeCode, retiredRulesToRemove, unin
 import { CODEX_HOOK_COUNT, codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
 import { SettingsParseError } from "./install/json-merge.js";
 import { isSecretgateHook } from "./install/hook-marker.js";
-import { installOpencode, opencodeConfigDir, uninstallOpencode } from "./install/opencode.js";
+import { installOpencode, opencodeConfigDir, opencodePluginFile, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
 import { commandLine, hookProgram, hookRuntime, pinSelf, pinnedBinaryPath, pinnedBundlePath, runningInvocation, selfInvocation } from "./self.js";
 import { Vault, defaultVaultHome } from "./vault/vault.js";
@@ -954,45 +954,27 @@ async function cmdVerifyOpencode(args: string[], io: Io): Promise<number> {
   }
   try {
     const plugin = (await import(pathToFileURL(resolve(file)).href)).default;
-    if (typeof plugin?.setup !== "function" || typeof plugin?.server !== "function" || typeof plugin?.id !== "string") {
-      throw new Error("plugin does not export an { id, setup, server } definition");
+    if (typeof plugin?.setup !== "function" || typeof plugin?.id !== "string") {
+      throw new Error("plugin does not export an { id, setup } definition");
     }
-    const hooks = await plugin.server({ directory: process.cwd() });
+    // Register through a stub OpenCode 2 context, then drive the callbacks
+    // OpenCode would invoke.
+    const registered: Record<string, (event: any) => Promise<void>> = {};
+    const hook = async (name: string, callback: (event: any) => Promise<void>) => {
+      registered[name] = callback;
+    };
+    await plugin.setup({ location: { directory: process.cwd() }, session: { hook, get: async () => ({}) }, tool: { hook } });
     const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-    const prompt = { parts: [{ text: fake }] };
-    await hooks["chat.message"]({}, prompt);
-    const token = prompt.parts[0]!.text;
+    const prompt = { text: fake, files: [] };
+    await registered.prompt!({ sessionID: "verify", prompt });
+    const token = String(prompt.text);
     if (!token.startsWith("SECRETGATE_")) throw new Error("prompt redaction failed");
     const result = { content: [{ type: "text", text: fake }] };
-    await hooks["tool.execute.after"]({ tool: "mcp_verify" }, result);
+    await registered["execute.after"]!({ tool: "mcp_verify", sessionID: "verify", status: "completed", input: {}, result });
     if (JSON.stringify(result).includes(fake)) throw new Error("MCP redaction failed");
     const patch = { patchText: token };
-    await hooks["tool.execute.before"]({ tool: "apply_patch" }, { args: patch });
+    await registered["execute.before"]!({ tool: "apply_patch", sessionID: "verify", input: patch });
     if (patch.patchText !== fake) throw new Error("patch restore failed");
-    // Drive the OpenCode 2 path too: register through a stub context, then run
-    // the same checks through the adapted prompt and tool hooks.
-    const registered: Record<string, (event: any) => Promise<void>> = {};
-    const ctx = {
-      location: { directory: process.cwd() },
-      session: {
-        hook: async (name: string, callback: (event: any) => Promise<void>) => {
-          registered[name] = callback;
-        },
-        get: async () => ({}),
-      },
-      tool: {
-        hook: async (name: string, callback: (event: any) => Promise<void>) => {
-          registered[name] = callback;
-        },
-      },
-    };
-    await plugin.setup(ctx);
-    const promptV2 = { text: fake, files: [] };
-    await registered.prompt!({ sessionID: "verify", prompt: promptV2 });
-    if (!String(promptV2.text).startsWith("SECRETGATE_")) throw new Error("prompt redaction failed (OpenCode 2 path)");
-    const resultV2 = { content: [{ type: "text", text: fake }] };
-    await registered["execute.after"]!({ tool: "mcp_verify", status: "completed", input: {}, result: resultV2 });
-    if (JSON.stringify(resultV2).includes(fake)) throw new Error("MCP redaction failed (OpenCode 2 path)");
   } catch (err) {
     io.stderr(`opencode verification failed: ${err instanceof Error ? err.message : String(err)}\n`);
     return 1;
@@ -1002,7 +984,7 @@ async function cmdVerifyOpencode(args: string[], io: Io): Promise<number> {
 
 function verifyOpencodeBundle(io: Io): boolean {
   const scratch = mkdtempSync(join(tmpdir(), "secretgate-verify-opencode-"));
-  const plugin = join(opencodeConfigDir(), "plugin", "secretgate.js");
+  const plugin = opencodePluginFile(opencodeConfigDir());
   // OpenCode loads ESM .js through Bun; Node 18 needs an explicit .mjs suffix.
   const verificationModule = join(scratch, "secretgate.mjs");
   try {
@@ -1235,7 +1217,7 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   reportMissingPrograms(codexCommands, "codex     ", io);
 
   // opencode
-  const ocPlugin = join(opencodeConfigDir(), "plugin", "secretgate.js");
+  const ocPlugin = opencodePluginFile(opencodeConfigDir());
   const ocPinned = ["opencode.json", "opencode.jsonc"].some((name) => {
     const read = readJsonFile(join(opencodeConfigDir(), name));
     const plugin = read.ok ? (read.value as { plugin?: unknown } | null)?.plugin : undefined;

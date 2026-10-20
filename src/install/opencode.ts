@@ -1,22 +1,36 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { applyEdits, modify, type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import { writeFileAtomic } from "../fs-atomic.js";
 import { type EditReport, SettingsParseError } from "./json-merge.js";
 
 // OpenCode install = copy the self-contained plugin bundle to
-// <config>/plugin/secretgate.js. secretgate is distributed as a skill, not an
+// <config>/plugins/secretgate.js. secretgate is distributed as a skill, not an
 // npm package, so there is no npm-pin mode — the file copy works fully offline.
 const OWNERSHIP_MARKER = "SecretgatePlugin";
 
-// The directory OpenCode loads `plugin/*.js` from: OPENCODE_CONFIG_DIR when
+// The directory OpenCode loads `plugins/*.js` from: OPENCODE_CONFIG_DIR when
 // set (OpenCode honours it first), else the XDG config home.
 export function opencodeConfigDir(): string {
   const custom = process.env.OPENCODE_CONFIG_DIR;
   if (custom && custom !== "") return custom;
   const xdg = process.env.XDG_CONFIG_HOME;
   return join(xdg && xdg !== "" ? xdg : join(homedir(), ".config"), "opencode");
+}
+
+/** Where the plugin file lives. */
+export function opencodePluginFile(configDir: string): string {
+  return join(configDir, "plugins", "secretgate.js");
+}
+
+// Earlier releases wrote `plugin/secretgate.js` (singular): OpenCode 2 still
+// loads that directory, so a stale copy there would run beside the new one.
+function removeStalePlugin(configDir: string): boolean {
+  const stale = join(configDir, "plugin", "secretgate.js");
+  if (!existsSync(stale) || !readFileSync(stale, "utf8").includes(OWNERSHIP_MARKER)) return false;
+  rmSync(stale);
+  return true;
 }
 
 export type OpencodeInstallOptions = { configDir: string } & (
@@ -28,18 +42,19 @@ export type OpencodeInstallOptions = { configDir: string } & (
 
 export function installOpencode(options: OpencodeInstallOptions): EditReport {
   const { configDir } = options;
-  const target = join(configDir, "plugin", "secretgate.js");
+  const target = opencodePluginFile(configDir);
   const content = "pluginContent" in options ? options.pluginContent : readFileSync(options.pluginSource, "utf8");
   if (existsSync(target)) {
     const existing = readFileSync(target, "utf8");
     if (!existing.includes(OWNERSHIP_MARKER)) {
       throw new Error(`refusing to overwrite ${target}: the existing file is not ours (foreign plugin?). Remove it manually first.`);
     }
-    if (existing === content) return { path: target, changed: false };
+    if (existing === content) return { path: target, changed: removeStalePlugin(configDir) };
   }
-  mkdirSync(join(configDir, "plugin"), { recursive: true });
+  mkdirSync(dirname(target), { recursive: true });
   // A running OpenCode may load the plugin while it is being written.
   writeFileAtomic(target, content, 0o644);
+  removeStalePlugin(configDir);
   return { path: target, changed: true };
 }
 
@@ -62,7 +77,7 @@ function withoutNpmPin(path: string): string | undefined {
 }
 
 export function uninstallOpencode({ configDir }: { configDir: string }): EditReport {
-  const target = join(configDir, "plugin", "secretgate.js");
+  const target = opencodePluginFile(configDir);
   // Every config is read and checked before anything is removed: a file that
   // cannot be parsed stops the uninstall whole, never half-way.
   const edits: Array<{ path: string; text: string }> = [];
@@ -77,6 +92,7 @@ export function uninstallOpencode({ configDir }: { configDir: string }): EditRep
     rmSync(target);
     changed = true;
   }
+  if (removeStalePlugin(configDir)) changed = true;
   for (const { path, text } of edits) {
     copyFileSync(path, `${path}.secretgate-backup-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`);
     writeFileAtomic(path, text, 0o644);

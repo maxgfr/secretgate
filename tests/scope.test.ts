@@ -173,7 +173,7 @@ describe("toolCallScopeViolation", () => {
 
   it("the OpenCode plugin under OPENCODE_CONFIG_DIR is a policy file too", () => {
     const ocDir = join(home, "oc-config");
-    const plugin = join(ocDir, "plugin", "secretgate.js");
+    const plugin = join(ocDir, "plugins", "secretgate.js");
     expect(isControlFile(scopeOf({ allow: ["**"] }), plugin, root)).toBe(false);
     process.env.OPENCODE_CONFIG_DIR = ocDir;
     expect(isControlFile(scopeOf({ allow: ["**"] }), plugin, root)).toBe(true);

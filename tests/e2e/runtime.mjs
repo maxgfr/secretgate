@@ -25,11 +25,11 @@ try {
   const output = execFileSync(process.execPath, [bundle, "init", "--all"], { env, cwd: temp, encoding: "utf8" });
   assert(output.includes("local checks passed"));
   const plugin = await import(pathToFileURL(resolve("skills/secretgate/scripts/secretgate-opencode.mjs")));
-  // One default definition serving OpenCode 2 (setup) and 1 (server); no named exports.
+  // One default OpenCode 2 definition ({ id, setup }); no named exports.
   assert.deepEqual(Object.keys(plugin), ["default"]);
+  assert.deepEqual(Object.keys(plugin.default).sort(), ["id", "setup"]);
   assert.equal(plugin.default.id, "secretgate");
   assert.equal(typeof plugin.default.setup, "function");
-  assert.equal(typeof plugin.default.server, "function");
   execFileSync(process.execPath, [bundle, "uninstall", "--all"], { env, cwd: temp, stdio: "pipe" });
   console.log(`PASS install-free runtime ${process.platform} ${process.version}: scan, three installers, adapter checks, uninstall`);
 } finally {

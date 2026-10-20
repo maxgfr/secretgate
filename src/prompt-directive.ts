@@ -10,7 +10,7 @@ import { addPause, describeDisable, disableState, removePause } from "./disable.
 //   /secretgate off scope | disable --scope      (also lifts the project scope)
 //   /secretgate on | enable | resume
 //
-// Only prompts the user submits are read (UserPromptSubmit / chat.message),
+// Only prompts the user submits are read (UserPromptSubmit / the OpenCode prompt hook),
 // never tool output, and only their FIRST non-empty line, which must be the
 // directive and nothing else. A pasted log, a quoted block or a sentence about
 // the feature never switches anything, and there is no natural-language form:

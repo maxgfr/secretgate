@@ -146,7 +146,7 @@ jobs:
           case "${{ matrix.agent }}" in
             claude-code) npm install -g @anthropic-ai/claude-code@2.1.263 ;;
             codex) npm install -g @openai/codex@0.153.4 ;;
-            opencode) npm install -g opencode-ai@1.18.29 ;;
+            opencode) npm install -g @opencode/cli@2.1.0 ;;
           esac
       - name: Inspect real model-bound requests against loopback provider
         run: node tests/e2e/live-agents.mjs ${{ matrix.agent }}

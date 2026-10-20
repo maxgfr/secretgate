@@ -501,7 +501,7 @@ function filterTree(scopes: ScopeConfig[], lines: string[], cwd: string): string
 
 /** What a search result text lists: match lines (OpenCode `  Line 12: …`,
  *  grep `path:12:…`) and the distinct files they are in. */
-export function searchTextCounts(text: string, cwd: string): { matches: number; files: number } {
+function searchTextCounts(text: string, cwd: string): { matches: number; files: number } {
   let matches = 0;
   const files = new Set<string>();
   for (const line of text.split("\n")) {
