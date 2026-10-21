@@ -400,12 +400,12 @@ Turning the firewall off is typing `/secretgate off`, `secretgate disable`
 for a run, or removing the hooks; nothing about it depends on a skill being invoked.
 
 The shipped skill is also model-invocable, so the agent can reach
-`secretgate`'s own commands when a task calls for them. You keep both switches:
+`secretgate`'s own commands when a task calls for them. Making it explicit-only
+is one setting, read by Claude Code and OpenCode:
 
 | Host | Shipped, automatic | Explicit-only |
 | --- | --- | --- |
 | Claude Code, OpenCode | no `disable-model-invocation` in `SKILL.md` | add `disable-model-invocation: true` |
-| Codex | no `agents/openai.yaml` (implicit invocation is Codex's default) | add `agents/openai.yaml` with `allow_implicit_invocation: false` under `policy:` |
 
 Claude Code can do it without touching the file:
 `"skillOverrides": { "secretgate": "user-invocable-only" }` in `settings.json`
