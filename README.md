@@ -358,8 +358,10 @@ should assume when `claude --version` cannot be run from their shell).
   a possible second engine and **not adopted**. It beats them on its own
   synthetic bench, but it flags about 60 % of real files that hold no secret
   (method, numbers and limits: [docs/model-comparison.md](docs/model-comparison.md)).
-  The same page records the rules' own false positives on 8,823 real files
-  (40, then 5 after the rules learnt to read what a value says of itself).
+  The same page records the rules' own false positives on 8,823 real files:
+  40, then 21 once the rules drop what the text itself makes certain is public.
+  The rest is left flagged on purpose: a false redaction is restored locally,
+  a miss is a leak.
 - Verified against **real `claude -p` sessions** by inspecting the session
   transcript: a secret in a tool result never appears in what reached the
   model (only the placeholder does), and restore-on-write puts the real value

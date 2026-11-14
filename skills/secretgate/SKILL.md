@@ -150,7 +150,8 @@ to Fable 5.1. Distinguish these checks in reports.
   cover common sensitive paths, not every possible credential-bearing file.
 - Claude Code lets no hook rewrite the output of a failed tool call. When one
   holds a secret, the turn is stopped before the next model request and the
-  session is closed: start a fresh one.
+  session is closed: start a fresh one. That check needs Claude Code 2.1.101
+  or later; `secretgate status` says when it is not installed.
 - Failed MCP calls can bypass Codex's post hook. Raw tool output can remain in
   agents' local logs/telemetry even when model-bound output is masked.
 - On an unscannable result, supported output envelopes are replaced by a safe

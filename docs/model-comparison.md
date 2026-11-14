@@ -256,42 +256,51 @@ at `b1c59f5`, so the files do not move with the work; skycmd's tree had grown
 by two files since section 5 (8,823 files). At `b1c59f5` the script returns
 section 5's figures on them: 65 findings in 17 files, recall 0.9772.
 
-**Rule noise.** 35 of the 40 false positives were values that say themselves
-they are not a usable secret, and a rule can read that without losing a
-detection:
+**Rule noise.** A false redaction costs almost nothing in this product (the
+value is restored locally) and a miss is a leak. So a rule may drop a finding
+only when the text makes it structurally certain that the value is public or
+not a credential. A first pass also dropped values on their look (dictionary
+words only, a masked middle, an `EXAMPLE` suffix, hex after "GPG key"); a
+review showed real passwords of each shape going unflagged, and those filters
+were taken back out. 19 of the 40 false positives meet the bar:
 
-| class (section 5) | before | after | what the rule reads |
+| class (section 5) | before | after | what makes it certain |
 | --- | ---: | ---: | --- |
-| example token passed to an auth helper | 12 | 0 | a GitHub token with one character eight times in a row |
-| example header value, three copies | 12 | 0 | a value made only of placeholder words |
-| placeholder test password in skycmd | 1 | 0 | the same |
-| variable name matched as a value | 4 | 0 | the "value" repeats the name it is assigned to |
-| TLS public-key pins | 3 | 0 | the value's own name says "public key" |
-| release GPG key fingerprints | 3 | 0 | hex after a name that says "GPG key" |
+| example token passed to an auth helper | 12 | 0 | a GitHub token with one character eight times in a row: a generator does that about once in 10^11 tokens |
+| variable name matched as a value | 4 | 0 | the "value" is the name it is assigned to |
+| TLS public-key pins | 3 | 0 | the value's own name says "public key", with no credential word in it |
+| example header value, three copies | 12 | 12 | nothing: words only, and so is somebody's password |
+| placeholder test password in skycmd | 1 | 1 | the same |
+| release GPG key fingerprints | 3 | 3 | nothing: "GPG key" before 40 hex digits is likely a fingerprint, not certainly one |
 | base64 example credentials | 3 | 3 | nothing: real `_auth` values look the same |
 | doc-comment example of an API token | 2 | 2 | nothing: twelve letters and digits |
-| **false positives** | **40** | **5** | |
+| **false positives** | **40** | **21** | |
 | deliberate fakes in test fixtures | 25 | 24 | a Stripe publishable key in skycmd's generator is no longer flagged: it is public by design |
-| **findings** | **65** | **29** | in 17, then 8 files |
+| **findings** | **65** | **45** | in 17, then 13 files |
 
-By rule, the 29 are password-assignment 13, url-credentials 7,
-credit-card-number 4, generic-api-key 4 and private-key 1. The five that remain
-are the population a verifier has to judge; no rule separates them from real
-values.
+By rule, the 45 are password-assignment 26, generic-api-key 7, url-credentials
+7, credit-card-number 4 and private-key 1. The 21 false positives are the
+population a verifier has to judge: nothing in the text separates them from
+real values.
 
 The same pass has rules for cases the bench holds and the census does not: a
-Stripe publishable key (`pk_live_`, `pk_test_`), a value ending in `EXAMPLE` or
-partly masked, a name that says "cache key" or "fingerprint". Together they
-remove every bench false positive except the test keys:
+whole Stripe publishable key (`pk_live_`, `pk_test_`), and a name that says
+"cache key" or "fingerprint". On the bench:
 
 | rules | recall | precision | accuracy | TP | FP | FN | TN |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | before | 0.9772 | 0.7183 | 0.7946 | 987 | 387 | 23 | 599 |
-| after | 0.9772 | 0.8479 | 0.8998 | 987 | 177 | 23 | 809 |
+| after | 0.9772 | 0.8343 | 0.8903 | 987 | 196 | 23 | 790 |
 
-The 177 that remain are the test keys secretgate redacts on purpose. Against
+Of the 196 that remain, 177 are the test keys secretgate redacts on purpose
+and 19 are the bench's placeholders (an `EXAMPLE` suffix, `your-api-key-here`,
+a partly masked key), which are flagged for the reason given above. Against
 "secret or test credential" the rules now reach recall 0.9806 and precision
-1.0000. The 23 misses are the same 23 texts.
+0.9839. The 23 misses are the same 23 texts.
+
+The pass also added one rule, `paired-credential`: a value attached to a
+detected credential by `:`, `=` or `,` (the secret key after the key id in an
+AWS credentials CSV). It finds nothing in the census files or in the bench.
 
 **The 23 bench secrets the rules miss** are not all secrets a rule should catch:
 
@@ -330,10 +339,10 @@ rule finding with what section 5 lists (rule, offsets of the value, of the
 match and of every capture group, line, name, entropy, a bounded context
 window, file). Values are masked by default: every letter and digit is replaced
 by another of the same class, wherever the walked files repeat the value. On
-the census files it writes 29 candidates from 8 files. With `--generic` it adds
+the census files it writes 45 candidates from 13 files. With `--generic` it adds
 the values assigned to credential-sounding names and the values of
 authorization-style headers that no rule proposes, whatever their entropy or
-quoting: 1,209 candidates from 303 files, of which 1,147 assignments and 33
+quoting: 1,209 candidates from 303 files, of which 1,131 assignments and 33
 headers. In both masked exports, no candidate value of 8 characters or more
 appears in any context field.
 
