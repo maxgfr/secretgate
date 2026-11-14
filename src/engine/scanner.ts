@@ -571,6 +571,146 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
   return dedupe(findings, text);
 }
 
+// ---------------------------------------------------------------- trace
+// For development tools only (scripts/rule-candidates.mjs): the product does
+// not call anything below, and the bundler leaves it out of the shipped files.
+
+/** A gate of `scan` that a match fails. `scan` reports a match that fails none. */
+export type MatchGate =
+  | "redacted"
+  | "post"
+  | "post-match"
+  | "rule-source"
+  | "placeholder"
+  | "repeated-character"
+  | "entropy"
+  | "pragma"
+  | "name-context"
+  | "rule-allowlist"
+  | "rule-stopword"
+  | "global-regex"
+  | "global-stopword"
+  | "user-value";
+
+export interface TracedMatch extends Finding {
+  gates: MatchGate[];
+}
+
+/** A rule the engine does not ship, run through the same loop as its own. */
+export interface ExtraRule {
+  id: string;
+  re: RegExp;
+  keywords: string[];
+  secretGroup?: number;
+  entropy?: number;
+  /** judged like the rules that trust a name (see NAME_TRUSTING_RULES) */
+  nameTrusting?: boolean;
+}
+
+// The `post` gate of these two built-in rules also asks `looksLikePlaceholder`,
+// which the trace reports as a gate of its own. This is the rest of each;
+// `traceMatches` checks on every match that the two halves still add up to
+// the rule's `post`.
+const POST_BESIDES_PLACEHOLDER: Record<string, (secret: string) => boolean> = {
+  "url-credentials": () => true,
+  "password-assignment": (secret) => !/\s/.test(secret) && !looksLikeFilesystemPath(secret) && !alreadyRedacted(secret),
+};
+
+/** Whether upstream's global path allowlist exempts `path` whole (images,
+ *  fonts, lock files, `node_modules`, vendored Go modules…). */
+export function isGloballyAllowedPath(path: string): boolean {
+  return GLOBAL_PATHS.some((re) => re.test(path));
+}
+
+/**
+ * Every regex match `scan` would consider in `text`, each with the gates it
+ * fails, before `dedupe`. Path allowlists, disabled and scoped rules and the
+ * keyword prefilter apply as in `scan`; there is no deadline.
+ * `dedupeFindings` over the matches that fail no gate gives what `scan`
+ * returns (tests/engine/trace.test.ts pins it).
+ */
+export function traceMatches(text: string, cfg: ScanConfig = {}, extraRules: ExtraRule[] = []): TracedMatch[] {
+  if (text.length === 0) return [];
+  if (cfg.sourcePath) {
+    if (isGloballyAllowedPath(cfg.sourcePath)) return [];
+    if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
+  }
+
+  const lower = text.toLowerCase();
+  const starts = lineStarts(text);
+  const pragmaLines = cfg.pragmas === false ? new Set<number>() : pragmaAllowedLines(text);
+  const nameTrusting = new Set([...NAME_TRUSTING_RULES, ...extraRules.filter((r) => r.nameTrusting).map((r) => r.id)]);
+  const extra: CompiledRule[] = extraRules.map((r) => ({
+    id: r.id,
+    re: new RegExp(r.re.source, [...new Set(`${r.re.flags}dg`)].join("")),
+    entropy: r.entropy,
+    secretGroup: r.secretGroup,
+    keywords: r.keywords,
+    allowlists: [],
+  }));
+  const out: TracedMatch[] = [];
+
+  for (const rule of [...COMPILED, ...extra]) {
+    if (isDisabledRule(rule.id, cfg.allowlist)) continue;
+    if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
+    if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
+
+    const postRest = POST_BESIDES_PLACEHOLDER[rule.id];
+    for (const match of text.matchAll(rule.re)) {
+      const { secret, start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
+      if (secret.length === 0) continue;
+      const gates = new Set<MatchGate>();
+      const placeholder = looksLikePlaceholder(secret);
+      if (alreadyRedacted(secret)) gates.add("redacted");
+      if (rule.post) {
+        const passes = rule.post(secret);
+        if (postRest === undefined) {
+          if (!passes) gates.add("post");
+        } else {
+          const rest = postRest(secret);
+          if (passes !== (rest && !placeholder))
+            throw new Error(`traceMatches: the post gate of ${rule.id} is no longer its placeholder test and POST_BESIDES_PLACEHOLDER`);
+          if (!rest) gates.add("post");
+        }
+      }
+      if (rule.postMatch && !rule.postMatch(secret, match[0])) gates.add("post-match");
+      if (isRuleSourceText(secret)) gates.add("rule-source");
+      if (placeholder) gates.add("placeholder");
+      if (GITHUB_TOKEN_RULES.has(rule.id) && EIGHT_IN_A_ROW.test(secret)) gates.add("repeated-character");
+
+      const entropy = shannonEntropy(secret);
+      if (rule.entropy !== undefined && entropy <= rule.entropy) gates.add("entropy");
+
+      const line = lineAt(starts, start);
+      if (pragmaLines.has(line)) gates.add("pragma");
+      if (nameTrusting.has(rule.id) && notASecretInContext(secret, assignedName(text, starts[line]!, start))) gates.add("name-context");
+
+      const fullMatch = match[0];
+      const lowerSecret = secret.toLowerCase();
+      for (const a of rule.allowlists) {
+        const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText(text, starts, line) : secret;
+        if (!allowlistMatches(a, secret, target, cfg.sourcePath)) continue;
+        // Which of the allowlist's criteria hold: its stopwords, or its
+        // regexes and paths.
+        if (a.stopwords.some((s) => lowerSecret.includes(s))) gates.add("rule-stopword");
+        if (a.regexes.some((re) => re.test(target)) || (cfg.sourcePath !== undefined && a.paths.some((re) => re.test(cfg.sourcePath!))))
+          gates.add("rule-allowlist");
+      }
+      if (GLOBAL_REGEXES.some((re) => re.test(secret))) gates.add("global-regex");
+      if (GLOBAL_STOPWORDS.some((s) => lowerSecret.includes(s))) gates.add("global-stopword");
+      if (isAllowedValue(secret, cfg.allowlist)) gates.add("user-value");
+
+      out.push({ ruleId: rule.id, match: fullMatch, secret, start, end, entropy, line, gates: [...gates] });
+    }
+  }
+  return out;
+}
+
+/** `scan`'s own `dedupe`, for the tools that work from `traceMatches`. */
+export function dedupeFindings<F extends Finding>(findings: F[], text: string): F[] {
+  return dedupe(findings, text) as F[];
+}
+
 // When two findings' secret spans overlap, one finding is kept and it must
 // cover everything either rule flagged: what a dropped finding saw and the
 // kept one does not would reach the model unredacted.
