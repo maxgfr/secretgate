@@ -380,6 +380,13 @@ const COMPILED: CompiledRule[] = [
   ...BUILTIN_RULES,
 ];
 
+/** Every rule's pattern, for development tools that need what a match looked
+ *  like (scripts/rule-candidates.mjs reads the capture groups). The product
+ *  does not call it. */
+export function rulePatterns(): Array<{ id: string; re: RegExp; secretGroup?: number }> {
+  return COMPILED.map((r) => ({ id: r.id, re: new RegExp(r.re.source, r.re.flags), secretGroup: r.secretGroup }));
+}
+
 // The rule database describes secrets, so some regex sources embed literal
 // secret-shaped constants (e.g. the Bedrock key's base64 prefix) — scanning
 // secretgate's own rule files or shipped bundles would flag its detection
