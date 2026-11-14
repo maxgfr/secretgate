@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -418,7 +419,15 @@ describe("PostToolBatch — results no hook could redact", () => {
     expect(JSON.parse((await handleClaudeCode("post-tool-batch", "{not json")).stdout).continue).toBe(false);
   });
 
-  it("honors the user allowlist and a pause", async () => {
+  it("honors the user allowlist", async () => {
+    writeFileSync(join(home, "allowlist.json"), JSON.stringify({ sha256: [createHash("sha256").update(FAKE.githubPat).digest("hex")] }));
+    expect((await handleClaudeCode("post-tool-batch", batchEvent(failed))).stdout).toBe("");
+    // Another value in the same result still stops the turn.
+    const other = { tool_name: "Bash", tool_response: `Exit code 3\nCI_TOKEN=${FAKE.githubPat}\nkey ${FAKE.awsKeyId}` };
+    expect(JSON.parse((await handleClaudeCode("post-tool-batch", batchEvent(other))).stdout).stopReason).toContain("aws-access-token");
+  });
+
+  it("is silent while the session is paused", async () => {
     await handleClaudeCode("user-prompt-submit", promptEvent("/secretgate off"));
     expect((await handleClaudeCode("post-tool-batch", batchEvent(failed))).stdout).toBe("");
   });
