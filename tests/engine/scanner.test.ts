@@ -350,6 +350,87 @@ describe("scan — wall-clock budget (anti-hang)", () => {
   });
 });
 
+// Classes of false positives found on real files (docs/model-comparison.md,
+// section 5): values that say themselves they are not a usable secret. Each
+// filter has its counter-examples next to it: none may cost a detection.
+describe("scan — values that are not secrets by their own account", () => {
+  const none = (texts: string[]) => {
+    for (const text of texts) expect(scan(text), text).toEqual([]);
+  };
+  const some = (texts: string[]) => {
+    for (const text of texts) expect(scan(text).length, text).toBeGreaterThan(0);
+  };
+
+  it("skips a value made only of placeholder words", () => {
+    none([
+      "headers: { 'X-TOKEN-SECRET': 'SuperSecretToken' },",
+      'api_key: "super-secret-key".into(),',
+      'secret = "your-api-key-here"',
+      'client_secret = "YOUR_API_KEY"',
+      'password = "MySecretPassword"',
+      'auth_token = "not-a-real-token"',
+    ]);
+    // One word outside the vocabulary, a digit or a symbol, and it is a value again.
+    some(['password = "SuperSecretTokyo"', 'password = "SuperSecretToken9"', 'api_key = "super-secret-key!"', 'secret = "correcthorsebatterystaple"']);
+  });
+
+  it("skips a value that ends in EXAMPLE or is partly masked", () => {
+    none([`openai_api_key = "${`${FAKE.awsKeyId.slice(0, 13)}EXAMPLE`}"`, `password = "SG.${FAKE.genericSecret.slice(0, 20)}${"*".repeat(13)}"`]);
+    some([`openai_api_key = "${FAKE.awsKeyId.slice(0, 13)}EXAMPLe"`, `password = "SG.${FAKE.genericSecret.slice(0, 20)}***"`]);
+  });
+
+  it("skips a value that only restates the name it is assigned to", () => {
+    none(["var obj1KeysLength = obj1Keys.length;", "const apiKeyHeader = api_key_header;", "export const SESSION_TOKEN_NAME = 'session-token-name';"]);
+    some([`var obj1KeysLength = ${FAKE.genericSecret};`, `const apiKeyHeader = "${FAKE.genericSecret}";`]);
+  });
+
+  it("skips what its label calls a public key, a fingerprint or a cache key", () => {
+    const hex40 = "9554F04D7259F04124DE" + "6B476D5A82AC7E37093B";
+    const b64 = "pL1+qb9HTMRZJmuC/bB/ZI" + "9d302BYrrqiVuRyW+DGrU=";
+    none([
+      `- Release GPG key: ${hex40}`,
+      ` *   Public key ping-sha256: ${b64}`,
+      `ssh_public_key = "${FAKE.genericSecret}"`,
+      `key_fingerprint = "${hex40.toLowerCase().slice(0, 32)}"`,
+      `\tkeyFingerprint := "${hex40.toLowerCase().slice(0, 32)}"`,
+      `      - CACHE_KEY=${hex40.toLowerCase()}`,
+      `\tcacheKey := "${hex40.toLowerCase()}${hex40.toLowerCase().slice(0, 24)}"`,
+    ]);
+    // The label must be the value's own: a neighbour's does not count, and a
+    // secret named after one of these words is still a secret.
+    some([
+      `{"public_key": "abc", "private_key": "${FAKE.genericSecret}"}`,
+      `the public key is known, the api key: ${FAKE.genericSecret}`,
+      `fingerprint_secret = "${FAKE.genericSecret}"`,
+      `FINGERPRINT_API_KEY=${FAKE.genericSecret}`,
+      `cache_encryption_key = "${FAKE.genericSecret}"`,
+      `public_keystore_password = "${FAKE.genericSecret}"`,
+      `gpg_key_passphrase: "${FAKE.genericSecret}"`,
+      `- Release GPG key: ${FAKE.githubPat}`,
+      `- Release GPG key: ${FAKE.genericSecret}`,
+    ]);
+  });
+
+  it("skips a Stripe publishable key, which is meant to be public", () => {
+    const body = FAKE.genericSecret + FAKE.genericSecret;
+    none([`stripe_publishable_key = pk_test_${body}`, `      - NEXT_PUBLIC_STRIPE_KEY=pk_live_${body}`, `\tstripeKey := "pk_live_${body}"`]);
+    expect(scan(`stripe_key = sk_live_${body}`).map((f) => f.ruleId)).toEqual(["stripe-access-token"]);
+    some([`stripe_key = pk_prod_${body}`, `api_key = "xpk_test_${body}"`]);
+  });
+
+  it("skips a GitHub token no generator would produce: one character eight times in a row", () => {
+    none([
+      `const auth = createTokenAuth("${"ghp_" + "PersonalAccessToken0124567890" + "0000000"}");`,
+      `//   token: '${"ghs_" + "InstallallationOrActionToken" + "00000000"}',`,
+      `createTokenAuth("${"ghu_" + "InstallationUserToServer" + "000000000000"}");`,
+    ]);
+    // Seven in a row can still be drawn; and the rule is GitHub's alone.
+    expect(scan(`TOKEN=${"ghp_" + "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC" + "0000000"}`).map((f) => f.ruleId)).toEqual(["github-pat"]);
+    expect(scan(`TOKEN=${FAKE.githubPat}`).map((f) => f.ruleId)).toEqual(["github-pat"]);
+    some([`password = "Xq9$mK2vLp7wRt4z${"0".repeat(8)}"`]);
+  });
+});
+
 describe("scan — dedupe", () => {
   it("emits a single finding when a specific rule and generic-api-key overlap", () => {
     const findings = scan(`key = ${FAKE.awsKeyId}`);

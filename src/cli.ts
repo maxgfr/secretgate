@@ -21,7 +21,7 @@ import { isAllowedValue, isDisabledRule, pathMatchesGlob, sha256, type UserAllow
 import { shannonEntropy } from "./engine/entropy.js";
 import { gitleaksPath, scanWithGitleaks } from "./engine/gitleaks-bin.js";
 import type { Finding } from "./engine/scanner.js";
-import { isNonSecret, scan, sensitiveFileNameRule } from "./engine/scanner.js";
+import { isNonSecret, isNonSecretInContext, scan, sensitiveFileNameRule } from "./engine/scanner.js";
 import { failClosed, type HookResult, handleClaudeCode } from "./hooks/claude-code.js";
 import { handleCodex } from "./hooks/codex.js";
 import { AllowlistFileError, writeAllow } from "./install/allow-store.js";
@@ -167,12 +167,14 @@ async function gitleaksExtra(bin: string, text: string, found: Finding[], allowl
   let lineStarts: number[] | undefined;
   for (const g of await scanWithGitleaks(text, { bin })) {
     if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
-    known.add(g.secret);
     // gitleaks says which line; the first occurrence is only a fallback (a
     // repeated secret would otherwise always point at its first line).
     lineStarts ??= [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
     const reported = g.startLine !== undefined && g.startLine <= lineStarts.length ? text.indexOf(g.secret, lineStarts[g.startLine - 1]) : -1;
     const start = reported !== -1 ? reported : Math.max(0, text.indexOf(g.secret));
+    // What the JS engine drops where the value stands, gitleaks must not bring back.
+    if (isNonSecretInContext(text, start, g.secret, g.ruleId)) continue;
+    known.add(g.secret);
     const line = g.startLine !== undefined && reported !== -1 ? g.startLine - 1 : text.slice(0, start).split("\n").length - 1;
     extra.push({
       ruleId: `gitleaks:${g.ruleId}`,

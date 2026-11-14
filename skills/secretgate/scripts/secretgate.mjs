@@ -8627,11 +8627,26 @@ function looksLikeInterpolation(v) {
   /^%\([A-Za-z_]\w*\)[a-z]$/.test(v) || // printf mapping %(db_password)s
   /^<%=?[\s\S]*%>$/.test(v);
 }
+var DESCRIBING_WORDS = /* @__PURE__ */ new Set([
+  ...["a", "an", "the", "my", "your", "our", "this", "that", "is", "not", "no", "real", "super", "very", "top", "some", "any"],
+  ...["secret", "secrets", "token", "tokens", "key", "keys", "api", "apikey", "password", "passwd", "pass", "pwd", "passphrase"],
+  ...["credential", "credentials", "auth", "access", "private", "client", "user", "admin", "service", "account", "bearer"],
+  ...["test", "testing", "example", "sample", "demo", "dummy", "fake", "mock", "foo", "bar", "baz", "value", "string", "text"],
+  ...["here", "goes", "change", "me", "changeme", "replace", "insert", "enter", "put", "with", "placeholder", "todo", "default"]
+]);
+function onlyDescribesItself(v) {
+  if (v.length > 64 || !/^[A-Za-z][A-Za-z _.-]*$/.test(v)) return false;
+  const words = v.split(/[ _.-]+|(?<=[a-z])(?=[A-Z])/).filter((w) => w !== "");
+  return words.length >= 2 && words.every((w) => DESCRIBING_WORDS.has(w.toLowerCase()));
+}
 function looksLikePlaceholder(raw) {
   const v = unquote(raw);
   const low = v.toLowerCase();
   if (PLACEHOLDER_WORDS.has(low)) return true;
   if (/^[*x•.\-_]+$/.test(v)) return true;
+  if (/[*•]{4,}/.test(v)) return true;
+  if (/[A-Z0-9]EXAMPLE$/.test(v)) return true;
+  if (onlyDescribesItself(v)) return true;
   if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true;
   if (looksLikeInterpolation(v.trim())) return true;
   if (/^%[a-z_]+%$/i.test(v)) return true;
@@ -8646,6 +8661,30 @@ function looksLikeFilesystemPath(raw) {
   if (separators < 2) return false;
   return /^[A-Za-z0-9._\-\\/: ]+$/.test(v);
 }
+var NAME_TRUSTING_RULES = /* @__PURE__ */ new Set(["generic-api-key", "password-assignment"]);
+function assignedName(text, lineStart, valueStart) {
+  const before = text.slice(Math.max(lineStart, valueStart - 160), valueStart);
+  const head = before.replace(/[\s"'`=:>,|?]+$/, "");
+  const phrase = /[\w.\- \t]*$/.exec(head)[0];
+  return phrase.split(/[ \t]+/).filter((w) => w !== "");
+}
+var alnum = (v) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+var PUBLIC_NAME = /(?:pub(?:lic)?[ _.-]?key|(?:gpg|pgp)[ _.-]?key|cache[ _.-]?key|fingerprint)(s?)(?![a-z])/i;
+var CREDENTIAL_WORD = /key|api|secret|token|passw|passphrase|private|credential|auth/i;
+function namedPublic(name) {
+  const label = name.slice(-3).join(" ");
+  const m = PUBLIC_NAME.exec(label);
+  return m !== null && !CREDENTIAL_WORD.test(label.slice(m.index + m[0].length));
+}
+function notASecretInContext(secret, name) {
+  const last = name[name.length - 1];
+  if (last !== void 0 && alnum(last).length >= 6 && alnum(last) === alnum(unquote(secret))) return true;
+  if (/^pk_(?:test|live)_/.test(unquote(secret))) return true;
+  if (/(?:gpg|pgp)[ _.-]?key/i.test(name.slice(-3).join(" ")) && !/^[0-9A-Fa-f \t]+$/.test(unquote(secret))) return false;
+  return namedPublic(name);
+}
+var GITHUB_TOKEN_RULES = /* @__PURE__ */ new Set(["github-pat", "github-fine-grained-pat", "github-oauth", "github-app-token", "github-refresh-token"]);
+var EIGHT_IN_A_ROW = /(.)\1{7}/;
 var BUILTIN_RULES = [
   {
     id: "credit-card-number",
@@ -8767,6 +8806,11 @@ function isRuleSourceText(secret) {
 function isNonSecret(secret) {
   return PLACEHOLDER_ONLY.test(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
 }
+function isNonSecretInContext(text, start, secret, ruleId) {
+  if (GITHUB_TOKEN_RULES.has(ruleId) && EIGHT_IN_A_ROW.test(secret)) return true;
+  if (!NAME_TRUSTING_RULES.has(ruleId)) return false;
+  return notASecretInContext(secret, assignedName(text, text.lastIndexOf("\n", start - 1) + 1, start));
+}
 var PATH_RULES_COMPILED = PATH_RULES.map((r) => ({ id: r.id, re: new RegExp(r.path.source, r.path.flags.replaceAll(/[gy]/g, "")) }));
 function sensitiveFileNameRule(path) {
   return PATH_RULES_COMPILED.find((r) => r.re.test(path))?.id;
@@ -8847,10 +8891,12 @@ function scan(text, cfg = {}) {
       if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
       if (isRuleSourceText(secret)) continue;
       if (looksLikePlaceholder(secret)) continue;
+      if (GITHUB_TOKEN_RULES.has(rule.id) && EIGHT_IN_A_ROW.test(secret)) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
       const line = lineAt(starts, start);
       if (pragmaLines.has(line)) continue;
+      if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(text, starts[line], start))) continue;
       const fullMatch = match[0];
       let allowed = false;
       for (const a of rule.allowlists) {
@@ -10449,10 +10495,11 @@ async function gitleaksExtra(bin, text, found, allowlist) {
   let lineStarts2;
   for (const g of await scanWithGitleaks(text, { bin })) {
     if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
-    known.add(g.secret);
     lineStarts2 ??= [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
     const reported = g.startLine !== void 0 && g.startLine <= lineStarts2.length ? text.indexOf(g.secret, lineStarts2[g.startLine - 1]) : -1;
     const start = reported !== -1 ? reported : Math.max(0, text.indexOf(g.secret));
+    if (isNonSecretInContext(text, start, g.secret, g.ruleId)) continue;
+    known.add(g.secret);
     const line = g.startLine !== void 0 && reported !== -1 ? g.startLine - 1 : text.slice(0, start).split("\n").length - 1;
     extra.push({
       ruleId: `gitleaks:${g.ruleId}`,

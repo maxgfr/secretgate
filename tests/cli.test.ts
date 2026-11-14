@@ -81,4 +81,38 @@ describe("scan — gitleaks hybrid findings", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // gitleaks' own generic rule flags what the JS engine drops on purpose: the
+  // second engine must not bring those back.
+  it("leave out what the JS engine drops by context", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sg-hybrid-"));
+    const bin = join(dir, "bin");
+    const repo = join(dir, "repo");
+    const savedPath = process.env.PATH;
+    const savedCwd = process.cwd();
+    try {
+      for (const d of [bin, repo]) mkdirSync(d, { recursive: true });
+      const example = "ghp_" + "PersonalAccessToken0124567890" + "0000000";
+      const found = [
+        { RuleID: "generic-api-key", Secret: "obj1Keys.length", StartLine: 1 },
+        { RuleID: "github-pat", Secret: example, StartLine: 2 },
+        { RuleID: "generic-api-key", Secret: "extra-value-1", StartLine: 3 },
+      ];
+      writeFileSync(join(bin, "gitleaks"), `#!/bin/sh\ncat > /dev/null\necho '${JSON.stringify(found)}' > "$8"\nexit 99\n`);
+      chmodSync(join(bin, "gitleaks"), 0o755);
+      writeFileSync(join(repo, "a.js"), `var obj1KeysLength = obj1Keys.length;\nauth("${example}");\nsetting: extra-value-1\n`);
+      process.env.PATH = `${bin}:${savedPath}`;
+      process.chdir(repo);
+      vi.resetModules();
+      const { run: freshRun } = await import("../src/cli.js");
+      const { io, out } = capture();
+      await freshRun(["scan", ".", "--json"], io);
+      const findings = JSON.parse(out.join("")).findings as Array<{ line: number; ruleId: string }>;
+      expect(findings.map((f) => `${f.line}:${f.ruleId}`)).toEqual(["3:gitleaks:generic-api-key"]);
+    } finally {
+      process.env.PATH = savedPath;
+      process.chdir(savedCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
