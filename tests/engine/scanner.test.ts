@@ -570,56 +570,78 @@ describe("scan — its own placeholders", () => {
   });
 });
 
-// A value attached to a credential by `:`, `=` or `,` is the other half of it:
-// the secret key after the key id in an AWS credentials CSV, `<token>:<secret>`.
-// The same holds once the first half is a placeholder, so text scanned before
-// and after redaction gets the same verdict.
-describe("scan — the value paired with a credential", () => {
-  const random = FAKE.genericSecret;
+// An AWS access key id comes with a secret access key, and in a credentials
+// CSV (`Access key ID,Secret access key`) nothing names the second: the row
+// is `<key id>,<secret key>`. That pair is detected for what it is. Nothing
+// wider: what follows any other token, or a placeholder, is not a credential
+// for standing there.
+describe("scan — the AWS secret access key next to its key id", () => {
   const awsSecret = "wJalrXUtnFEMI" + "/K7MDENG/" + "bPxRfiCYzQ9kT4mB2x";
   const placeholder = "SECRETGATE_" + "0123456789ab";
+  const sha = "3f786850e387550fdab8" + "36ed7e6dc881de23001b";
   const rules = (text: string) => scan(text, { pragmas: false }).map((f) => f.ruleId);
 
-  it("flags what follows a credential after `:`, `=` or `,`", () => {
-    expect(rules(`${FAKE.githubPat}: ${random}`)).toEqual(["github-pat", "paired-credential"]);
-    expect(rules(`${FAKE.githubPat}=${random}`)).toEqual(["github-pat", "paired-credential"]);
-    expect(rules(`Access key ID,Secret access key\n${FAKE.awsKeyId},${awsSecret}\n`)).toEqual(["aws-access-token", "paired-credential"]);
-    expect(rules(`"${FAKE.awsKeyId}","${awsSecret}"`)).toEqual(["aws-access-token", "paired-credential"]);
-    const text = `${FAKE.awsKeyId},${awsSecret},${random}`;
-    const found = scan(text);
-    expect(found.map((f) => text.slice(f.start, f.end))).toEqual([FAKE.awsKeyId, awsSecret, random]);
-    expect(found[1]).toMatchObject({ ruleId: "paired-credential", secret: awsSecret, line: 0 });
-  });
-
-  it("gives the same verdict once the credential is a placeholder", () => {
-    expect(rules(`${placeholder}: ${random}`)).toEqual(["paired-credential"]);
-    expect(rules(`${placeholder},${awsSecret}`)).toEqual(["paired-credential"]);
-    expect(rules(`${placeholder}: ${placeholder}`)).toEqual([]);
-  });
-
-  it("leaves alone what is not attached, or is not a random value", () => {
+  it("flags the 40 characters that follow a key id after `,` or `:`", () => {
     for (const text of [
-      `${FAKE.githubPat} ${random}`, // a space is not a separator
-      `${FAKE.githubPat}\nnext: ${random}`,
-      `${FAKE.githubPat}: short-1`,
-      `${FAKE.githubPat}: configuration_directory_name`, // letters only
-      `${FAKE.githubPat}: aaaaaaaaaaaaaaaa1111`, // low entropy
-      `${FAKE.githubPat}: /usr/local/share/app/config.d/10-main`,
-      `${FAKE.githubPat}, and then some prose`,
+      `Access key ID,Secret access key\n${FAKE.awsKeyId},${awsSecret}\n`,
+      `"${FAKE.awsKeyId}","${awsSecret}"`,
+      `${FAKE.awsKeyId}:${awsSecret}`,
+      `user,${FAKE.awsKeyId}, ${awsSecret},eu-west-1`,
     ]) {
-      expect(rules(text), text).toEqual(["github-pat"]);
+      const found = scan(text);
+      expect(
+        found.map((f) => f.ruleId),
+        text,
+      ).toEqual(["aws-access-token", "aws-secret-access-key"]);
+      expect(text.slice(found[1]!.start, found[1]!.end)).toBe(awsSecret);
     }
+  });
+
+  it("flags nothing else that follows a key id", () => {
+    for (const text of [
+      `${FAKE.awsKeyId},${sha}`, // a hex digest
+      `${FAKE.awsKeyId},${awsSecret.slice(0, 39)}`, // not 40 characters
+      `${FAKE.awsKeyId},${awsSecret}A`,
+      `${FAKE.awsKeyId},request_id=req_8f3a2b1c9d4e5f60aaaaaaaaaaaaaaaa`,
+      `${FAKE.awsKeyId}: report-2026-11-14_final.v2.pdf`,
+      `${FAKE.awsKeyId}, BUILD=2026.11.14-r7xQ9z1`,
+      `${FAKE.awsKeyId},550e8400-e29b-41d4-a716-446655440000`,
+      `${FAKE.awsKeyId} ${awsSecret}`, // a space is not a separator
+      `${FAKE.awsKeyId}\n${awsSecret}`,
+      `${FAKE.awsKeyId},${"a".repeat(20)}${"b".repeat(20)}`, // no entropy
+    ]) {
+      expect(rules(text), text).toEqual(["aws-access-token"]);
+    }
+  });
+
+  // These ended sessions: after a placeholder (or any token), each was taken
+  // for the other half of a credential.
+  it("takes nothing for a credential because it follows a placeholder or another token", () => {
+    for (const text of [
+      `${placeholder},${sha}`,
+      `${placeholder}: report-2026-11-14_final.v2.pdf`,
+      `+ export TOKEN=${placeholder}, BUILD=2026.11.14-r7xQ9z1`,
+      `token=${placeholder},request_id=req_8f3a2b1c9d4e5f60`,
+      `${placeholder}: v1.2.3-beta.4+build.5678ab`,
+      `${placeholder},${awsSecret}`,
+      `["${placeholder}","${sha}","${sha.slice(0, 30)}abcdef"]`,
+    ]) {
+      expect(rules(text), text).toEqual([]);
+    }
+    expect(rules(`${FAKE.githubPat},${sha},${sha}`)).toEqual(["github-pat"]);
+    expect(rules(`token=${FAKE.githubPat},request_id=req_8f3a2b1c9d4e5f60,user=42`)).toEqual(["github-pat"]);
   });
 
   // The placeholder's text holds the word "secret", a keyword of the generic
   // rule: `SECRETGATE_….id = value` matched it as a NAME.
   it("never takes a placeholder's own text for a credential-sounding name", () => {
-    expect(rules(`${placeholder}.id = ${random}`)).toEqual([]);
-    expect(rules(`x${placeholder} retries: ${random}`)).toEqual([]);
+    expect(rules(`${placeholder}.id = ${FAKE.genericSecret}`)).toEqual([]);
+    expect(rules(`x${placeholder} retries: ${FAKE.genericSecret}`)).toEqual([]);
+    expect(rules(`${placeholder}: ${FAKE.genericSecret}`)).toEqual([]);
   });
 
   it("can be switched off like any rule", () => {
-    expect(scan(`${FAKE.githubPat}: ${random}`, { allowlist: { rules: ["paired-credential"] } }).map((f) => f.ruleId)).toEqual(["github-pat"]);
+    expect(scan(`${FAKE.awsKeyId},${awsSecret}`, { allowlist: { rules: ["aws-secret-access-key"] } }).map((f) => f.ruleId)).toEqual(["aws-access-token"]);
   });
 });
 

@@ -375,21 +375,39 @@ describe("PostToolBatch — results no hook could redact", () => {
   it("reaches the verdict PostToolUse reached on the output it redacted", async () => {
     const random = FAKE.genericSecret;
     const awsSecret = "wJalrXUtnFEMI" + "/K7MDENG/" + "bPxRfiCYzQ9kT4mB2x";
+    const value = (i: number) => `Zx9kLm2Qw8rT5yUq${i}Pk3Rt7`;
     for (const [stdout, alsoGone] of [
-      [`${FAKE.githubPat}: ${random}`, random],
-      [`${FAKE.githubPat}=${random}`, random],
-      [`${FAKE.awsKeyId},${random}`, random],
+      // The secret key of an AWS credentials CSV row is redacted in the first place.
       [`Access key ID,Secret access key\n${FAKE.awsKeyId},${awsSecret}\n`, awsSecret],
+      [`${FAKE.githubPat}: ${random}`, undefined],
+      [`${FAKE.githubPat}=${random}`, undefined],
+      [`${FAKE.awsKeyId},${random}`, undefined],
       [`id,key\n1,${FAKE.githubPat} ${random}`, undefined],
       [`pushed with ${FAKE.githubPat}: build-2026.11.14-r7xQ`, undefined],
       [`TOKEN=${FAKE.githubPat}`, undefined],
+      [`auth=${FAKE.githubPat} cache_key=${value(1)} cache_key=${value(2)} cache_key=${value(3)} cache_key=${value(4)}`, value(4)],
+      [`auth=${FAKE.githubPat} public key: ${value(1)}, public key: ${value(2)}, public key: ${value(3)}`, undefined],
     ] as const) {
       const post = await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "x" }, { stdout, stderr: "", interrupted: false, isImage: false }));
       const redacted = JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput;
-      // The value attached to a credential is redacted in the first place.
       if (alsoGone) expect(redacted.stdout, stdout).not.toContain(alsoGone);
       const batch = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "Bash", tool_response: redacted.stdout }));
       expect(batch.stdout, redacted.stdout).toBe("");
+    }
+  });
+
+  // What follows a placeholder in the output of a FAILED call is ordinary
+  // text: a commit id, a file name, a build number. None of it ends a session.
+  it("does not stop on ordinary text that follows a placeholder in a failed call's output", async () => {
+    const placeholder = "SECRETGATE_" + "0123456789ab";
+    for (const out of [
+      `${placeholder},3f786850e387550fdab836ed7e6dc881de23001b`,
+      `${placeholder}: report-2026-11-14_final.v2.pdf`,
+      `+ export TOKEN=${placeholder}, BUILD=2026.11.14-r7xQ9z1`,
+      `token=${placeholder},request_id=req_8f3a2b1c9d4e5f60`,
+    ]) {
+      const batch = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "Bash", tool_response: `Exit code 1\n${out}` }));
+      expect(batch.stdout, out).toBe("");
     }
   });
 

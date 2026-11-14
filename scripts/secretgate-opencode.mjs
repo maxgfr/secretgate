@@ -8371,34 +8371,30 @@ function scan(text, cfg = {}) {
     }
   }
   const kept = dedupe(findings, text);
-  if (isDisabledRule(PAIRED_RULE, cfg.allowlist)) return kept;
-  return withPairedValues(kept, text, starts, pragmaLines, cfg);
+  if (isDisabledRule(AWS_SECRET_RULE, cfg.allowlist)) return kept;
+  return withAwsSecretKeys(kept, text, starts, pragmaLines, cfg);
 }
-var PAIRED_RULE = "paired-credential";
-var PAIRED_VALUE = /["'`]?[ \t]{0,3}[:=,][ \t]{0,3}["'`]?([A-Za-z0-9+/=_.-]{16,200})(?![A-Za-z0-9+/=_-])/y;
-var PAIRED_ENTROPY = 3.5;
-function withPairedValues(findings, text, starts, pragmaLines, cfg) {
-  const anchors = findings.map((f) => ({ start: f.start, end: f.end }));
-  if (text.includes("SECRETGATE_")) for (const m of text.matchAll(PLACEHOLDER)) anchors.push({ start: m.index, end: m.index + m[0].length });
-  if (anchors.length === 0) return findings;
-  const taken = [...anchors];
+var AWS_SECRET_RULE = "aws-secret-access-key";
+var AWS_KEY_ID_RULE = "aws-access-token";
+var AWS_SECRET_AFTER_ID = /["'`]?[ \t]{0,3}[:,][ \t]{0,3}["'`]?([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])/y;
+var AWS_SECRET_ENTROPY = 3.5;
+function withAwsSecretKeys(findings, text, starts, pragmaLines, cfg) {
   const paired = [];
-  for (let i = 0; i < anchors.length; i++) {
-    PAIRED_VALUE.lastIndex = anchors[i].end;
-    const m = PAIRED_VALUE.exec(text);
+  for (const id of findings) {
+    if (id.ruleId !== AWS_KEY_ID_RULE) continue;
+    AWS_SECRET_AFTER_ID.lastIndex = id.end;
+    const m = AWS_SECRET_AFTER_ID.exec(text);
     if (!m) continue;
     const secret = m[1];
     const start = m.index + m[0].length - secret.length;
     const end = start + secret.length;
-    if (taken.some((t) => t.start < end && start < t.end)) continue;
-    if (/^[A-Za-z_.-]+$/.test(secret) || looksLikeFilesystemPath(secret) || looksLikePlaceholder(secret) || isRuleSourceText(secret)) continue;
+    if (findings.some((f) => f.start < end && start < f.end)) continue;
+    if (/^[0-9A-Fa-f]+$/.test(secret)) continue;
     const entropy = shannonEntropy(secret);
-    if (entropy <= PAIRED_ENTROPY) continue;
+    if (entropy <= AWS_SECRET_ENTROPY) continue;
     const line = lineAt(starts, start);
     if (pragmaLines.has(line) || isAllowedValue(secret, cfg.allowlist)) continue;
-    paired.push({ ruleId: PAIRED_RULE, match: m[0], secret, start, end, entropy, line });
-    anchors.push({ start, end });
-    taken.push({ start, end });
+    paired.push({ ruleId: AWS_SECRET_RULE, match: text.slice(id.start, end), secret, start, end, entropy, line });
   }
   return paired.length === 0 ? findings : [...findings, ...paired].sort((a, b) => a.start - b.start);
 }

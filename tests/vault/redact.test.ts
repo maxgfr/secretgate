@@ -87,7 +87,7 @@ describe("redactText", () => {
       `${FAKE.awsKeyId},${random}`,
       `id,key\n1,${FAKE.githubPat} ${random}`,
       `pushed with ${FAKE.githubPat}: build-2026.11.14-r7xQ`,
-      `${FAKE.awsKeyId},${random},${random.split("").reverse().join("")}`,
+      `${FAKE.awsKeyId},${"wJalrXUtnFEMI" + "/K7MDENG/" + "bPxRfiCYzQ9kT4mB2x"},${random}`,
       `auth_token = "${FAKE.githubPat}:1234"`,
       `{"a":"${FAKE.githubPat}","b":"${random}"}`,
       `url: https://svc:${random}@host/x, token: ${FAKE.githubPat}.`,

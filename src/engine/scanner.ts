@@ -599,46 +599,45 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
   }
 
   const kept = dedupe(findings, text);
-  if (isDisabledRule(PAIRED_RULE, cfg.allowlist)) return kept;
-  return withPairedValues(kept, text, starts, pragmaLines, cfg);
+  if (isDisabledRule(AWS_SECRET_RULE, cfg.allowlist)) return kept;
+  return withAwsSecretKeys(kept, text, starts, pragmaLines, cfg);
 }
 
-// ---------------------------------------------------------------- pairs
-// A value attached to a credential is the other half of it: the secret key
-// after the key id in an AWS credentials CSV row, `<client id>:<client secret>`.
-// No name announces it; the credential next to it does. An existing
-// placeholder counts as a credential too, so a text gets the same verdict
-// before and after its first half was redacted — the hook that scans the
-// output and the one that scans it again before the next request agree.
-// The gates are the generic rule's own, without its lists of words: 16
-// characters or more, an entropy above 3.5, not letters alone, not a path.
-const PAIRED_RULE = "paired-credential";
-const PAIRED_VALUE = /["'`]?[ \t]{0,3}[:=,][ \t]{0,3}["'`]?([A-Za-z0-9+/=_.-]{16,200})(?![A-Za-z0-9+/=_-])/y;
-const PAIRED_ENTROPY = 3.5;
+// ---------------------------------------------------------------- the AWS pair
+// An AWS access key id comes with a secret access key, and where the two are
+// written as a pair nothing names the second: a credentials CSV row is `<key
+// id>,<secret key>`, an S3 URL or a tool's config `<key id>:<secret key>`.
+// The key id is the evidence. After an `aws-access-token` finding, a `,` or a
+// `:`, exactly the 40 base64 characters of a secret access key are one.
+//
+// Deliberately no wider than that. A general "what follows a credential is a
+// credential" rule took commit ids, file names, build numbers and
+// `name=value` pairs for secrets, and in the output of a failed call each of
+// them ended the session. A placeholder is no evidence either: the pair is
+// found in the pass that finds the key id, or not at all.
+const AWS_SECRET_RULE = "aws-secret-access-key";
+const AWS_KEY_ID_RULE = "aws-access-token";
+const AWS_SECRET_AFTER_ID = /["'`]?[ \t]{0,3}[:,][ \t]{0,3}["'`]?([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])/y;
+const AWS_SECRET_ENTROPY = 3.5;
 
-function withPairedValues(findings: Finding[], text: string, starts: number[], pragmaLines: Set<number>, cfg: ScanConfig): Finding[] {
-  const anchors: Array<{ start: number; end: number }> = findings.map((f) => ({ start: f.start, end: f.end }));
-  if (text.includes("SECRETGATE_")) for (const m of text.matchAll(PLACEHOLDER)) anchors.push({ start: m.index, end: m.index + m[0].length });
-  if (anchors.length === 0) return findings;
-  const taken = [...anchors];
+function withAwsSecretKeys(findings: Finding[], text: string, starts: number[], pragmaLines: Set<number>, cfg: ScanConfig): Finding[] {
   const paired: Finding[] = [];
-  // A paired value is a credential in turn: `<id>,<secret>,<token>`.
-  for (let i = 0; i < anchors.length; i++) {
-    PAIRED_VALUE.lastIndex = anchors[i]!.end;
-    const m = PAIRED_VALUE.exec(text);
+  for (const id of findings) {
+    if (id.ruleId !== AWS_KEY_ID_RULE) continue;
+    AWS_SECRET_AFTER_ID.lastIndex = id.end;
+    const m = AWS_SECRET_AFTER_ID.exec(text);
     if (!m) continue;
     const secret = m[1]!;
     const start = m.index + m[0].length - secret.length;
     const end = start + secret.length;
-    if (taken.some((t) => t.start < end && start < t.end)) continue;
-    if (/^[A-Za-z_.-]+$/.test(secret) || looksLikeFilesystemPath(secret) || looksLikePlaceholder(secret) || isRuleSourceText(secret)) continue;
+    if (findings.some((f) => f.start < end && start < f.end)) continue;
+    // A hex digest fits the alphabet; a secret key drawn from 64 characters does not stay within 16.
+    if (/^[0-9A-Fa-f]+$/.test(secret)) continue;
     const entropy = shannonEntropy(secret);
-    if (entropy <= PAIRED_ENTROPY) continue;
+    if (entropy <= AWS_SECRET_ENTROPY) continue;
     const line = lineAt(starts, start);
     if (pragmaLines.has(line) || isAllowedValue(secret, cfg.allowlist)) continue;
-    paired.push({ ruleId: PAIRED_RULE, match: m[0], secret, start, end, entropy, line });
-    anchors.push({ start, end });
-    taken.push({ start, end });
+    paired.push({ ruleId: AWS_SECRET_RULE, match: text.slice(id.start, end), secret, start, end, entropy, line });
   }
   return paired.length === 0 ? findings : [...findings, ...paired].sort((a, b) => a.start - b.start);
 }
