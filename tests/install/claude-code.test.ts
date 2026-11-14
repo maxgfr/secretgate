@@ -158,7 +158,8 @@ describe("installClaudeCode — the file stays the user's", () => {
   });
 
   it.runIf(posix)("writes through a symlinked settings.json instead of replacing the link", () => {
-    const real = join(dir, "dotfiles-settings.json");
+    mkdirSync(join(dir, "dotfiles", "claude"), { recursive: true });
+    const real = join(dir, "dotfiles", "claude", "settings.json");
     writeFileSync(real, JSON.stringify({ env: { EXAMPLE: "1" } }));
     symlinkSync(real, settingsPath);
     installClaudeCode({ settingsPath, command });
@@ -226,13 +227,34 @@ describe.runIf(process.platform !== "win32")("installClaudeCode — a link that 
   });
 
   it("a link that stays inside the project is written through, and `root` can name the tree", () => {
-    mkdirSync(join(repo, "config"));
-    writeFileSync(join(repo, "config", "claude.json"), "{}");
-    symlinkSync(join(repo, "config", "claude.json"), join(project, "settings.json"));
+    mkdirSync(join(repo, "shared"));
+    writeFileSync(join(repo, "shared", "settings.json"), "{}");
+    symlinkSync(join(repo, "shared", "settings.json"), join(project, "settings.json"));
     installClaudeCode({ settingsPath: join(project, "settings.json"), command });
-    expect(JSON.parse(readFileSync(join(repo, "config", "claude.json"), "utf8")).hooks.PostToolUse).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(repo, "shared", "settings.json"), "utf8")).hooks.PostToolUse).toHaveLength(1);
     // The same link is out of bounds for a narrower tree.
     expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command, root: project })).toThrow(SettingsLinkError);
+  });
+
+  // Inside the project is not enough: `settings.json -> ../package.json`
+  // stays in the tree, and the hooks would be written into package.json.
+  // A link is followed only to a file that can be a settings file: one of
+  // the same name, or one inside a directory named like the agent's own.
+  it("a link to another kind of file inside the project is refused", () => {
+    const pkg = '{"name":"x","version":"1.0.0"}\n';
+    writeFileSync(join(repo, "package.json"), pkg);
+    symlinkSync("../package.json", join(project, "settings.json"));
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command })).toThrow(SettingsLinkError);
+    expect(() => uninstallClaudeCode({ settingsPath: join(project, "settings.json") })).toThrow(SettingsLinkError);
+    expect(readFileSync(join(repo, "package.json"), "utf8")).toBe(pkg);
+    expect(readdirSync(repo).sort()).toEqual([".claude", "package.json"]);
+    // …while a differently named file in a directory of the agent's kind is a settings file.
+    rmSync(join(project, "settings.json"));
+    mkdirSync(join(repo, "config", ".claude"), { recursive: true });
+    writeFileSync(join(repo, "config", ".claude", "team.json"), "{}");
+    symlinkSync(join(repo, "config", ".claude", "team.json"), join(project, "settings.json"));
+    installClaudeCode({ settingsPath: join(project, "settings.json"), command });
+    expect(JSON.parse(readFileSync(join(repo, "config", ".claude", "team.json"), "utf8")).hooks.PostToolUse).toHaveLength(1);
   });
 });
 

@@ -124,12 +124,22 @@ describe.runIf(process.platform !== "win32")("installCodex — config.toml stays
   });
 
   it("writes through a symlinked config.toml instead of replacing the link", () => {
-    const real = join(dir, "dotfiles-config.toml");
+    mkdirSync(join(dir, "dotfiles"));
+    const real = join(dir, "dotfiles", "config.toml");
     writeFileSync(real, 'model = "x"\n');
-    symlinkSync(real, join(dir, "config.toml"));
-    installCodex({ codexDir: dir, command });
-    expect(lstatSync(join(dir, "config.toml")).isSymbolicLink()).toBe(true);
+    mkdirSync(join(dir, "codex"));
+    symlinkSync(real, join(dir, "codex", "config.toml"));
+    installCodex({ codexDir: join(dir, "codex"), command });
+    expect(lstatSync(join(dir, "codex", "config.toml")).isSymbolicLink()).toBe(true);
     expect(readFileSync(real, "utf8")).toContain("hooks = true");
+  });
+
+  it("refuses a config.toml linked to a file of another kind", () => {
+    writeFileSync(join(dir, "notes.toml"), 'title = "x"\n');
+    mkdirSync(join(dir, "codex"));
+    symlinkSync(join(dir, "notes.toml"), join(dir, "codex", "config.toml"));
+    expect(() => installCodex({ codexDir: join(dir, "codex"), command })).toThrow(/not a settings file/);
+    expect(readFileSync(join(dir, "notes.toml"), "utf8")).toBe('title = "x"\n');
   });
 });
 

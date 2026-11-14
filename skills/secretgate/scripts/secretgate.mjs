@@ -9801,18 +9801,22 @@ var SettingsParseError = class extends Error {
   path;
 };
 var SettingsLinkError = class extends Error {
-  constructor(path, target, root) {
+  constructor(path, target, why) {
     super(
-      `refusing to edit ${path}: through a symbolic link it resolves to ${target}, outside ${root}. secretgate only writes through a link that stays inside that directory. Replace the link with a regular file (or point it inside), then re-run.`
+      `refusing to edit ${path}: through a symbolic link it resolves to ${target}, ${why}. Replace the link with a regular file (or point it at a settings file inside that directory), then re-run.`
     );
     this.path = path;
     this.name = "SettingsLinkError";
   }
   path;
 };
+var SETTINGS_DIRS = /* @__PURE__ */ new Set([".claude", ".codex", "opencode"]);
 function assertWithin(path, roots) {
   const real = canonical(path);
-  if (!roots.some((root) => covers(root, real))) throw new SettingsLinkError(path, real, roots[0] ?? dirname6(path));
+  if (!roots.some((root) => covers(root, real)))
+    throw new SettingsLinkError(path, real, `outside ${roots[0] ?? dirname6(path)} (secretgate only writes through a link that stays inside that directory)`);
+  if (basename5(real).toLowerCase() !== basename5(path).toLowerCase() && !dirname6(real).split(/[\\/]/).some((segment) => SETTINGS_DIRS.has(segment)))
+    throw new SettingsLinkError(path, real, `which is not a settings file (another name than ${basename5(path)}, and not in a directory of the agent's own)`);
 }
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
