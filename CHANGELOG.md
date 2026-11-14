@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+## [1.8.1](https://github.com/maxgfr/secretgate/compare/v1.8.0...v1.8.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **claude-code:** reading a PDF or an image no longer stops the session ([9ecc588](https://github.com/maxgfr/secretgate/commit/9ecc588cfc06f94d622505cc6dd717f7389d3620))
+* **claude-code:** stop the turn when a failed tool call printed a secret ([09aa615](https://github.com/maxgfr/secretgate/commit/09aa615dfe439f1e1b5daa517a215e44863a5497))
+* **engine:** a forged placeholder no longer hides the value written around it ([8768a57](https://github.com/maxgfr/secretgate/commit/8768a5767450200236bf2d4cb922428d4990f658))
+* **engine:** drop a value only when the text makes it certain, not on its look ([e5834b9](https://github.com/maxgfr/secretgate/commit/e5834b988dcb69825f0f5bd512cac6d57b570cf8))
+* **engine:** nothing around a value reads placeholder text, and unsettled redaction fails closed ([e482c17](https://github.com/maxgfr/secretgate/commit/e482c173c041a72e8c13413949f08f1db60fe17a))
+* **engine:** only a name that says "public" exempts a value, and no credential word may stand beside it ([4f4ddee](https://github.com/maxgfr/secretgate/commit/4f4ddeede3545b17a1efdc452b1c233c0e4a59d3))
+* **engine:** only a separator or two may stand around a placeholder ([0ebd2bf](https://github.com/maxgfr/secretgate/commit/0ebd2bf7bed2b31025074ea80be933cd13e72b12))
+* **engine:** redact the whole flagged value when a vendor token is only part of it ([f1e41cc](https://github.com/maxgfr/secretgate/commit/f1e41cc242c95a789ac270a78de9160f6814c2c3))
+* **engine:** redacted text is no longer flagged a second time ([7dddcc2](https://github.com/maxgfr/secretgate/commit/7dddcc28cc120e99af4f238aed10aa538d3a0533))
+* **engine:** stop flagging values that say themselves they are not secrets ([bc9633e](https://github.com/maxgfr/secretgate/commit/bc9633e14c01305552a6590a40cc3c47c4d1e3c7))
+* **engine:** the value-after-a-credential rule is the AWS key pair, nothing wider ([7c0bfa6](https://github.com/maxgfr/secretgate/commit/7c0bfa60d954362f14138d4f7c93fc6547175c88))
+* **hooks:** a binary field is skipped for what it holds, not for what it is called ([0f19bfe](https://github.com/maxgfr/secretgate/commit/0f19bfe08d67561fa5ab4cef1b50f5379c7cfae6))
+* **hooks:** find -exec mv/ln is refused for where the file lands, not for what the tree holds ([7d0a99d](https://github.com/maxgfr/secretgate/commit/7d0a99de2872c6ff6cd6e88b3c2da6e5ab8ad453))
+* **hooks:** moving a sensitive file into a fixture directory, in its other spellings ([95451f9](https://github.com/maxgfr/secretgate/commit/95451f9ad396138becfe30516f0982f959a1c609))
+* **hooks:** PostToolBatch no longer stops on output PostToolUse redacted ([2f4eb2d](https://github.com/maxgfr/secretgate/commit/2f4eb2d52b3d55ac1e13efc8d087054a97601fa0))
+* **hooks:** refuse moving a sensitive file into a fixture directory ([6179c4d](https://github.com/maxgfr/secretgate/commit/6179c4dbe5e8ca62124562e44be2c8b096c01d37))
+* **hooks:** text in a base64-shaped field is scanned again ([743e20e](https://github.com/maxgfr/secretgate/commit/743e20ea9a7e71e76491f0b133326669b79ef204))
+* **install:** a settings link is followed only to a file that can be a settings file ([aba4dc3](https://github.com/maxgfr/secretgate/commit/aba4dc33aa9d2da7a1b6bfc5f8c2b0878959fd12))
+* **install:** Claude Code's version comes from a claude the project cannot plant, in the shape it prints ([bf523d3](https://github.com/maxgfr/secretgate/commit/bf523d3bc0f7b934e4796e50d67acc72d7cfbd9d))
+* **install:** keep the permission bits and the symlink of the settings it edits ([ca9f065](https://github.com/maxgfr/secretgate/commit/ca9f065e534a8299f2cd888288d522032eb80b4b))
+* **install:** refuse a settings symlink that leads out of its own tree ([0cee9ee](https://github.com/maxgfr/secretgate/commit/0cee9eeafeda5fa6a8d031b5744ce6a86799f348))
+* **install:** write the PostToolBatch hook only for a Claude Code that tolerates it ([a11138c](https://github.com/maxgfr/secretgate/commit/a11138cabd79f654f4a0a7fc30053ac68161548c))
+
 # [1.8.0](https://github.com/maxgfr/secretgate/compare/v1.7.1...v1.8.0) (2026-10-20)
 
 

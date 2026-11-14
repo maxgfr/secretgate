@@ -10620,7 +10620,7 @@ function hookRuntime(command) {
 }
 
 // src/version.ts
-var VERSION = "1.8.0";
+var VERSION = "1.8.1";
 
 // src/cli.ts
 var USAGE = `secretgate ${VERSION} \u2014 local secrets firewall for coding agents
