@@ -233,22 +233,46 @@ function assignedName(text: string, lineStart: number, valueStart: number): stri
 
 const alnum = (v: string): string => v.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-// What a name says is public or a mere identifier: a public key, a
-// fingerprint, a cache key. A credential word elsewhere in the name takes the
-// exemption back: `api_secret_cache_key`, `public_key_secret`,
-// `fingerprint_api_key` and `public_keystore_password` name secrets.
-const PUBLIC_NAME = /(?:pub(?:lic)?[ _.-]?key|cache[ _.-]?key|fingerprint)(s?)(?![a-z])/i;
-const CREDENTIAL_WORD = /secret|token|passw|passphrase|private|credential|auth/i;
-const CREDENTIAL_WORD_AFTER = /key|api/i;
+// Every word one of those rules fires on names a credential. The list is the
+// rules' own keywords, read from them: a second, hand-written list falls
+// behind (it once lacked `pwd`, and `cache_key_pwd` went unflagged).
+let nameKeywords: string[] | undefined;
+export function nameTrustingKeywords(): string[] {
+  nameKeywords ??= [...new Set(COMPILED.filter((r) => NAME_TRUSTING_RULES.has(r.id)).flatMap((r) => r.keywords))];
+  return nameKeywords;
+}
+const namesACredential = (text: string): boolean => {
+  const low = text.toLowerCase();
+  return nameTrustingKeywords().some((k) => low.includes(k));
+};
+
+// The one name that exempts a value is the one that SAYS the value is public:
+// a public key (upstream already allowlists `public_key`; this reads the same
+// statement in "Public key …:" and in upper case). A "cache key" or a
+// "fingerprint" says what a value is for, not that it may be shown — an HMAC
+// key for a cache is a `cache_key` too. And any credential keyword elsewhere
+// in the name takes the exemption back: `public_key_pwd`, `api public key`.
+const PUBLIC_NAME = /pub(?:lic)?[ _.-]?key(s?)(?![a-z])/i;
 
 function namedPublic(name: string[]): boolean {
   // The last few words: "Public key ping-sha256".
   const label = name.slice(-3).join(" ");
   const m = PUBLIC_NAME.exec(label);
-  if (m === null) return false;
-  const before = label.slice(0, m.index);
-  const after = label.slice(m.index + m[0].length);
-  return !CREDENTIAL_WORD.test(before) && !CREDENTIAL_WORD.test(after) && !CREDENTIAL_WORD_AFTER.test(after);
+  return m !== null && !namesACredential(`${label.slice(0, m.index)} ${label.slice(m.index + m[0].length)}`);
+}
+
+// A Stripe publishable key is made to be shipped to browsers. The prefix alone
+// does not prove it (another vendor's secret may start the same way): the
+// whole value has to have that shape, and its name has to say public or
+// publishable while naming no other credential (`secret_key = "pk_live_…"`
+// and `api_key = "pk_live_…"` are flagged).
+function publishableByName(value: string, name: string[]): boolean {
+  if (!/^pk_(?:test|live)_[A-Za-z0-9]+$/.test(value)) return false;
+  const label = name.slice(-3).join(" ");
+  const says = /publi(?:c|shable)/i.exec(label);
+  if (says === null) return false;
+  const rest = `${label.slice(0, says.index)} ${label.slice(says.index + says[0].length)}`.replace(/key/i, "");
+  return !namesACredential(rest);
 }
 
 function notASecretInContext(secret: string, name: string[]): boolean {
@@ -258,10 +282,7 @@ function notASecretInContext(secret: string, name: string[]): boolean {
   // generic rule when it scans this file.)
   const last = name[name.length - 1];
   if (last !== undefined && alnum(last).length >= 6 && alnum(last) === alnum(value)) return true;
-  // Stripe publishable keys are made to be shipped to browsers — the whole
-  // value, not one that merely starts like a publishable key.
-  if (/^pk_(?:test|live)_[A-Za-z0-9]+$/.test(value)) return true;
-  return namedPublic(name);
+  return publishableByName(value, name) || namedPublic(name);
 }
 
 // GitHub tokens are random base62 followed by a checksum. Thirty-odd random

@@ -8668,23 +8668,34 @@ function assignedName(text, lineStart, valueStart) {
   return phrase.split(/[ \t]+/).filter((w) => w !== "");
 }
 var alnum = (v) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
-var PUBLIC_NAME = /(?:pub(?:lic)?[ _.-]?key|cache[ _.-]?key|fingerprint)(s?)(?![a-z])/i;
-var CREDENTIAL_WORD = /secret|token|passw|passphrase|private|credential|auth/i;
-var CREDENTIAL_WORD_AFTER = /key|api/i;
+var nameKeywords;
+function nameTrustingKeywords() {
+  nameKeywords ??= [...new Set(COMPILED.filter((r) => NAME_TRUSTING_RULES.has(r.id)).flatMap((r) => r.keywords))];
+  return nameKeywords;
+}
+var namesACredential = (text) => {
+  const low = text.toLowerCase();
+  return nameTrustingKeywords().some((k) => low.includes(k));
+};
+var PUBLIC_NAME = /pub(?:lic)?[ _.-]?key(s?)(?![a-z])/i;
 function namedPublic(name) {
   const label = name.slice(-3).join(" ");
   const m = PUBLIC_NAME.exec(label);
-  if (m === null) return false;
-  const before = label.slice(0, m.index);
-  const after = label.slice(m.index + m[0].length);
-  return !CREDENTIAL_WORD.test(before) && !CREDENTIAL_WORD.test(after) && !CREDENTIAL_WORD_AFTER.test(after);
+  return m !== null && !namesACredential(`${label.slice(0, m.index)} ${label.slice(m.index + m[0].length)}`);
+}
+function publishableByName(value, name) {
+  if (!/^pk_(?:test|live)_[A-Za-z0-9]+$/.test(value)) return false;
+  const label = name.slice(-3).join(" ");
+  const says = /publi(?:c|shable)/i.exec(label);
+  if (says === null) return false;
+  const rest = `${label.slice(0, says.index)} ${label.slice(says.index + says[0].length)}`.replace(/key/i, "");
+  return !namesACredential(rest);
 }
 function notASecretInContext(secret, name) {
   const value = unquote(secret);
   const last = name[name.length - 1];
   if (last !== void 0 && alnum(last).length >= 6 && alnum(last) === alnum(value)) return true;
-  if (/^pk_(?:test|live)_[A-Za-z0-9]+$/.test(value)) return true;
-  return namedPublic(name);
+  return publishableByName(value, name) || namedPublic(name);
 }
 var GITHUB_TOKEN_RULES = /* @__PURE__ */ new Set(["github-pat", "github-fine-grained-pat", "github-oauth", "github-app-token", "github-refresh-token"]);
 var EIGHT_IN_A_ROW = /(.)\1{7}/;

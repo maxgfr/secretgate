@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { RULES } from "../../src/engine/rules.gen.js";
-import { isNonSecret, ScanBudgetError, scan, sensitiveFileNameRule } from "../../src/engine/scanner.js";
+import { isNonSecret, nameTrustingKeywords, rulePatterns, ScanBudgetError, scan, sensitiveFileNameRule } from "../../src/engine/scanner.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
 const sha256hex = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -388,44 +388,114 @@ describe("scan — a value is dropped only when the text makes it certain", () =
     some([`var obj1KeysLength = ${FAKE.genericSecret};`, `const apiKeyHeader = "${FAKE.genericSecret}";`]);
   });
 
-  it("skips what its label calls a public key, a fingerprint or a cache key", () => {
-    const hex40 = "9554F04D7259F04124DE" + "6B476D5A82AC7E37093B";
+  // The one name that exempts a value is the one that SAYS it is public. A
+  // "cache key" or a "fingerprint" describes a role; nothing in it says the
+  // value may be shown (an HMAC key for a cache is a `cache_key` too).
+  it("skips what its own name calls a public key", () => {
     const b64 = "pL1+qb9HTMRZJmuC/bB/ZI" + "9d302BYrrqiVuRyW+DGrU=";
     none([
       ` *   Public key ping-sha256: ${b64}`,
       `public key: ${FAKE.genericSecret}`,
       `ssh_public_key = "${FAKE.genericSecret}"`,
-      `key_fingerprint = "${hex40.toLowerCase().slice(0, 32)}"`,
-      `\tkeyFingerprint := "${hex40.toLowerCase().slice(0, 32)}"`,
-      `      - CACHE_KEY=${hex40.toLowerCase()}`,
-      `\tcacheKey := "${hex40.toLowerCase()}${hex40.toLowerCase().slice(0, 24)}"`,
+      `PUBKEY=${FAKE.genericSecret}`,
     ]);
-    // The label must be the value's own: a neighbour's does not count, and a
-    // secret named after one of these words is still a secret.
+    // The label must be the value's own: a neighbour's does not count.
+    some([`{"public_key": "abc", "private_key": "${FAKE.genericSecret}"}`, `the public key is known, the api key: ${FAKE.genericSecret}`]);
+  });
+
+  it("flags what a name calls a cache key or a fingerprint: neither says public", () => {
+    const hex40 = "9554f04d7259f04124de" + "6b476d5a82ac7e37093b";
     some([
-      `{"public_key": "abc", "private_key": "${FAKE.genericSecret}"}`,
-      `the public key is known, the api key: ${FAKE.genericSecret}`,
-      `fingerprint_secret = "${FAKE.genericSecret}"`,
-      `FINGERPRINT_API_KEY=${FAKE.genericSecret}`,
-      `cache_encryption_key = "${FAKE.genericSecret}"`,
-      `public_keystore_password = "${FAKE.genericSecret}"`,
-      `gpg_key_passphrase: "${FAKE.genericSecret}"`,
-      // A credential word anywhere in the name takes the exemption back.
-      `public_key_secret = "${FAKE.genericSecret}"`,
-      `api_secret_cache_key = "${FAKE.genericSecret}"`,
-      `token_fingerprint = "${FAKE.genericSecret}"`,
-      // "GPG key" says nothing certain about the value: a fingerprint looks like any hex key.
-      `- Release GPG key: ${hex40}`,
-      `gpg_key = "${hex40}"`,
+      `cache_key = "${FAKE.genericSecret}"`,
+      `      - CACHE_KEY=${hex40}`,
+      `cache_key_hmac = "${FAKE.genericSecret}"`,
+      `cache_key_salt = "${FAKE.genericSecret}"`,
+      `api_cache_key = "${FAKE.genericSecret}"`,
+      `session_cache_key = "${FAKE.genericSecret}"`,
+      `cache_keys = "${FAKE.genericSecret}"`,
+      `mysql cache_key: ${FAKE.genericSecret}`,
+      `key_fingerprint = "${hex40.slice(0, 32)}"`,
+      `- Release GPG key: ${hex40.toUpperCase()}`,
     ]);
   });
 
-  it("skips a Stripe publishable key, which is meant to be public", () => {
+  // Every word a name-trusting rule fires on names a credential: next to it,
+  // "public key" exempts nothing. The list is the rules' own, so it cannot
+  // fall behind them — `pwd` was missing from a hand-written copy.
+  it("takes the exemption back for every keyword of the rules that trust a name", () => {
+    const keywords = nameTrustingKeywords();
+    for (const k of ["pwd", "password", "passwd", "secret", "token", "key", "api", "auth", "access", "credential", "creds"]) expect(keywords, k).toContain(k);
+    for (const k of keywords) {
+      for (const text of [`public key ${k}: ${FAKE.genericSecret}`, `${k} public key: ${FAKE.genericSecret}`])
+        expect(scan(text).length, text).toBeGreaterThan(0);
+    }
+    some([
+      `cache_key_pwd = "${FAKE.genericSecret}"`,
+      `fingerprint_pwd = "${FAKE.genericSecret}"`,
+      `public_key_pwd = "${FAKE.genericSecret}"`,
+      `public key pwd = "${FAKE.genericSecret}"`,
+      `CACHE_KEY_PWD=${FAKE.genericSecret}`,
+      `cache-key-pwd: ${FAKE.genericSecret}`,
+      `public_key_secret = "${FAKE.genericSecret}"`,
+      `public_keystore_password = "${FAKE.genericSecret}"`,
+    ]);
+  });
+
+  // A word the rules match on without it being a keyword would escape the
+  // list above: each alternative of their name patterns must hold one.
+  it("knows every word the name patterns match as a keyword", () => {
+    const keywords = nameTrustingKeywords();
+    for (const id of ["generic-api-key", "password-assignment"]) {
+      const source = rulePatterns().find((r) => r.id === id)!.re.source;
+      // The group of alternatives that holds "secret": the names the rule fires on.
+      const at = source.indexOf("secret");
+      let open = at;
+      for (let depth = 0; ; open--) {
+        if (source[open] === ")") depth++;
+        else if (source[open] === "(" && depth-- === 0) break;
+      }
+      const alternatives: string[] = [""];
+      for (let i = open + 3, depth = 0; depth >= 0; i++) {
+        const c = source[i]!;
+        if (c === "(") depth++;
+        if (c === ")") depth--;
+        if (c === "|" && depth === 0) alternatives.push("");
+        else if (depth >= 0) alternatives[alternatives.length - 1] += c;
+      }
+      const words = alternatives.map((w) =>
+        w
+          .replace(/\(\?:[^()]*\)\?/g, "")
+          .replace(/\[[^\]]*\]\??/g, "")
+          .replace(/[^a-z]/gi, "")
+          .toLowerCase(),
+      );
+      expect(words.length, id).toBeGreaterThan(5);
+      expect(words, id).toContain("secret");
+      for (const word of words)
+        expect(
+          keywords.some((k) => word.includes(k)),
+          `${id}: ${word}`,
+        ).toBe(true);
+    }
+  });
+
+  it("skips a Stripe publishable key under a name that says public, and nowhere else", () => {
     const body = FAKE.genericSecret + FAKE.genericSecret;
-    none([`stripe_publishable_key = pk_test_${body}`, `      - NEXT_PUBLIC_STRIPE_KEY=pk_live_${body}`, `\tstripeKey := "pk_live_${body}"`]);
+    none([`stripe_publishable_key = pk_test_${body}`, `      - NEXT_PUBLIC_STRIPE_KEY=pk_live_${body}`, `\tstripePublishableKey := "pk_live_${body}"`]);
     expect(scan(`stripe_key = sk_live_${body}`).map((f) => f.ruleId)).toEqual(["stripe-access-token"]);
-    // The whole value has to be a publishable key, not merely to start like one.
-    some([`stripe_key = pk_prod_${body}`, `api_key = "xpk_test_${body}"`, `api_key = "pk_live_${body}:${body}"`, `api_key = "pk_live_${body}/extra!"`]);
+    some([
+      // The prefix alone proves nothing: the name has to agree, and to hold no credential word.
+      `api_key = "pk_live_${body}"`,
+      `secret_key = "pk_live_${body}"`,
+      `STRIPE_SECRET_KEY=pk_live_${body}`,
+      `password = "pk_test_${body}"`,
+      `stripe_key = pk_live_${body}`,
+      `public_secret_key = pk_live_${body}`,
+      // The whole value has to be a publishable key, not merely to start like one.
+      `stripe_publishable_key = pk_prod_${body}`,
+      `stripe_publishable_key = "xpk_test_${body}"`,
+      `stripe_publishable_key = pk_live_${body}.${FAKE.genericSecret}`,
+    ]);
   });
 
   it("skips a GitHub token no generator would produce: one character eight times in a row", () => {
