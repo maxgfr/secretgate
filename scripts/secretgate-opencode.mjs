@@ -8372,11 +8372,12 @@ function restorePlaceholders(text, vault) {
 // src/hooks/scan-budget.ts
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
+var isBase64Payload = (value) => typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
 function isBinaryField(key, value, parent) {
   return key === "data" && ["image", "audio"].includes(parent.type ?? "") || // A model content block's attachment: `{type: "image" | "document", source:
   // {type: "base64", media_type, data}}`, as PostToolBatch carries an image or a PDF.
-  key === "data" && parent.type === "base64" && typeof parent.media_type === "string" && !parent.media_type.startsWith("text/") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
-  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
+  key === "data" && parent.type === "base64" && typeof parent.media_type === "string" && !parent.media_type.startsWith("text/") && isBase64Payload(value) || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && isBase64Payload(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
+  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && isBase64Payload(value);
 }
 function eventRedactor(vault, source, allowlist) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;

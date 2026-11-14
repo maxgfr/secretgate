@@ -9,26 +9,19 @@ export const SCAN_CAP = 2 * 1024 * 1024;
 // scan throws and the hook fails closed.
 export const SCAN_DEADLINE_MS = 5000;
 
+/** Base64 and nothing else: what an attachment's payload looks like. */
+export const isBase64Payload = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
+
 export function isBinaryField(key: string, value: unknown, parent: { type?: string; encoding?: unknown; mime?: unknown; media_type?: unknown }): boolean {
   return (
     (key === "data" && ["image", "audio"].includes(parent.type ?? "")) ||
     // A model content block's attachment: `{type: "image" | "document", source:
     // {type: "base64", media_type, data}}`, as PostToolBatch carries an image or a PDF.
-    (key === "data" &&
-      parent.type === "base64" &&
-      typeof parent.media_type === "string" &&
-      !parent.media_type.startsWith("text/") &&
-      typeof value === "string" &&
-      /^[A-Za-z0-9+/=\s]*$/.test(value)) ||
-    (key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value)) ||
+    (key === "data" && parent.type === "base64" && typeof parent.media_type === "string" && !parent.media_type.startsWith("text/") && isBase64Payload(value)) ||
+    (key === "base64" && ["image", "audio"].includes(parent.type ?? "") && isBase64Payload(value)) ||
     ((key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value)) ||
     // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
-    (key === "content" &&
-      parent.encoding === "base64" &&
-      typeof parent.mime === "string" &&
-      /^(image|audio)\//.test(parent.mime) &&
-      typeof value === "string" &&
-      /^[A-Za-z0-9+/=\s]*$/.test(value))
+    (key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && isBase64Payload(value))
   );
 }
 

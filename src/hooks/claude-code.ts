@@ -7,7 +7,7 @@ import { sensitivePathMatch } from "../paths.js";
 import { filterSearchOutput, promptMentions, promptScopeViolation } from "../scope.js";
 import { Vault } from "../vault/vault.js";
 import { preToolPolicy } from "./policy.js";
-import { eventRedactor, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS } from "./scan-budget.js";
+import { eventRedactor, isBase64Payload, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS } from "./scan-budget.js";
 import { isStoppedSession, stopSession } from "./stopped-session.js";
 import { extractToolCall } from "./tool-call.js";
 import { mapStrings } from "./walk.js";
@@ -324,7 +324,14 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookRes
   const toolName = String(input.tool_name ?? "");
   const filtered = scopeFilter(input, cfg);
   const vault = new Vault();
-  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), isBinaryField);
+  // Read hands an image or a PDF over as `{type, file: {base64}}`: an
+  // attachment for the model, not text. Scanned as text, the base64 of a
+  // 1.5 MB PDF ran past the budget, and reading it stopped the session.
+  const response = input.tool_response;
+  const attachment = toolName === "Read" && (response?.type === "image" || response?.type === "pdf") ? response.file : undefined;
+  const skip = (key: string, v: unknown, parent: object): boolean =>
+    isBinaryField(key, v, parent) || (attachment !== undefined && parent === attachment && key === "base64" && isBase64Payload(v));
+  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), skip);
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
 }

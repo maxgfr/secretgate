@@ -178,6 +178,26 @@ describe("PostToolUse — output redaction", () => {
     const post = await handleClaudeCode("post-tool-use", postToolEvent("Read", {}, { file: { content: FAKE.githubPat } }));
     expect(post.stdout.includes(FAKE.githubPat)).toBe(false);
   });
+  // As Claude Code 2.1.323 hands them over. Scanned as text, the base64 of a
+  // 1.5 MB PDF exceeded the scan budget and reading it stopped the session.
+  it("passes a PDF or an image read as the attachment it is, whatever its size", async () => {
+    const base64 = "JVBERi0xLjQK".repeat(300_000); // 3.6 MB of base64
+    const pdf = { type: "pdf", file: { filePath: "/tmp/spec.pdf", base64, originalSize: 2_700_000 } };
+    const image = { type: "image", file: { base64, type: "image/jpeg", originalSize: 2_700_000, dimensions: { originalWidth: 1000, originalHeight: 1000 } } };
+    for (const response of [pdf, image]) {
+      const r = await handleClaudeCode("post-tool-use", postToolEvent("Read", { file_path: "/tmp/spec.pdf" }, response));
+      expect(r, response.type).toEqual({ stdout: "", exit: 0 });
+    }
+    // What is not base64 is not an attachment, and no other tool gets the exemption.
+    const text = await handleClaudeCode(
+      "post-tool-use",
+      postToolEvent("Read", {}, { type: "pdf", file: { filePath: "/tmp/x.pdf", base64: `key ${FAKE.githubPat}` } }),
+    );
+    expect(text.stdout).toContain("SECRETGATE_");
+    const other = await handleClaudeCode("post-tool-use", postToolEvent("mcp__x__y", {}, { type: "pdf", file: { base64: FAKE.awsKeyId } }));
+    expect(other.stdout).toContain("SECRETGATE_");
+  });
+
   it("redacts secrets in tool_response strings via updatedToolOutput", async () => {
     const response = { type: "text", file: { filePath: "/proj/.env.ci", content: `GITHUB_TOKEN=${FAKE.githubPat}\nDEBUG=1\n` } };
     const r = await handleClaudeCode("post-tool-use", postToolEvent("Read", { file_path: "/proj/.env.ci" }, response));
