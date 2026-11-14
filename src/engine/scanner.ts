@@ -48,23 +48,27 @@ export class ScanBudgetError extends Error {
 
 // secretgate's own placeholders are ALREADY-redacted text — they must never be
 // re-detected as secrets, or the loop breaks: a resent redacted prompt would
-// re-block, and writing a placeholder back would be flagged. Kept in sync with
-// vault/placeholder.ts PLACEHOLDER_RE (duplicated to keep the engine free of a
-// vault dependency).
-const PLACEHOLDER = /SECRETGATE_[0-9a-f]{12,16}/g;
-// What a wider finding may hold around a narrower one and still give way to
-// it (see dedupe): less than the shortest value password-assignment itself
-// would flag.
-const MIN_REMAINDER = 6;
-// A placeholder, or one with the stray characters a wider rule captures around
-// a token: `key: ghp_….` is redacted to `key: SECRETGATE_….`, and the generic
+// re-block, and writing a placeholder back would be flagged.
+//
+// The shape is exact: the 12 hexadecimal digits a placeholder has (16 only
+// after a collision of two of them, which the vault resolves; such a one is
+// treated as ordinary text here and redacted again, which the restore
+// undoes), and no hexadecimal digit right after — a placeholder must not
+// swallow the first characters of a value written behind it.
+const PLACEHOLDER = /SECRETGATE_[0-9a-f]{12}(?![0-9a-f])/g;
+// What stands around a token without being part of any secret: punctuation
+// and separators. A letter or a digit is material.
+const hasMaterial = (text: string): boolean => /[\p{L}\p{N}]/u.test(text);
+// A placeholder, alone or with the punctuation a wider rule captures around a
+// token: `key: ghp_….` is redacted to `key: SECRETGATE_….`, and the generic
 // rule, which took the dot with the token, must not see a new secret in it.
-// Anything longer around the placeholder is material of its own, and is
-// redacted (the restore then resolves the placeholder inside the placeholder).
+// Letters or digits around the placeholder are material of their own: the
+// value is redacted whole (a forged `SECRETGATE_…` in front of a real
+// password hides nothing), and the restore resolves the placeholder inside.
 function alreadyRedacted(secret: string): boolean {
   if (!secret.includes("SECRETGATE_")) return false;
   const rest = secret.replace(PLACEHOLDER, "");
-  return rest.length < secret.length && rest.length < MIN_REMAINDER;
+  return rest.length < secret.length && !hasMaterial(rest);
 }
 
 interface CompiledAllowlist {
@@ -563,9 +567,10 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
 // kept one does not would reach the model unredacted.
 //   - One span inside the other: the more specific rule names the secret (a
 //     vendor rule beats password-assignment, which beats generic-api-key, then
-//     the longer secret wins) — unless the wider one holds more around it than
-//     stray punctuation. `api_key = "<key id>:<secret key>"` is one flagged
-//     value, and the vendor rule sees only the key id.
+//     the longer secret wins) — unless the wider one holds a letter or a digit
+//     outside it. `api_key = "<key id>:<secret key>"` is one flagged value, and
+//     the vendor rule sees only the key id. Punctuation alone (the dot the
+//     generic rule takes with a token) does not make a wider secret.
 //   - Neither inside the other: one finding over both spans.
 const specificity = (ruleId: string): number => (ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2);
 // Findings are visited by start (longest first), so the kept spans stay sorted
@@ -582,8 +587,8 @@ function dedupe(findings: Finding[], text: string): Finding[] {
     const preferF = specificity(f.ruleId) > specificity(other.ruleId);
     if (f.end <= other.end) {
       // `f` lies inside `other`.
-      const remainder = other.end - other.start - (f.end - f.start);
-      if (preferF && remainder < MIN_REMAINDER) kept[kept.length - 1] = f;
+      const around = text.slice(other.start, f.start) + text.slice(f.end, other.end);
+      if (preferF && !hasMaterial(around)) kept[kept.length - 1] = f;
       continue;
     }
     const named = preferF ? f : other;

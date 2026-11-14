@@ -8575,12 +8575,12 @@ var ScanBudgetError = class extends Error {
     this.name = "ScanBudgetError";
   }
 };
-var PLACEHOLDER = /SECRETGATE_[0-9a-f]{12,16}/g;
-var MIN_REMAINDER = 6;
+var PLACEHOLDER = /SECRETGATE_[0-9a-f]{12}(?![0-9a-f])/g;
+var hasMaterial = (text) => /[\p{L}\p{N}]/u.test(text);
 function alreadyRedacted(secret) {
   if (!secret.includes("SECRETGATE_")) return false;
   const rest = secret.replace(PLACEHOLDER, "");
-  return rest.length < secret.length && rest.length < MIN_REMAINDER;
+  return rest.length < secret.length && !hasMaterial(rest);
 }
 function compileAllowlist(a) {
   return {
@@ -8922,8 +8922,8 @@ function dedupe(findings, text) {
     }
     const preferF = specificity(f.ruleId) > specificity(other.ruleId);
     if (f.end <= other.end) {
-      const remainder = other.end - other.start - (f.end - f.start);
-      if (preferF && remainder < MIN_REMAINDER) kept[kept.length - 1] = f;
+      const around = text.slice(other.start, f.start) + text.slice(f.end, other.end);
+      if (preferF && !hasMaterial(around)) kept[kept.length - 1] = f;
       continue;
     }
     const named = preferF ? f : other;

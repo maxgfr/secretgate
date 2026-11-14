@@ -441,6 +441,44 @@ describe("scan — a value is dropped only when the text makes it certain", () =
   });
 });
 
+// Text that secretgate redacted must not be flagged again. That exemption is
+// for its OWN placeholder, exactly, give or take punctuation: anything else
+// written around one is material like any other.
+describe("scan — its own placeholders", () => {
+  const placeholder = "SECRETGATE_" + "0123456789ab";
+
+  it("leaves a placeholder alone, bare or next to punctuation", () => {
+    for (const text of [
+      `password = "${placeholder}"`,
+      `token: ${placeholder}.`,
+      `key=${placeholder}=`,
+      `secret = "${placeholder}!"`,
+      `secret_key = ${placeholder}__`,
+    ]) {
+      expect(scan(text), text).toEqual([]);
+    }
+  });
+
+  it("flags letters or digits written around a placeholder: a forged one hides nothing", () => {
+    for (const text of [
+      `password = "${placeholder}X9q!z"`,
+      `password = "X9q!z${placeholder}"`,
+      `password = "${placeholder}:pass1"`,
+      // Hex right after it: a 12-digit placeholder does not swallow what follows.
+      `password = "${placeholder}beef"`,
+      `password = "${placeholder}cafe!"`,
+      `api_key = "${placeholder}0f9a3c7e1b"`,
+    ]) {
+      const found = scan(text);
+      expect(
+        found.map((f) => f.ruleId),
+        text,
+      ).toEqual(["password-assignment"]);
+      expect(found[0]!.secret, text).toBe(text.slice(text.indexOf('"') + 1, -1));
+    }
+  });
+});
+
 describe("scan — dedupe", () => {
   it("emits a single finding when a specific rule and generic-api-key overlap", () => {
     const findings = scan(`key = ${FAKE.awsKeyId}`);
@@ -459,6 +497,15 @@ describe("scan — dedupe", () => {
       expect(findings, value).toHaveLength(1);
       expect(findings[0]!.secret, value).toBe(value);
       expect(text.slice(findings[0]!.start, findings[0]!.end), value).toBe(value);
+    }
+  });
+
+  it("keeps the wider finding as soon as a letter or a digit stands outside the vendor token", () => {
+    for (const extra of [":1234", ":a1B2c", "-x"]) {
+      const text = `auth_token = "${FAKE.githubPat}${extra}"`;
+      const findings = scan(text);
+      expect(findings, extra).toHaveLength(1);
+      expect(findings[0]!.secret, extra).toBe(`${FAKE.githubPat}${extra}`);
     }
   });
 
