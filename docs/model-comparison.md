@@ -328,14 +328,15 @@ output redaction. A test now pins that a read is redacted whatever its path.
 **Candidate export.** `scripts/rule-candidates.mjs` writes one JSON line per
 rule finding with what section 5 lists (rule, offsets of the value, of the
 match and of every capture group, line, name, entropy, a bounded context
-window, file). Values are masked by default: every letter and digit is replaced
-by another of the same class, wherever the walked files repeat the value. On
+window, file). The export is masked by default: every letter and digit of the
+value and of its context is replaced by another of the same class, and only the
+credential keyword inside the value's own name stays readable. On
 the census files it writes 29 candidates from 8 files. With `--generic` it adds
 the values assigned to credential-sounding names and the values of
 authorization-style headers that no rule proposes, whatever their entropy or
 quoting: 1,209 candidates from 303 files, of which 1,147 assignments and 33
-headers. In both masked exports, no candidate value of 8 characters or more
-appears in any context field.
+headers. A masked export keeps no letter or digit of the files it read, proposed
+by a rule or not; `--raw` writes the real text and is for local use only.
 
 ## Limits
 

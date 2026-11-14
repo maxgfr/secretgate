@@ -66,7 +66,8 @@
 //              (both in UTF-16 code units)
 //   value      the value
 //   name       the key or variable name: for generic-keyword the name it
-//              matched, else the word before the operator; null when none
+//              matched, else the word before the operator; null when none.
+//              Masked but for its credential keywords unless --raw
 //   lineText   the value's first line, without its line ending. A line longer
 //              than --max-line is cut to a window around the value, and
 //              lineFrom is the column where the window starts (0 otherwise)
@@ -90,7 +91,8 @@
 //              can be set on it.
 //   reported   whether the default engine (`scan`, same text, same path)
 //              reports a finding that overlaps the value
-//   masked     whether value, lineText, prevLine and nextLine are masked
+//   masked     whether value, name, lineText, prevLine and nextLine are
+//              masked (see "masking" below)
 //
 // --dropped FILE writes one line per match a kept gate dropped: file, rule,
 // gate, line, start, end, endLine, offset, length. Never the value.
@@ -114,7 +116,7 @@
 //   classes   how many lower-case, upper-case, digit and other characters it has
 //   context   {start, before, value, after}: the value and up to --context
 //             characters on each side, cut at the file's ends
-//   masked    whether the values in `context` are masked
+//   masked    whether `context` and `name` are masked
 //
 // --generic adds high-recall candidates the rules do not propose: any value
 // assigned to a name that sounds like a credential (password, secret, token,
@@ -123,20 +125,30 @@
 // pragmas. It is NOT the rule of sg-cand-1.
 //
 // ---------------------------------------------------------------- masking
-// MASKED BY DEFAULT, in every mode. Every character of every candidate value
-// (the line's own and any other that falls in its context or its lines) is
-// replaced by another one of the same class: a lower-case letter by a
-// lower-case letter, a digit by a digit; punctuation stays. Length and shape
-// survive, the value does not. The mapping is keyed by a random key drawn for
-// the run and never written, so the same value masks the same way within one
-// export and cannot be recomputed afterwards. A candidate's value is masked at
-// every place the walked files repeat it (values of 8 characters and more
-// across files, of 4 and more within its own file), which takes a first pass
-// over all of them. Values no rule and no generic pattern proposes are NOT
-// masked: an export is as clean as the candidates are complete. --raw writes
-// real values; it has to be asked for, and its file is not to be committed.
+// MASKED BY DEFAULT, in every mode. In a masked export EVERY letter and digit
+// of every text field (the value, its line, the lines around it, the context
+// window) is replaced by another one of the same class: a lower-case letter by
+// a lower-case letter, a digit by a digit; punctuation and spacing stay.
+// Length and shape survive, the text does not. Masking only the values a rule
+// proposes would not do: a secret no rule proposes often sits next to one
+// that a rule found (the second column of a credentials file, the rest of a
+// command line), and it would be written in clear.
+//
+// One thing stays readable: inside the record's own `name`, the credential
+// keywords of sg-cand-1 (password, passwd, pwd, pass, secret, token, key, api,
+// auth, credential, cred, nonce, salt). `DB_PASSWORD` is written `XY_PASSWORD`,
+// in the `name` field and where the name stands on the value's line. These
+// words are public, and they are what the rule looked for. Every other part of
+// a name is masked: the word before an operator can be a value too.
+//
+// The mapping is keyed by a random key drawn for the run and never written. A
+// candidate's value is masked as one value, so it reads the same wherever the
+// export repeats it (a first pass over all the files collects the values);
+// every other run of letters and digits is masked on its own. --raw writes
+// real text and real values; it has to be asked for, and its file is not to be
+// committed. --out is always left readable by its owner only (0600).
 import { createHmac, randomBytes } from "node:crypto";
-import { closeSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, fchmodSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, writeSync } from "node:fs";
 import * as nodeModule from "node:module";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -165,13 +177,20 @@ function neighbours(c) {
   return out.length > 0 ? out : undefined;
 }
 
+// A letter or a digit outside the Basic Multilingual Plane (two code units):
+// a fixed stand-in of the same kind, or the second one when it is the first.
+const ASTRAL = [
+  [/\p{L}/u, "\u{1D4B3}", "\u{1D4B4}"],
+  [/\p{N}/u, "\u{1D7D8}", "\u{1D7D9}"],
+];
+
 /** A fresh key for one export. */
 export const newMaskKey = () => randomBytes(32);
 
 /**
  * `value` with every letter and digit replaced by a DIFFERENT character of the
- * same class; everything else is kept (punctuation, and characters outside the
- * Basic Multilingual Plane). Deterministic for a given key.
+ * same class; everything else is kept (punctuation, symbols). Same length.
+ * Deterministic for a given key.
  */
 export function maskValue(value, key) {
   let stream = Buffer.alloc(0);
@@ -179,6 +198,16 @@ export function maskValue(value, key) {
   let out = "";
   for (let i = 0; i < value.length; i++) {
     const c = value[i];
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff && i + 1 < value.length) {
+      const pair = value.slice(i, i + 2);
+      const kind = ASTRAL.find(([re]) => re.test(pair));
+      if (kind) {
+        out += pair === kind[1] ? kind[2] : kind[1];
+        i++;
+        continue;
+      }
+    }
     const alphabet = classOf(c);
     const near = alphabet === undefined ? neighbours(c) : undefined;
     if (alphabet === undefined && near === undefined) {
@@ -227,6 +256,56 @@ export function maskKnown(text, index, key) {
     i = from - 1;
   }
   return out + text.slice(from);
+}
+
+// One mask per word and per key: a context repeats its words.
+const WORD = /[\p{L}\p{N}]+/gu;
+const wordMasks = new Map();
+function maskWords(text, key) {
+  const k = typeof key === "string" ? key : key.toString("latin1");
+  let masks = wordMasks.get(k);
+  if (masks === undefined || masks.size > 200000) {
+    if (wordMasks.size > 8) wordMasks.clear();
+    wordMasks.set(k, (masks = new Map()));
+  }
+  return text.replace(WORD, (w) => {
+    let masked = masks.get(w);
+    if (masked === undefined) masks.set(w, (masked = maskValue(w, key)));
+    return masked;
+  });
+}
+
+/**
+ * `text` with EVERY letter and digit masked: an indexed value as one value
+ * (so that it reads the same wherever the export repeats it), and every other
+ * run of letters and digits on its own. What no rule proposed is masked too:
+ * a secret often sits next to the one a rule found.
+ */
+export function maskAll(text, index, key) {
+  if (!index || index.size === 0) return maskWords(text, key);
+  let out = "";
+  let from = 0;
+  for (let i = 0; i + 6 <= text.length; i++) {
+    const value = index.get(text.slice(i, i + 6))?.find((v) => text.startsWith(v, i));
+    if (value === undefined) continue;
+    out += maskWords(text.slice(from, i), key) + maskValue(value, key);
+    from = i + value.length;
+    i = from - 1;
+  }
+  return out + maskWords(text.slice(from), key);
+}
+
+// The only words a masked record keeps readable: these, inside its own name.
+// They are public, and the rule that made the record looked for them.
+const KEYWORDS = ["password", "passwd", "pwd", "pass", "secret", "token", "key", "api", "auth", "credential", "cred", "nonce", "salt"];
+const KEYWORD = new RegExp(KEYWORDS.join("|"), "gi");
+
+/** A key or variable name, masked but for the credential keywords it holds:
+ *  `DB_PASSWORD` keeps its shape and `PASSWORD`. */
+export function maskName(name, key) {
+  let out = maskValue(name, key);
+  for (const m of name.matchAll(KEYWORD)) out = out.slice(0, m.index) + m[0] + out.slice(m.index + m[0].length);
+  return out;
 }
 
 export function charClasses(value) {
@@ -343,13 +422,22 @@ function matchBehind(text, finding, pattern) {
 }
 
 /**
- * `(from, to) => string`: the text between two offsets with every span of
- * `spans` masked, and every `known` value besides. With `raw`, the text itself.
+ * `(from, to, name) => string`: the text between two offsets, masked. Every
+ * span of `spans` is masked as one value, and every other letter and digit
+ * with `maskAll`. `name` is `{start, end, text}`: what to write in place of
+ * the record's own name (see `nameIn`). With `raw`, the text itself.
  */
 function maskedView(text, spans, { raw, known, key }) {
   if (raw) return (from, to) => text.slice(from, to);
   const sorted = [...spans].sort((a, b) => a.start - b.start);
-  return (from, to) => {
+  const rest = (a, b, name) => {
+    if (a >= b) return "";
+    if (name === undefined || name.end <= a || name.start >= b) return maskAll(text.slice(a, b), known, key);
+    const s = Math.max(a, name.start);
+    const e = Math.min(b, name.end);
+    return maskAll(text.slice(a, s), known, key) + name.text.slice(s - name.start, e - name.start) + maskAll(text.slice(e, b), known, key);
+  };
+  return (from, to, name) => {
     let out = "";
     let at = from;
     for (const s of sorted) {
@@ -358,11 +446,25 @@ function maskedView(text, spans, { raw, known, key }) {
       const b = Math.min(s.end, to);
       // Mask the whole value, then keep the part inside the window: a value cut
       // by the window's edge masks the same way as the full one elsewhere.
-      out += maskKnown(text.slice(at, a), known, key) + maskValue(text.slice(s.start, s.end), key).slice(a - s.start, b - s.start);
+      out += rest(at, a, name) + maskValue(text.slice(s.start, s.end), key).slice(a - s.start, b - s.start);
       at = b;
     }
-    return out + maskKnown(text.slice(at, to), known, key);
+    return out + rest(at, to, name);
   };
+}
+
+/**
+ * The record's name as it is written, and where it stands. Raw: the name.
+ * Masked: `maskName` of it, and the place of the name on the value's line (the
+ * last one before the value), so that the line shows the same masked name.
+ */
+function nameIn(text, name, valueStart, { raw, key }) {
+  if (name === undefined || name === null) return { name: null };
+  if (raw) return { name };
+  const masked = maskName(name, key);
+  const lineStart = text.lastIndexOf("\n", valueStart - 1) + 1;
+  const at = text.lastIndexOf(name, valueStart - name.length);
+  return at < lineStart ? { name: masked } : { name: masked, place: { start: at, end: at + name.length, text: masked } };
 }
 
 // Every other place `text` repeats one of the values of `spans` (4 characters
@@ -404,10 +506,11 @@ export function candidatesOf(text, engine, opts = {}) {
     for (let i = text.indexOf("\n"); i !== -1 && i < offset; i = text.indexOf("\n", i + 1)) line++;
     return line;
   };
-  const record = (mode, rule, span, match, groups, name) => {
+  const record = (mode, rule, span, match, groups, found) => {
     const value = text.slice(span.start, span.end);
     const from = Math.max(0, span.start - context);
     const to = Math.min(text.length, span.end + context);
+    const { name, place } = nameIn(text, found, span.start, { raw: opts.raw, key });
     return {
       mode,
       rule,
@@ -417,10 +520,10 @@ export function candidatesOf(text, engine, opts = {}) {
       length: span.end - span.start,
       match: match ? { start: match[0], end: match[1] } : null,
       groups,
-      name: name ?? null,
+      name,
       entropy: Number(shannonEntropy(value).toFixed(3)),
       classes: charClasses(value),
-      context: { start: from, before: show(from, span.start), value: show(span.start, span.end), after: show(span.end, to) },
+      context: { start: from, before: show(from, span.start, place), value: show(span.start, span.end), after: show(span.end, to) },
       masked: !opts.raw,
     };
   };
@@ -443,7 +546,6 @@ export const GENERATOR = "sg-cand-1";
 // same quote; a bare one cannot begin with a quote and runs to the first
 // whitespace, `;` or `,` (or the end of the line). Either has 4 to 256
 // characters: a longer or shorter one is not a candidate, whatever its start.
-const KEYWORDS = ["password", "passwd", "pwd", "pass", "secret", "token", "key", "api", "auth", "credential", "cred", "nonce", "salt"];
 const NAME_CHAR = String.raw`[\w.$-]`;
 const SEPARATOR = "(?::=|=>|==|!=|:|=)";
 const VALUE = [
@@ -591,6 +693,7 @@ export function candidateRecords(text, engine, opts = {}) {
     const inLine = Math.min(m.end - m.start, lineLength - at.start);
     const lineFrom = lineLength <= maxLine ? 0 : Math.max(0, Math.min(at.start - Math.floor((maxLine - Math.min(inLine, maxLine)) / 2), lineLength - maxLine));
     const from = starts[at.line] + lineFrom;
+    const { name, place: namePlace } = nameIn(text, m.name ?? assignedName(text, m.start), m.start, { raw: opts.raw, key });
     return {
       generator: GENERATOR,
       file: opts.sourcePath ?? null,
@@ -605,8 +708,8 @@ export function candidateRecords(text, engine, opts = {}) {
       offset: m.start,
       length: m.end - m.start,
       value: show(m.start, m.end),
-      name: m.name ?? assignedName(text, m.start) ?? null,
-      lineText: show(from, Math.min(lineEnd(at.line), from + maxLine)),
+      name,
+      lineText: show(from, Math.min(lineEnd(at.line), from + maxLine), namePlace),
       lineFrom,
       prevLine: cut(at.line - 1),
       nextLine: cut(at.endLine + 1),
@@ -770,6 +873,8 @@ async function main(argv) {
   const sink = (path) => {
     if (path === undefined) return undefined;
     const fd = openSync(path, "w", 0o600);
+    // The mode above only counts for a file that did not exist.
+    fchmodSync(fd, 0o600);
     return { write: (line) => writeSync(fd, line), close: () => closeSync(fd) };
   };
   const out = sink(outputs.out) ?? { write: (line) => process.stdout.write(line), close: () => {} };

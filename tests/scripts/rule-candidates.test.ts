@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -13,7 +13,9 @@ import {
   GENERATOR,
   GENERIC_KEYWORD,
   genericCandidates,
+  maskAll,
   maskKnown,
+  maskName,
   maskValue,
   readText,
   valueIndex,
@@ -60,6 +62,23 @@ describe("maskValue", () => {
     expect(maskValue(FAKE.githubPat, key)).not.toBe(maskValue(FAKE.githubPat.replace("a", "b"), key).replace("b", "a"));
   });
 
+  it("masks letters and digits outside the Basic Multilingual Plane, keeping the length", () => {
+    const value = "a\u{1D4B3}\u{1D7D8}\u{1D4CD}\u{1F600}b";
+    const masked = maskValue(value, key);
+    expect(masked).toHaveLength(value.length);
+    expect([...masked].map((c, i) => c === [...value][i])).toEqual([false, false, false, false, true, false]);
+  });
+
+  it("keeps of a name its credential keywords and its shape, nothing else", () => {
+    expect(maskName("DB_PASSWORD", key)).toMatch(/^[A-Z]{2}_PASSWORD$/);
+    expect(maskName("DB_PASSWORD", key)).not.toBe("DB_PASSWORD");
+    expect(maskName("aws_secret_access_key", key)).toMatch(/^[a-z]{3}_secret_[a-z]{6}_key$/);
+    expect(maskName("apiKeyV2", key)).toMatch(/^apiKey[A-Z]\d$/);
+    const plain = maskName("DATABASE_URL", key);
+    expect(plain).toMatch(/^[A-Z]{8}_[A-Z]{3}$/);
+    expect([...plain].filter((c, i) => c !== "_" && c === "DATABASE_URL"[i])).toEqual([]);
+  });
+
   it("counts character classes", () => {
     expect(charClasses("aB3-_x")).toEqual({ lower: 2, upper: 1, digit: 1, other: 2 });
   });
@@ -89,8 +108,8 @@ describe("candidatesOf — rule findings", () => {
   const text = `# service\nGITHUB_TOKEN=${FAKE.githubPat}\nurl = "postgres://admin:Xk9mQ2vL7pR4tY6h@db:5432/prod"\n`;
 
   it("writes rule, offsets, line, name, match and groups; entropy is the real value's", () => {
-    const [pat, url] = candidatesOf(text, engine, { maskKey: key });
-    expect(pat).toMatchObject({ mode: "rule", rule: "github-pat", line: 2, name: "GITHUB_TOKEN", length: FAKE.githubPat.length, masked: true });
+    const [pat, url] = candidatesOf(text, engine, { raw: true });
+    expect(pat).toMatchObject({ mode: "rule", rule: "github-pat", line: 2, name: "GITHUB_TOKEN", length: FAKE.githubPat.length, masked: false });
     expect(text.slice(pat!.start, pat!.end)).toBe(FAKE.githubPat);
     expect(pat!.entropy).toBeGreaterThan(4);
     expect(pat!.match).toEqual({ start: pat!.start, end: pat!.end });
@@ -110,7 +129,13 @@ describe("candidatesOf — rule findings", () => {
     const [pat] = out;
     expect(pat!.context.before + pat!.context.value + pat!.context.after).toHaveLength(text.length);
     expect(classes(pat!.context.value)).toBe(classes(FAKE.githubPat));
-    expect(pat!.context.before).toBe("# service\nGITHUB_TOKEN=");
+    // Nothing of the context is readable but the keyword in the value's own name.
+    expect(pat!.name).toMatch(/^[A-Z]{6}_TOKEN$/);
+    expect(pat!.name).not.toBe("GITHUB_TOKEN");
+    expect(pat!.context.before).toMatch(/^# [a-z]{7}\n[A-Z]{6}_TOKEN=$/);
+    expect(pat!.context.before.endsWith(`${pat!.name}=`)).toBe(true);
+    expect(dump).not.toContain("service");
+    expect(dump).not.toContain("postgres");
   });
 
   it("masks a value everywhere the file repeats it, not only where a rule found it", () => {
@@ -124,13 +149,20 @@ describe("candidatesOf — rule findings", () => {
     // The generic value is a finding in config.toml only; notes.md repeats it bare.
     const known = valueIndex([FAKE.genericSecret, "short"]);
     const notes = `rotate ${FAKE.genericSecret} soon, see short note\nGITHUB_TOKEN=${FAKE.githubPat}\n`;
-    expect(JSON.stringify(candidatesOf(notes, engine, { maskKey: key, context: 400 }))).toContain(FAKE.genericSecret);
-    const out = JSON.stringify(candidatesOf(notes, engine, { maskKey: key, context: 400, known }));
-    expect(out).not.toContain(FAKE.genericSecret);
-    expect(out).toContain("see short note");
+    // Masked with or without the index; with it, as the one value it is, so
+    // that it reads the same in every file of the export.
+    expect(JSON.stringify(candidatesOf(notes, engine, { maskKey: key, context: 400 }))).not.toContain(FAKE.genericSecret);
+    const [pat] = candidatesOf(notes, engine, { maskKey: key, context: 400, known });
+    expect(JSON.stringify(pat)).not.toContain(FAKE.genericSecret);
+    expect(pat!.context.before).toContain(maskValue(FAKE.genericSecret, key));
+    expect(pat!.context.before).not.toContain("short note");
     expect(maskKnown(`a ${FAKE.genericSecret} b ${FAKE.genericSecret}`, known, key)).toBe(
       `a ${maskValue(FAKE.genericSecret, key)} b ${maskValue(FAKE.genericSecret, key)}`,
     );
+    expect(maskAll(`rotate ${FAKE.genericSecret} soon`, known, key)).toBe(
+      `${maskValue("rotate", key)} ${maskValue(FAKE.genericSecret, key)} ${maskValue("soon", key)}`,
+    );
+    expect(maskAll("see short note 42", undefined, key)).toMatch(/^[a-z]{3} [a-z]{5} [a-z]{4} \d{2}$/);
   });
 
   it("bounds the context window", () => {
@@ -506,19 +538,92 @@ describe("candidateRecords (sg-cand-1)", () => {
     const dump = JSON.stringify(out);
     for (const secret of ["Zx9!kLm2#Qw8rT5yU", FAKE.githubPat, "admin"]) expect(dump).not.toContain(secret);
     const [pwd] = out;
-    expect(pwd).toMatchObject({
-      masked: true,
-      length: 17,
-      entropy: 4.0875,
-      prevLine: expect.stringMatching(/^url = "postgres:\/\/[a-z]{5}:[a-z]{5}@db:5432\/prod"$/),
-    });
+    expect(pwd).toMatchObject({ masked: true, length: 17, entropy: 4.0875 });
+    expect(pwd!.prevLine).toMatch(/^[a-z]{3} = "[a-z]{8}:\/\/[a-z]{5}:[a-z]{5}@[a-z]{2}:\d{4}\/[a-z]{4}"$/);
     expect(classes(pwd!.value)).toBe(classes("Zx9!kLm2#Qw8rT5yU"));
-    expect(pwd!.lineText).toBe(`DB_PASSWORD=${pwd!.value}`);
-    expect(pwd!.nextLine).toBe(`echo ${pwd!.value} and ${out[1]!.value}`);
+    // The name keeps its keyword and nothing else; the line shows the same name.
+    expect(pwd!.name).toMatch(/^[A-Z]{2}_PASSWORD$/);
+    expect(pwd!.name).not.toBe("DB_PASSWORD");
+    expect(pwd!.lineText).toBe(`${pwd!.name}=${pwd!.value}`);
+    expect(pwd!.nextLine).toBe(`${maskValue("echo", key)} ${pwd!.value} ${maskValue("and", key)} ${out[1]!.value}`);
     // A value another file holds is masked here too.
     const known = valueIndex(["elsewhere-value-1"]);
     const other = candidateRecords("token=abcd1234 # was elsewhere-value-1", trace, { maskKey: key, known });
     expect(other[0]!.lineText).not.toContain("elsewhere-value-1");
+  });
+});
+
+// A masked export must not carry anything that could be a secret: a value no
+// rule proposes often stands next to one a rule found.
+describe("masked exports", () => {
+  const trace = { scan, traceMatches, dedupeFindings };
+  const awsSecret = "wJalrXUtnFEMI" + "K7MDENGbPxRfiCY" + "Zx9kLm2Qw8rT";
+  const R = "Zx9!kLm2#Qw8" + "rT5yU";
+  const reversed = [...R].reverse().join("");
+  const INPUTS: Array<[string, string, string[]]> = [
+    ["a credentials CSV", `Access key ID,Secret access key\n${FAKE.awsKeyId},${awsSecret}\nnext user,row 2\n`, [FAKE.awsKeyId, awsSecret]],
+    ["a second secret on the command line", `aws configure set aws_access_key_id ${FAKE.awsKeyId} && export S=${awsSecret}\n`, [FAKE.awsKeyId, awsSecret]],
+    ["a value copied in a comment, reversed", `pwd = "${R}" # backup copy ${reversed}\n`, [R, reversed]],
+    ["short values and short repeats", `id 7Qz\ntoken = abcd1234 # pin 9Z1, id 7Qz, pin 9Z1\nuser bob\n`, ["abcd1234", "7Qz", "9Z1", "bob"]],
+  ];
+  const isWordChar = (c: string | undefined) => c !== undefined && /[\p{L}\p{N}]/u.test(c);
+  // Positions where a letter or a digit of `raw` is still there in `masked`.
+  const kept = (raw: string | null, masked: string | null): number[] => {
+    if (raw === null || masked === null) {
+      expect(masked).toBe(raw);
+      return [];
+    }
+    expect(masked).toHaveLength(raw.length);
+    return Array.from(raw, (_, i) => i).filter((i) => isWordChar(raw[i]) && masked[i] === raw[i]);
+  };
+  // Positions of the record's own name in a text that ends where the value starts.
+  const namePositions = (before: string, name: string | null): Set<number> => {
+    const at = name === null ? -1 : before.lastIndexOf(name);
+    return new Set(name === null || at === -1 ? [] : [...name].map((_, i) => at + i));
+  };
+
+  for (const [what, text, secrets] of INPUTS) {
+    it(`--candidates: ${what}`, () => {
+      expect(awsSecret).toHaveLength(40);
+      const raw = candidateRecords(text, trace, { raw: true });
+      const masked = candidateRecords(text, trace, { maskKey: key });
+      expect(raw.length).toBeGreaterThan(0);
+      expect(masked).toHaveLength(raw.length);
+      for (const secret of secrets) expect(JSON.stringify(masked), secret).not.toContain(secret);
+      raw.forEach((r, i) => {
+        const m = masked[i]!;
+        expect(m.masked).toBe(true);
+        expect(kept(r.value, m.value)).toEqual([]);
+        expect(kept(r.prevLine, m.prevLine)).toEqual([]);
+        expect(kept(r.nextLine, m.nextLine)).toEqual([]);
+        // In its own line, only the keyword of the record's name may stay.
+        const allowed = namePositions(r.lineText.slice(0, r.start - r.lineFrom), r.name);
+        expect(kept(r.lineText, m.lineText).filter((p) => !allowed.has(p))).toEqual([]);
+        expect(m.name).toBe(r.name === null ? null : maskName(r.name, key));
+      });
+    });
+
+    for (const generic of [false, true]) {
+      it(`${generic ? "--generic" : "default mode"}: ${what}`, () => {
+        const raw = candidatesOf(text, engine, { raw: true, generic, context: 400 });
+        const masked = candidatesOf(text, engine, { maskKey: key, generic, context: 400 });
+        expect(masked).toHaveLength(raw.length);
+        for (const secret of secrets) expect(JSON.stringify(masked), secret).not.toContain(secret);
+        raw.forEach((r, i) => {
+          const m = masked[i]!;
+          expect(kept(r.context.value, m.context.value)).toEqual([]);
+          expect(kept(r.context.after, m.context.after)).toEqual([]);
+          const allowed = namePositions(r.context.before, r.name);
+          expect(kept(r.context.before, m.context.before).filter((p) => !allowed.has(p))).toEqual([]);
+          expect(m.name).toBe(r.name === null ? null : maskName(r.name, key));
+        });
+      });
+    }
+  }
+
+  it("finds something to mask in each of them", () => {
+    for (const [what, text] of INPUTS)
+      expect(candidatesOf(text, engine, { raw: true, generic: true }).length + candidateRecords(text, trace, { raw: true }).length, what).toBeGreaterThan(0);
   });
 });
 
@@ -563,8 +668,12 @@ describe.skipIf(Number(process.versions.node.split(".")[0]) < 24)("rule-candidat
           .filter((l) => l !== "")
           .map((l) => JSON.parse(l));
 
+      // An output that already exists with wider permissions is closed down too.
+      writeFileSync(join(dir, "out.jsonl"), "old\n");
+      chmodSync(join(dir, "out.jsonl"), 0o644);
       const masked = run();
       expect(masked.status, masked.stderr).toBe(0);
+      expect(statSync(join(dir, "out.jsonl")).mode & 0o777).toBe(0o600);
       expect(masked.stderr).toContain("values masked");
       expect(readFileSync(join(dir, "out.jsonl"), "utf8")).not.toContain("Zx9!kLm2#Qw8rT5yU");
       expect(lines("out.jsonl")).toMatchObject([

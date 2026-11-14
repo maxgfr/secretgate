@@ -92,6 +92,8 @@ export const DEFAULT_EXTENSIONS: Set<string>;
 export function newMaskKey(): Buffer;
 export function maskValue(value: string, key: Buffer | string): string;
 export function valueIndex(values: Iterable<string>): Map<string, string[]>;
+export function maskAll(text: string, index: Map<string, string[]> | undefined, key: Buffer | string): string;
+export function maskName(name: string, key: Buffer | string): string;
 export function maskKnown(text: string, index: Map<string, string[]> | undefined, key: Buffer | string): string;
 export function charClasses(value: string): { lower: number; upper: number; digit: number; other: number };
 export function shannonEntropy(value: string): number;
