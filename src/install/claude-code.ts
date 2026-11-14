@@ -1,6 +1,7 @@
 import { isSecretgateHook } from "./hook-marker.js";
-import { type EditReport, editJsonFile } from "./json-merge.js";
+import { assertWithin, type EditReport, editJsonFile } from "./json-merge.js";
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 
 // Deny rules complement the hooks where tool hooks don't fire — notably @file
 // mentions, which inline a file's content WITHOUT firing tool hooks. They are
@@ -144,68 +145,91 @@ export interface InstallOptions {
   settingsPath: string;
   /** how the agent should invoke the CLI, e.g. `node /home/u/.secretgate/bin/secretgate.mjs` */
   command: string;
+  /** The tree the settings belong to: a symlinked settings file is written
+   *  through only when it resolves inside it. Default: the directory that
+   *  holds `.claude/` — the project for project settings, the home directory
+   *  for the global ones. */
+  root?: string;
 }
 
-export function installClaudeCode({ settingsPath, command }: InstallOptions): EditReport {
+// Both files secretgate touches, checked before either is read or written: a
+// link that leaves the tree stops the whole operation (see assertWithin).
+function settingsTree(settingsPath: string, root: string | undefined): { ownershipPath: string; within: string[] } {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
+  const within = [root ?? dirname(dirname(settingsPath))];
+  assertWithin(settingsPath, within);
+  assertWithin(ownershipPath, within);
+  return { ownershipPath, within };
+}
+
+export function installClaudeCode({ settingsPath, command, root }: InstallOptions): EditReport {
+  const { ownershipPath, within } = settingsTree(settingsPath, root);
   const previous = existsSync(ownershipPath) ? JSON.parse(readFileSync(ownershipPath, "utf8")) : {};
   const added: string[] = [];
   const adopted: string[] = [];
-  const report = editJsonFile(settingsPath, (s) => {
-    s.hooks ??= {};
-    for (const { event, arg, matcher } of EVENTS) {
-      const kept = withoutOurGroups(s.hooks[event]);
-      // 30s cap (seconds): a hung hook must not stall every tool call for the 600s default.
-      const group: HookGroup = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}`, timeout: 30 }] };
-      if (matcher) group.matcher = matcher;
-      s.hooks[event] = [...kept, group];
-    }
-    s.permissions ??= {};
-    // Rules an older secretgate added and no longer ships (e.g. `**/*.pem`,
-    // which blocked test fixtures) are removed — only the ones it owns.
-    const current: string[] = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
-    const owned: string[] = previous.deny ?? [];
-    const retired = new Set([...owned.filter((r) => !CC_DENY_RULES.includes(r)), ...retiredRulesToRemove(current, owned)]);
-    const deny = current.filter((r) => !retired.has(r));
-    added.push(...CC_DENY_RULES.filter((r) => !deny.includes(r)));
-    // Rules an older secretgate installed are recorded too, or uninstall would
-    // leave them behind once a record exists.
-    adopted.push(...unrecordedLegacyRules(current, previous.deny));
-    s.permissions.deny = [...deny, ...added];
-  });
+  const report = editJsonFile(
+    settingsPath,
+    (s) => {
+      s.hooks ??= {};
+      for (const { event, arg, matcher } of EVENTS) {
+        const kept = withoutOurGroups(s.hooks[event]);
+        // 30s cap (seconds): a hung hook must not stall every tool call for the 600s default.
+        const group: HookGroup = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}`, timeout: 30 }] };
+        if (matcher) group.matcher = matcher;
+        s.hooks[event] = [...kept, group];
+      }
+      s.permissions ??= {};
+      // Rules an older secretgate added and no longer ships (e.g. `**/*.pem`,
+      // which blocked test fixtures) are removed — only the ones it owns.
+      const current: string[] = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
+      const owned: string[] = previous.deny ?? [];
+      const retired = new Set([...owned.filter((r) => !CC_DENY_RULES.includes(r)), ...retiredRulesToRemove(current, owned)]);
+      const deny = current.filter((r) => !retired.has(r));
+      added.push(...CC_DENY_RULES.filter((r) => !deny.includes(r)));
+      // Rules an older secretgate installed are recorded too, or uninstall would
+      // leave them behind once a record exists.
+      adopted.push(...unrecordedLegacyRules(current, previous.deny));
+      s.permissions.deny = [...deny, ...added];
+    },
+    { within },
+  );
   editJsonFile(
     ownershipPath,
     (state) => {
       state.deny = [...new Set([...(previous.deny ?? []), ...added, ...adopted])].filter((r) => CC_DENY_RULES.includes(r));
     },
-    { latestBackupOnly: true },
+    { latestBackupOnly: true, within },
   );
   return report;
 }
 
-export function uninstallClaudeCode({ settingsPath }: { settingsPath: string }): EditReport {
-  const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
+export function uninstallClaudeCode({ settingsPath, root }: { settingsPath: string; root?: string }): EditReport {
+  const { ownershipPath, within } = settingsTree(settingsPath, root);
   const recorded: string[] | undefined = existsSync(ownershipPath) ? (JSON.parse(readFileSync(ownershipPath, "utf8")).deny ?? []) : undefined;
-  const report = editJsonFile(settingsPath, (s) => {
-    if (s.hooks && typeof s.hooks === "object") {
-      for (const { event } of EVENTS) {
-        const kept = withoutOurGroups(s.hooks[event]);
-        if (kept.length > 0) s.hooks[event] = kept;
-        else delete s.hooks[event];
+  const report = editJsonFile(
+    settingsPath,
+    (s) => {
+      if (s.hooks && typeof s.hooks === "object") {
+        for (const { event } of EVENTS) {
+          const kept = withoutOurGroups(s.hooks[event]);
+          if (kept.length > 0) s.hooks[event] = kept;
+          else delete s.hooks[event];
+        }
+        // An object install created and uninstall emptied is not left behind.
+        if (Object.keys(s.hooks).length === 0) delete s.hooks;
       }
-      // An object install created and uninstall emptied is not left behind.
-      if (Object.keys(s.hooks).length === 0) delete s.hooks;
-    }
-    if (Array.isArray(s.permissions?.deny)) {
-      // secretgate <= 1.4 kept no ownership record, and the upgrades that
-      // started one did not adopt its rules (see unrecordedLegacyRules).
-      const deny: unknown[] = s.permissions.deny;
-      const owned = [...(recorded ?? []), ...unrecordedLegacyRules(deny, recorded)];
-      s.permissions.deny = deny.filter((r) => !(typeof r === "string" && owned.includes(r)));
-      if (s.permissions.deny.length === 0) delete s.permissions.deny;
-      if (Object.keys(s.permissions).length === 0) delete s.permissions;
-    }
-  });
+      if (Array.isArray(s.permissions?.deny)) {
+        // secretgate <= 1.4 kept no ownership record, and the upgrades that
+        // started one did not adopt its rules (see unrecordedLegacyRules).
+        const deny: unknown[] = s.permissions.deny;
+        const owned = [...(recorded ?? []), ...unrecordedLegacyRules(deny, recorded)];
+        s.permissions.deny = deny.filter((r) => !(typeof r === "string" && owned.includes(r)));
+        if (s.permissions.deny.length === 0) delete s.permissions.deny;
+        if (Object.keys(s.permissions).length === 0) delete s.permissions;
+      }
+    },
+    { within },
+  );
   if (existsSync(ownershipPath)) rmSync(ownershipPath);
   return report;
 }

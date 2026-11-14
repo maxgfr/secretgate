@@ -1,9 +1,9 @@
-import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CC_DENY_RULES, claudeCodeBatchHookWired, installClaudeCode, uninstallClaudeCode } from "../../src/install/claude-code.js";
-import { SettingsParseError } from "../../src/install/json-merge.js";
+import { SettingsLinkError, SettingsParseError } from "../../src/install/json-merge.js";
 
 let dir: string;
 let settingsPath: string;
@@ -122,6 +122,66 @@ describe("installClaudeCode — the file stays the user's", () => {
     installClaudeCode({ settingsPath, command });
     if (posix) expect(statSync(settingsPath).mode & 0o777).toBe(0o644);
     expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+// A repository can commit `.claude/settings.json` as a symlink. Writing
+// through it is right for a link the file's owner made inside its own tree,
+// and wrong for one that leads out of it: `init --project` would edit a file
+// of another tool, somewhere in the user's home.
+describe.runIf(process.platform !== "win32")("installClaudeCode — a link that leaves the project is refused", () => {
+  let victim: string;
+  let repo: string;
+  let project: string;
+  const victimText = '{"apiToken":"from-other-tool"}\n';
+
+  beforeEach(() => {
+    mkdirSync(join(dir, "home", "other-tool"), { recursive: true });
+    victim = join(dir, "home", "other-tool", "config.json");
+    writeFileSync(victim, victimText, { mode: 0o600 });
+    repo = join(dir, "repo");
+    project = join(repo, ".claude");
+    mkdirSync(project, { recursive: true });
+  });
+  const untouched = () => {
+    expect(readFileSync(victim, "utf8")).toBe(victimText);
+    expect(readdirSync(join(dir, "home", "other-tool"))).toEqual(["config.json"]);
+  };
+
+  it("settings.json linked outside the project: nothing is written, copied or backed up", () => {
+    symlinkSync(victim, join(project, "settings.json"));
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command })).toThrow(SettingsLinkError);
+    expect(() => uninstallClaudeCode({ settingsPath: join(project, "settings.json") })).toThrow(/outside/);
+    untouched();
+    // Not even a backup: it would copy the other tool's file into the repository.
+    expect(readdirSync(project)).toEqual(["settings.json"]);
+    expect(lstatSync(join(project, "settings.json")).isSymbolicLink()).toBe(true);
+  });
+
+  it("the ownership record linked outside the project: refused before settings.json changes", () => {
+    writeFileSync(join(project, "settings.json"), "{}");
+    symlinkSync(victim, join(project, "settings.json.secretgate-ownership.json"));
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command })).toThrow(SettingsLinkError);
+    expect(() => uninstallClaudeCode({ settingsPath: join(project, "settings.json") })).toThrow(SettingsLinkError);
+    untouched();
+    expect(readFileSync(join(project, "settings.json"), "utf8")).toBe("{}");
+  });
+
+  it("a `.claude` directory linked outside the project", () => {
+    rmSync(project, { recursive: true });
+    symlinkSync(join(dir, "home", "other-tool"), project);
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command })).toThrow(SettingsLinkError);
+    untouched();
+  });
+
+  it("a link that stays inside the project is written through, and `root` can name the tree", () => {
+    mkdirSync(join(repo, "config"));
+    writeFileSync(join(repo, "config", "claude.json"), "{}");
+    symlinkSync(join(repo, "config", "claude.json"), join(project, "settings.json"));
+    installClaudeCode({ settingsPath: join(project, "settings.json"), command });
+    expect(JSON.parse(readFileSync(join(repo, "config", "claude.json"), "utf8")).hooks.PostToolUse).toHaveLength(1);
+    // The same link is out of bounds for a narrower tree.
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command, root: project })).toThrow(SettingsLinkError);
   });
 });
 

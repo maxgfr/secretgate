@@ -379,7 +379,12 @@ keeping output redaction; the agent's own permissions can still deny access.
 OpenCode also scans tool history before model conversion, including restored
 write arguments and errors. Disabling protection intentionally skips this scan.
 
-Install/uninstall preserve existing rules and foreign hooks. Claude ownership
+Install/uninstall preserve existing rules and foreign hooks, and keep a
+settings file's permissions. A settings file that is a symlink is written
+through when it resolves inside its own tree (the project for `--project`, your
+home directory otherwise: a dotfiles checkout) and refused, with nothing
+changed, when the link leads out of it: a repository can commit
+`.claude/settings.json` as a link to any file of yours. Claude ownership
 is recorded beside settings; legacy rules without an ownership record are
 retained on uninstall. `status` checks Codex trust definitions as well as wiring.
 

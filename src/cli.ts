@@ -27,7 +27,7 @@ import { handleCodex } from "./hooks/codex.js";
 import { AllowlistFileError, writeAllow } from "./install/allow-store.js";
 import { claudeCodeBatchHookWired, claudeCodeMatcherCurrent, installClaudeCode, retiredRulesToRemove, uninstallClaudeCode } from "./install/claude-code.js";
 import { CODEX_HOOK_COUNT, codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
-import { SettingsParseError } from "./install/json-merge.js";
+import { SettingsLinkError, SettingsParseError } from "./install/json-merge.js";
 import { isSecretgateHook } from "./install/hook-marker.js";
 import { installOpencode, opencodeConfigDir, opencodePluginFile, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
@@ -1081,7 +1081,7 @@ async function cmdUninstall(args: string[], io: Io): Promise<number> {
       io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "unwired" : "nothing to remove"} (${codexHome()})\n`);
     }
   } catch (err) {
-    if (err instanceof SettingsParseError) {
+    if (err instanceof SettingsParseError || err instanceof SettingsLinkError) {
       io.stderr(`${err.message}\n`);
       return 2;
     }

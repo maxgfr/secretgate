@@ -108,6 +108,21 @@ describe.runIf(process.platform !== "win32")("installCodex — config.toml stays
     expect(statSync(join(dir, "config.toml")).mode & 0o777).toBe(0o600);
   });
 
+  it("refuses a config.toml linked out of the user's own tree, and changes nothing", () => {
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "secretgate-elsewhere-")));
+    try {
+      const codex = join(dir, "codex");
+      mkdirSync(codex);
+      writeFileSync(join(elsewhere, "other.toml"), 'token = "x"\n');
+      symlinkSync(join(elsewhere, "other.toml"), join(codex, "config.toml"));
+      expect(() => installCodex({ codexDir: codex, command })).toThrow(/outside/);
+      expect(readFileSync(join(elsewhere, "other.toml"), "utf8")).toBe('token = "x"\n');
+      expect(() => uninstallCodex({ codexDir: codex })).toThrow(/outside/);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it("writes through a symlinked config.toml instead of replacing the link", () => {
     const real = join(dir, "dotfiles-config.toml");
     writeFileSync(real, 'model = "x"\n');

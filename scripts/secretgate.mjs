@@ -4,7 +4,7 @@
 import { execFileSync } from "child_process";
 import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync11, readdirSync as readdirSync4, realpathSync as realpathSync5, rmSync as rmSync7, statSync as statSync5 } from "fs";
 import { homedir as homedir8, tmpdir as tmpdir3 } from "os";
-import { delimiter as delimiter3, dirname as dirname9, isAbsolute as isAbsolute5, join as join13, relative as relative4, resolve as resolve7 } from "path";
+import { delimiter as delimiter3, dirname as dirname11, isAbsolute as isAbsolute5, join as join13, relative as relative4, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config.ts
@@ -9699,6 +9699,20 @@ var SettingsParseError = class extends Error {
   }
   path;
 };
+var SettingsLinkError = class extends Error {
+  constructor(path, target, root) {
+    super(
+      `refusing to edit ${path}: through a symbolic link it resolves to ${target}, outside ${root}. secretgate only writes through a link that stays inside that directory. Replace the link with a regular file (or point it inside), then re-run.`
+    );
+    this.path = path;
+    this.name = "SettingsLinkError";
+  }
+  path;
+};
+function assertWithin(path, roots) {
+  const real = canonical(path);
+  if (!roots.some((root) => covers(root, real))) throw new SettingsLinkError(path, real, roots[0] ?? dirname6(path));
+}
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value && typeof value === "object") {
@@ -9710,6 +9724,7 @@ function canonicalize(value) {
 }
 var stableStringify = (v) => JSON.stringify(canonicalize(v));
 function editJsonFile(path, mutate, opts = {}) {
+  assertWithin(path, opts.within ?? [dirname6(path)]);
   let original;
   let obj = {};
   if (existsSync4(path)) {
@@ -9748,6 +9763,7 @@ function editJsonFile(path, mutate, opts = {}) {
 
 // src/install/claude-code.ts
 import { existsSync as existsSync5, readFileSync as readFileSync8, rmSync as rmSync4 } from "fs";
+import { dirname as dirname7 } from "path";
 var CC_DENY_RULES = [
   "Read(**/.env)",
   "Read(**/.env.local)",
@@ -9828,57 +9844,72 @@ function withoutOurGroups(groups) {
   if (!Array.isArray(groups)) return [];
   return groups.map((g) => ({ ...g, hooks: (g.hooks ?? []).filter((h) => !isSecretgateHook(h.command, "claude-code")) })).filter((g) => g.hooks.length > 0);
 }
-function installClaudeCode({ settingsPath, command }) {
+function settingsTree(settingsPath, root) {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
+  const within = [root ?? dirname7(dirname7(settingsPath))];
+  assertWithin(settingsPath, within);
+  assertWithin(ownershipPath, within);
+  return { ownershipPath, within };
+}
+function installClaudeCode({ settingsPath, command, root }) {
+  const { ownershipPath, within } = settingsTree(settingsPath, root);
   const previous = existsSync5(ownershipPath) ? JSON.parse(readFileSync8(ownershipPath, "utf8")) : {};
   const added = [];
   const adopted = [];
-  const report = editJsonFile(settingsPath, (s) => {
-    s.hooks ??= {};
-    for (const { event, arg, matcher } of EVENTS) {
-      const kept = withoutOurGroups(s.hooks[event]);
-      const group = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}`, timeout: 30 }] };
-      if (matcher) group.matcher = matcher;
-      s.hooks[event] = [...kept, group];
-    }
-    s.permissions ??= {};
-    const current = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
-    const owned = previous.deny ?? [];
-    const retired = /* @__PURE__ */ new Set([...owned.filter((r) => !CC_DENY_RULES.includes(r)), ...retiredRulesToRemove(current, owned)]);
-    const deny2 = current.filter((r) => !retired.has(r));
-    added.push(...CC_DENY_RULES.filter((r) => !deny2.includes(r)));
-    adopted.push(...unrecordedLegacyRules(current, previous.deny));
-    s.permissions.deny = [...deny2, ...added];
-  });
+  const report = editJsonFile(
+    settingsPath,
+    (s) => {
+      s.hooks ??= {};
+      for (const { event, arg, matcher } of EVENTS) {
+        const kept = withoutOurGroups(s.hooks[event]);
+        const group = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}`, timeout: 30 }] };
+        if (matcher) group.matcher = matcher;
+        s.hooks[event] = [...kept, group];
+      }
+      s.permissions ??= {};
+      const current = Array.isArray(s.permissions.deny) ? s.permissions.deny : [];
+      const owned = previous.deny ?? [];
+      const retired = /* @__PURE__ */ new Set([...owned.filter((r) => !CC_DENY_RULES.includes(r)), ...retiredRulesToRemove(current, owned)]);
+      const deny2 = current.filter((r) => !retired.has(r));
+      added.push(...CC_DENY_RULES.filter((r) => !deny2.includes(r)));
+      adopted.push(...unrecordedLegacyRules(current, previous.deny));
+      s.permissions.deny = [...deny2, ...added];
+    },
+    { within }
+  );
   editJsonFile(
     ownershipPath,
     (state) => {
       state.deny = [.../* @__PURE__ */ new Set([...previous.deny ?? [], ...added, ...adopted])].filter((r) => CC_DENY_RULES.includes(r));
     },
-    { latestBackupOnly: true }
+    { latestBackupOnly: true, within }
   );
   return report;
 }
-function uninstallClaudeCode({ settingsPath }) {
-  const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
+function uninstallClaudeCode({ settingsPath, root }) {
+  const { ownershipPath, within } = settingsTree(settingsPath, root);
   const recorded = existsSync5(ownershipPath) ? JSON.parse(readFileSync8(ownershipPath, "utf8")).deny ?? [] : void 0;
-  const report = editJsonFile(settingsPath, (s) => {
-    if (s.hooks && typeof s.hooks === "object") {
-      for (const { event } of EVENTS) {
-        const kept = withoutOurGroups(s.hooks[event]);
-        if (kept.length > 0) s.hooks[event] = kept;
-        else delete s.hooks[event];
+  const report = editJsonFile(
+    settingsPath,
+    (s) => {
+      if (s.hooks && typeof s.hooks === "object") {
+        for (const { event } of EVENTS) {
+          const kept = withoutOurGroups(s.hooks[event]);
+          if (kept.length > 0) s.hooks[event] = kept;
+          else delete s.hooks[event];
+        }
+        if (Object.keys(s.hooks).length === 0) delete s.hooks;
       }
-      if (Object.keys(s.hooks).length === 0) delete s.hooks;
-    }
-    if (Array.isArray(s.permissions?.deny)) {
-      const deny2 = s.permissions.deny;
-      const owned = [...recorded ?? [], ...unrecordedLegacyRules(deny2, recorded)];
-      s.permissions.deny = deny2.filter((r) => !(typeof r === "string" && owned.includes(r)));
-      if (s.permissions.deny.length === 0) delete s.permissions.deny;
-      if (Object.keys(s.permissions).length === 0) delete s.permissions;
-    }
-  });
+      if (Array.isArray(s.permissions?.deny)) {
+        const deny2 = s.permissions.deny;
+        const owned = [...recorded ?? [], ...unrecordedLegacyRules(deny2, recorded)];
+        s.permissions.deny = deny2.filter((r) => !(typeof r === "string" && owned.includes(r)));
+        if (s.permissions.deny.length === 0) delete s.permissions.deny;
+        if (Object.keys(s.permissions).length === 0) delete s.permissions;
+      }
+    },
+    { within }
+  );
   if (existsSync5(ownershipPath)) rmSync4(ownershipPath);
   return report;
 }
@@ -9887,7 +9918,7 @@ function uninstallClaudeCode({ settingsPath }) {
 import { createHash as createHash4 } from "crypto";
 import { copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync3 } from "fs";
 import { homedir as homedir6 } from "os";
-import { join as join10, resolve as resolve6 } from "path";
+import { dirname as dirname8, join as join10, resolve as resolve6 } from "path";
 
 // src/install/toml-touch.ts
 var BLOCK_START = "# >>> secretgate managed >>>";
@@ -10194,6 +10225,12 @@ function codexWiringStatus(codexDir) {
     return { trusted: 0, expected: 0, feature: false };
   }
 }
+function codexTree(codexDir) {
+  const within = [homedir6(), dirname8(resolve6(codexDir))];
+  assertWithin(join10(codexDir, "hooks.json"), within);
+  assertWithin(join10(codexDir, "config.toml"), within);
+  return within;
+}
 function writeTextWithBackup(path, content) {
   if (existsSync6(path)) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
@@ -10207,18 +10244,23 @@ function withoutStaleTrust(content, hooksPath, ours, keep) {
 }
 function installCodex({ codexDir, command }) {
   mkdirSync6(codexDir, { recursive: true });
+  const within = codexTree(codexDir);
   const hooksPath = join10(realpathSync3(codexDir), "hooks.json");
-  const hooksReport = editJsonFile(hooksPath, (root) => {
-    root.hooks ??= {};
-    for (const { event, arg, matcher } of EVENTS2) {
-      const kept = withoutOurGroups2(root.hooks[event]);
-      const group = {
-        hooks: [{ type: "command", command: `${command} hook codex ${arg}`, timeout: 30, statusMessage: "secretgate" }]
-      };
-      if (matcher) group.matcher = matcher;
-      root.hooks[event] = [...kept, group];
-    }
-  });
+  const hooksReport = editJsonFile(
+    hooksPath,
+    (root) => {
+      root.hooks ??= {};
+      for (const { event, arg, matcher } of EVENTS2) {
+        const kept = withoutOurGroups2(root.hooks[event]);
+        const group = {
+          hooks: [{ type: "command", command: `${command} hook codex ${arg}`, timeout: 30, statusMessage: "secretgate" }]
+        };
+        if (matcher) group.matcher = matcher;
+        root.hooks[event] = [...kept, group];
+      }
+    },
+    { within }
+  );
   const configPath = join10(codexDir, "config.toml");
   const current = existsSync6(configPath) ? readFileSync9(configPath, "utf8") : "";
   const featureEdit = enableHooksFeature(current);
@@ -10245,21 +10287,26 @@ function installCodex({ codexDir, command }) {
   };
 }
 function uninstallCodex({ codexDir }) {
+  const within = codexTree(codexDir);
   const hooksPath = existsSync6(codexDir) ? join10(realpathSync3(codexDir), "hooks.json") : resolve6(codexDir, "hooks.json");
   const ours = existsSync6(hooksPath) ? ourHookTrustEntries(hooksPath) : [];
   const trustKeys = ours.map((entry) => entry.key);
   let hooksReport = { path: hooksPath, changed: false };
   if (existsSync6(hooksPath)) {
-    hooksReport = editJsonFile(hooksPath, (root) => {
-      if (root.hooks && typeof root.hooks === "object") {
-        for (const { event } of EVENTS2) {
-          const kept = withoutOurGroups2(root.hooks[event]);
-          if (kept.length > 0) root.hooks[event] = kept;
-          else delete root.hooks[event];
+    hooksReport = editJsonFile(
+      hooksPath,
+      (root) => {
+        if (root.hooks && typeof root.hooks === "object") {
+          for (const { event } of EVENTS2) {
+            const kept = withoutOurGroups2(root.hooks[event]);
+            if (kept.length > 0) root.hooks[event] = kept;
+            else delete root.hooks[event];
+          }
+          if (Object.keys(root.hooks).length === 0) delete root.hooks;
         }
-        if (Object.keys(root.hooks).length === 0) delete root.hooks;
-      }
-    });
+      },
+      { within }
+    );
   }
   const configPath = join10(codexDir, "config.toml");
   let configChanged = false;
@@ -10283,7 +10330,7 @@ function uninstallCodex({ codexDir }) {
 // src/install/opencode.ts
 import { copyFileSync as copyFileSync3, existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync10, rmSync as rmSync5 } from "fs";
 import { homedir as homedir7 } from "os";
-import { dirname as dirname7, join as join11 } from "path";
+import { dirname as dirname9, join as join11 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
   const custom = process.env.OPENCODE_CONFIG_DIR;
@@ -10311,7 +10358,7 @@ function installOpencode(options) {
     }
     if (existing === content) return { path: target, changed: removeStalePlugin(configDir) };
   }
-  mkdirSync7(dirname7(target), { recursive: true });
+  mkdirSync7(dirname9(target), { recursive: true });
   writeFileAtomic(target, content, 420);
   removeStalePlugin(configDir);
   return { path: target, changed: true };
@@ -10336,6 +10383,7 @@ function uninstallOpencode({ configDir }) {
   for (const name of ["opencode.json", "opencode.jsonc"]) {
     const path = join11(configDir, name);
     if (!existsSync7(path)) continue;
+    assertWithin(path, [homedir7(), dirname9(configDir)]);
     const text = withoutNpmPin(path);
     if (text !== void 0) edits.push({ path, text });
   }
@@ -10355,7 +10403,7 @@ function uninstallOpencode({ configDir }) {
 
 // src/self.ts
 import { chmodSync as chmodSync2, copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync6 } from "fs";
-import { basename as basename6, delimiter as delimiter2, dirname as dirname8, isAbsolute as isAbsolute4, join as join12 } from "path";
+import { basename as basename6, delimiter as delimiter2, dirname as dirname10, isAbsolute as isAbsolute4, join as join12 } from "path";
 import { fileURLToPath } from "url";
 function currentContext() {
   const modulePath = fileURLToPath(import.meta.url);
@@ -10406,7 +10454,7 @@ function runningInvocation(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   if (form === "binary") return { file: ctx.execPath, args: [] };
   if (form === "bundle") return { file: ctx.execPath, args: [ctx.modulePath] };
-  return { file: "node", args: [join12(dirname8(ctx.modulePath), "main.ts")] };
+  return { file: "node", args: [join12(dirname10(ctx.modulePath), "main.ts")] };
 }
 function samePath(a, b) {
   try {
@@ -10430,7 +10478,7 @@ function pinSelf(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   if (form === "dev") return selfInvocation(ctx);
   const [source, target] = form === "binary" ? [ctx.execPath, pinnedBinaryPath(ctx.home)] : [ctx.modulePath, pinnedBundlePath(ctx.home)];
-  mkdirSync8(dirname8(target), { recursive: true, mode: 448 });
+  mkdirSync8(dirname10(target), { recursive: true, mode: 448 });
   if (!samePath(source, target)) atomicCopy(source, target);
   return form === "binary" ? { file: target, args: [] } : { file: ctx.execPath, args: [target] };
 }
@@ -11003,7 +11051,7 @@ function parseAgentFlags(args, io) {
 }
 function opencodePlugin() {
   if (embeddedOpencodePlugin !== void 0) return { pluginContent: embeddedOpencodePlugin };
-  const selfDir = dirname9(fileURLToPath2(import.meta.url));
+  const selfDir = dirname11(fileURLToPath2(import.meta.url));
   const candidates = [join13(selfDir, "secretgate-opencode.mjs"), join13(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
   const found = candidates.find((c) => existsSync9(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
@@ -11042,7 +11090,7 @@ function installForAgents(flags, io) {
       if (flags.project && projectSettingsAliasesGlobal()) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
-      mkdirSync9(dirname9(settingsPath), { recursive: true });
+      mkdirSync9(dirname11(settingsPath), { recursive: true });
       const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
 `);
@@ -11355,7 +11403,7 @@ async function cmdUninstall(args, io) {
 `);
     }
   } catch (err) {
-    if (err instanceof SettingsParseError) {
+    if (err instanceof SettingsParseError || err instanceof SettingsLinkError) {
       io.stderr(`${err.message}
 `);
       return 2;

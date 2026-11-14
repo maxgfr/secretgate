@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyEdits, modify, type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import { rewriteFileAtomic, writeFileAtomic } from "../fs-atomic.js";
-import { type EditReport, SettingsParseError } from "./json-merge.js";
+import { assertWithin, type EditReport, SettingsParseError } from "./json-merge.js";
 
 // OpenCode install = copy the self-contained plugin bundle to
 // <config>/plugins/secretgate.js. secretgate is distributed as a skill, not an
@@ -84,6 +84,8 @@ export function uninstallOpencode({ configDir }: { configDir: string }): EditRep
   for (const name of ["opencode.json", "opencode.jsonc"]) {
     const path = join(configDir, name);
     if (!existsSync(path)) continue;
+    // The user's own file: a link may lead into the home directory, no further.
+    assertWithin(path, [homedir(), dirname(configDir)]);
     const text = withoutNpmPin(path);
     if (text !== undefined) edits.push({ path, text });
   }
