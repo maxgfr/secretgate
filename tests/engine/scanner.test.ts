@@ -350,10 +350,12 @@ describe("scan — wall-clock budget (anti-hang)", () => {
   });
 });
 
-// Classes of false positives found on real files (docs/model-comparison.md,
-// section 5): values that say themselves they are not a usable secret. Each
-// filter has its counter-examples next to it: none may cost a detection.
-describe("scan — values that are not secrets by their own account", () => {
+// A false redaction costs almost nothing here (the value is restored
+// locally); a miss is a leak. So a value is dropped only when the text makes
+// it structurally certain that it is public or not a credential: its own name
+// says so, it is its own variable name, or it carries a documented public
+// prefix. What a value merely LOOKS like decides nothing.
+describe("scan — a value is dropped only when the text makes it certain", () => {
   const none = (texts: string[]) => {
     for (const text of texts) expect(scan(text), text).toEqual([]);
   };
@@ -361,22 +363,24 @@ describe("scan — values that are not secrets by their own account", () => {
     for (const text of texts) expect(scan(text).length, text).toBeGreaterThan(0);
   };
 
-  it("skips a value made only of placeholder words", () => {
-    none([
+  // These were dropped for a while, on the look of the value alone. Each is a
+  // password or a key somebody may really have.
+  it("flags a value made of dictionary words, partly masked, or ending in EXAMPLE", () => {
+    const upper = FAKE.genericSecret.toUpperCase();
+    some([
+      'DB_PASSWORD="MySuperSecretPassword"',
+      'password = "TopSecretAdminPassword"',
       "headers: { 'X-TOKEN-SECRET': 'SuperSecretToken' },",
-      'api_key: "super-secret-key".into(),',
       'secret = "your-api-key-here"',
-      'client_secret = "YOUR_API_KEY"',
-      'password = "MySecretPassword"',
-      'auth_token = "not-a-real-token"',
+      `postgres://app:${"SuperSecret" + "Password"}@db.internal:5432/app`,
+      'password = "Tr0ub4dor****x9Qz"',
+      `postgres://app:${"hunter****" + "9Xq"}@db.internal/app`,
+      `api_key = "${upper}EXAMPLE"`,
+      'secret = "Q7R2M3XB4WPZ6TK' + 'EXAMPLE"',
     ]);
-    // One word outside the vocabulary, a digit or a symbol, and it is a value again.
-    some(['password = "SuperSecretTokyo"', 'password = "SuperSecretToken9"', 'api_key = "super-secret-key!"', 'secret = "correcthorsebatterystaple"']);
-  });
-
-  it("skips a value that ends in EXAMPLE or is partly masked", () => {
-    none([`openai_api_key = "${`${FAKE.awsKeyId.slice(0, 13)}EXAMPLE`}"`, `password = "SG.${FAKE.genericSecret.slice(0, 20)}${"*".repeat(13)}"`]);
-    some([`openai_api_key = "${FAKE.awsKeyId.slice(0, 13)}EXAMPLe"`, `password = "SG.${FAKE.genericSecret.slice(0, 20)}***"`]);
+    expect(scan(`token ${"ghp_" + "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC" + "EXAMPLE"}`).map((f) => f.ruleId)).toEqual(["github-pat"]);
+    // What upstream documents stays: AWS's own example key id, and the base placeholders.
+    none([`aws_access_key_id = ${"AKIA" + "IOSFODNN7" + "EXAMPLE"}`, 'password = "changeme"', 'password = "********"']);
   });
 
   it("skips a value that only restates the name it is assigned to", () => {
@@ -388,8 +392,8 @@ describe("scan — values that are not secrets by their own account", () => {
     const hex40 = "9554F04D7259F04124DE" + "6B476D5A82AC7E37093B";
     const b64 = "pL1+qb9HTMRZJmuC/bB/ZI" + "9d302BYrrqiVuRyW+DGrU=";
     none([
-      `- Release GPG key: ${hex40}`,
       ` *   Public key ping-sha256: ${b64}`,
+      `public key: ${FAKE.genericSecret}`,
       `ssh_public_key = "${FAKE.genericSecret}"`,
       `key_fingerprint = "${hex40.toLowerCase().slice(0, 32)}"`,
       `\tkeyFingerprint := "${hex40.toLowerCase().slice(0, 32)}"`,
@@ -406,8 +410,13 @@ describe("scan — values that are not secrets by their own account", () => {
       `cache_encryption_key = "${FAKE.genericSecret}"`,
       `public_keystore_password = "${FAKE.genericSecret}"`,
       `gpg_key_passphrase: "${FAKE.genericSecret}"`,
-      `- Release GPG key: ${FAKE.githubPat}`,
-      `- Release GPG key: ${FAKE.genericSecret}`,
+      // A credential word anywhere in the name takes the exemption back.
+      `public_key_secret = "${FAKE.genericSecret}"`,
+      `api_secret_cache_key = "${FAKE.genericSecret}"`,
+      `token_fingerprint = "${FAKE.genericSecret}"`,
+      // "GPG key" says nothing certain about the value: a fingerprint looks like any hex key.
+      `- Release GPG key: ${hex40}`,
+      `gpg_key = "${hex40}"`,
     ]);
   });
 
@@ -415,7 +424,8 @@ describe("scan — values that are not secrets by their own account", () => {
     const body = FAKE.genericSecret + FAKE.genericSecret;
     none([`stripe_publishable_key = pk_test_${body}`, `      - NEXT_PUBLIC_STRIPE_KEY=pk_live_${body}`, `\tstripeKey := "pk_live_${body}"`]);
     expect(scan(`stripe_key = sk_live_${body}`).map((f) => f.ruleId)).toEqual(["stripe-access-token"]);
-    some([`stripe_key = pk_prod_${body}`, `api_key = "xpk_test_${body}"`]);
+    // The whole value has to be a publishable key, not merely to start like one.
+    some([`stripe_key = pk_prod_${body}`, `api_key = "xpk_test_${body}"`, `api_key = "pk_live_${body}:${body}"`, `api_key = "pk_live_${body}/extra!"`]);
   });
 
   it("skips a GitHub token no generator would produce: one character eight times in a row", () => {

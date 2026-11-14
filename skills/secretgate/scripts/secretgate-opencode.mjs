@@ -8082,26 +8082,11 @@ function looksLikeInterpolation(v) {
   /^%\([A-Za-z_]\w*\)[a-z]$/.test(v) || // printf mapping %(db_password)s
   /^<%=?[\s\S]*%>$/.test(v);
 }
-var DESCRIBING_WORDS = /* @__PURE__ */ new Set([
-  ...["a", "an", "the", "my", "your", "our", "this", "that", "is", "not", "no", "real", "super", "very", "top", "some", "any"],
-  ...["secret", "secrets", "token", "tokens", "key", "keys", "api", "apikey", "password", "passwd", "pass", "pwd", "passphrase"],
-  ...["credential", "credentials", "auth", "access", "private", "client", "user", "admin", "service", "account", "bearer"],
-  ...["test", "testing", "example", "sample", "demo", "dummy", "fake", "mock", "foo", "bar", "baz", "value", "string", "text"],
-  ...["here", "goes", "change", "me", "changeme", "replace", "insert", "enter", "put", "with", "placeholder", "todo", "default"]
-]);
-function onlyDescribesItself(v) {
-  if (v.length > 64 || !/^[A-Za-z][A-Za-z _.-]*$/.test(v)) return false;
-  const words = v.split(/[ _.-]+|(?<=[a-z])(?=[A-Z])/).filter((w) => w !== "");
-  return words.length >= 2 && words.every((w) => DESCRIBING_WORDS.has(w.toLowerCase()));
-}
 function looksLikePlaceholder(raw) {
   const v = unquote(raw);
   const low = v.toLowerCase();
   if (PLACEHOLDER_WORDS.has(low)) return true;
   if (/^[*x•.\-_]+$/.test(v)) return true;
-  if (/[*•]{4,}/.test(v)) return true;
-  if (/[A-Z0-9]EXAMPLE$/.test(v)) return true;
-  if (onlyDescribesItself(v)) return true;
   if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true;
   if (looksLikeInterpolation(v.trim())) return true;
   if (/^%[a-z_]+%$/i.test(v)) return true;
@@ -8124,18 +8109,22 @@ function assignedName(text, lineStart, valueStart) {
   return phrase.split(/[ \t]+/).filter((w) => w !== "");
 }
 var alnum = (v) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
-var PUBLIC_NAME = /(?:pub(?:lic)?[ _.-]?key|(?:gpg|pgp)[ _.-]?key|cache[ _.-]?key|fingerprint)(s?)(?![a-z])/i;
-var CREDENTIAL_WORD = /key|api|secret|token|passw|passphrase|private|credential|auth/i;
+var PUBLIC_NAME = /(?:pub(?:lic)?[ _.-]?key|cache[ _.-]?key|fingerprint)(s?)(?![a-z])/i;
+var CREDENTIAL_WORD = /secret|token|passw|passphrase|private|credential|auth/i;
+var CREDENTIAL_WORD_AFTER = /key|api/i;
 function namedPublic(name) {
   const label = name.slice(-3).join(" ");
   const m = PUBLIC_NAME.exec(label);
-  return m !== null && !CREDENTIAL_WORD.test(label.slice(m.index + m[0].length));
+  if (m === null) return false;
+  const before = label.slice(0, m.index);
+  const after = label.slice(m.index + m[0].length);
+  return !CREDENTIAL_WORD.test(before) && !CREDENTIAL_WORD.test(after) && !CREDENTIAL_WORD_AFTER.test(after);
 }
 function notASecretInContext(secret, name) {
+  const value = unquote(secret);
   const last = name[name.length - 1];
-  if (last !== void 0 && alnum(last).length >= 6 && alnum(last) === alnum(unquote(secret))) return true;
-  if (/^pk_(?:test|live)_/.test(unquote(secret))) return true;
-  if (/(?:gpg|pgp)[ _.-]?key/i.test(name.slice(-3).join(" ")) && !/^[0-9A-Fa-f \t]+$/.test(unquote(secret))) return false;
+  if (last !== void 0 && alnum(last).length >= 6 && alnum(last) === alnum(value)) return true;
+  if (/^pk_(?:test|live)_[A-Za-z0-9]+$/.test(value)) return true;
   return namedPublic(name);
 }
 var GITHUB_TOKEN_RULES = /* @__PURE__ */ new Set(["github-pat", "github-fine-grained-pat", "github-oauth", "github-app-token", "github-refresh-token"]);

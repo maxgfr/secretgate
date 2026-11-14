@@ -165,34 +165,11 @@ function looksLikeInterpolation(v: string): boolean {
   );
 }
 
-// Words a documentation value is made of when it only describes what belongs
-// there: `SuperSecretToken`, `your-api-key-here`, `not-a-real-password`.
-const DESCRIBING_WORDS = new Set([
-  ...["a", "an", "the", "my", "your", "our", "this", "that", "is", "not", "no", "real", "super", "very", "top", "some", "any"],
-  ...["secret", "secrets", "token", "tokens", "key", "keys", "api", "apikey", "password", "passwd", "pass", "pwd", "passphrase"],
-  ...["credential", "credentials", "auth", "access", "private", "client", "user", "admin", "service", "account", "bearer"],
-  ...["test", "testing", "example", "sample", "demo", "dummy", "fake", "mock", "foo", "bar", "baz", "value", "string", "text"],
-  ...["here", "goes", "change", "me", "changeme", "replace", "insert", "enter", "put", "with", "placeholder", "todo", "default"],
-]);
-
-// A value written with letters and separators only, in which EVERY word
-// describes a credential or a placeholder. One word from outside the list, a
-// digit or a symbol, and it is a value again: a passphrase is not made of
-// "secret", "token" and "key" alone.
-function onlyDescribesItself(v: string): boolean {
-  if (v.length > 64 || !/^[A-Za-z][A-Za-z _.-]*$/.test(v)) return false;
-  const words = v.split(/[ _.-]+|(?<=[a-z])(?=[A-Z])/).filter((w) => w !== "");
-  return words.length >= 2 && words.every((w) => DESCRIBING_WORDS.has(w.toLowerCase()));
-}
-
 function looksLikePlaceholder(raw: string): boolean {
   const v = unquote(raw);
   const low = v.toLowerCase();
   if (PLACEHOLDER_WORDS.has(low)) return true;
   if (/^[*x•.\-_]+$/.test(v)) return true; // masked ***, xxxx, ----
-  if (/[*•]{4,}/.test(v)) return true; // partly masked: sk-abcd************
-  if (/[A-Z0-9]EXAMPLE$/.test(v)) return true; // the documentation convention AWS set
-  if (onlyDescribesItself(v)) return true;
   if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true; // ${VAR} / $VAR interpolation
   if (looksLikeInterpolation(v.trim())) return true;
   if (/^%[a-z_]+%$/i.test(v)) return true; // %VAR%
@@ -230,11 +207,17 @@ function looksLikeFilesystemPath(raw: string): boolean {
 }
 
 // ---------------------------------------------------------------- context
-// Filters for the two rules that trust a NAME (`generic-api-key` and
-// `password-assignment` flag whatever follows a credential-sounding word).
-// They read the name the value is assigned to: the words right before the
-// operator, on the same line. Only that name counts — a neighbouring
-// `"public_key": …` says nothing about the `"private_key"` next to it.
+// A false redaction costs little (the value is restored locally) and a miss is
+// a leak, so a finding is dropped only when the text makes it CERTAIN that the
+// value is public or not a credential. What the value looks like (dictionary
+// words, a masked middle, an EXAMPLE suffix) is never enough: somebody's real
+// password looks like that too.
+//
+// The two rules that trust a NAME (`generic-api-key` and `password-assignment`
+// flag whatever follows a credential-sounding word) read the name the value
+// is assigned to: the words right before the operator, on the same line. Only
+// that name counts — a neighbouring `"public_key": …` says nothing about the
+// `"private_key"` next to it.
 const NAME_TRUSTING_RULES = new Set(["generic-api-key", "password-assignment"]);
 
 function assignedName(text: string, lineStart: number, valueStart: number): string[] {
@@ -246,30 +229,34 @@ function assignedName(text: string, lineStart: number, valueStart: number): stri
 
 const alnum = (v: string): string => v.toLowerCase().replace(/[^a-z0-9]/g, "");
 
-// What a name says is public or a mere identifier: a public key, a PGP key
-// (40 hex digits after "GPG key" are its fingerprint), a fingerprint, a cache
-// key. A credential word AFTER it takes the exemption back: `fingerprint_api_key`,
-// `public_keystore_password` and `gpg_key_passphrase` name secrets.
-const PUBLIC_NAME = /(?:pub(?:lic)?[ _.-]?key|(?:gpg|pgp)[ _.-]?key|cache[ _.-]?key|fingerprint)(s?)(?![a-z])/i;
-const CREDENTIAL_WORD = /key|api|secret|token|passw|passphrase|private|credential|auth/i;
+// What a name says is public or a mere identifier: a public key, a
+// fingerprint, a cache key. A credential word elsewhere in the name takes the
+// exemption back: `api_secret_cache_key`, `public_key_secret`,
+// `fingerprint_api_key` and `public_keystore_password` name secrets.
+const PUBLIC_NAME = /(?:pub(?:lic)?[ _.-]?key|cache[ _.-]?key|fingerprint)(s?)(?![a-z])/i;
+const CREDENTIAL_WORD = /secret|token|passw|passphrase|private|credential|auth/i;
+const CREDENTIAL_WORD_AFTER = /key|api/i;
 
 function namedPublic(name: string[]): boolean {
-  // The last few words: "Release GPG key", "Public key ping-sha256".
+  // The last few words: "Public key ping-sha256".
   const label = name.slice(-3).join(" ");
   const m = PUBLIC_NAME.exec(label);
-  return m !== null && !CREDENTIAL_WORD.test(label.slice(m.index + m[0].length));
+  if (m === null) return false;
+  const before = label.slice(0, m.index);
+  const after = label.slice(m.index + m[0].length);
+  return !CREDENTIAL_WORD.test(before) && !CREDENTIAL_WORD.test(after) && !CREDENTIAL_WORD_AFTER.test(after);
 }
 
 function notASecretInContext(secret: string, name: string[]): boolean {
+  const value = unquote(secret);
   // The "value" is the name again: a `…KeysLength` variable that is assigned
   // the `.length` of the keys. (Spelled out, that line would trip gitleaks'
   // generic rule when it scans this file.)
   const last = name[name.length - 1];
-  if (last !== undefined && alnum(last).length >= 6 && alnum(last) === alnum(unquote(secret))) return true;
-  // Stripe publishable keys are made to be shipped to browsers.
-  if (/^pk_(?:test|live)_/.test(unquote(secret))) return true;
-  // A PGP fingerprint is hex; anything else after "GPG key" is judged as usual.
-  if (/(?:gpg|pgp)[ _.-]?key/i.test(name.slice(-3).join(" ")) && !/^[0-9A-Fa-f \t]+$/.test(unquote(secret))) return false;
+  if (last !== undefined && alnum(last).length >= 6 && alnum(last) === alnum(value)) return true;
+  // Stripe publishable keys are made to be shipped to browsers — the whole
+  // value, not one that merely starts like a publishable key.
+  if (/^pk_(?:test|live)_[A-Za-z0-9]+$/.test(value)) return true;
   return namedPublic(name);
 }
 
