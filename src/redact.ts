@@ -13,21 +13,40 @@ export interface RedactResult {
 // replaced right-to-left so earlier offsets stay valid. Redaction guards text
 // bound for a model, so inline allow pragmas are ignored unless asked for:
 // the text being redacted is exactly what could carry a forged one.
+//
+// The result is a fixed point: scanned again, it holds no finding. The text is
+// scanned again further on (by the hook that runs before the next model
+// request, by the history scan), and what is let through here must not be a
+// secret there. The engine is built to settle in one pass; the extra rounds
+// are the guarantee, not the mechanism.
+const MAX_ROUNDS = 3;
+
 export function redactText(text: string, vault: Vault, source: string, cfg: ScanConfig = {}): RedactResult {
-  const findings = scan(text, { ...cfg, pragmas: cfg.pragmas ?? false });
+  const deadline = cfg.deadlineMs !== undefined ? performance.now() + cfg.deadlineMs : undefined;
+  const scanNow = (t: string): Finding[] =>
+    scan(t, { ...cfg, pragmas: cfg.pragmas ?? false, ...(deadline !== undefined ? { deadlineMs: deadline - performance.now() } : {}) });
+  const findings = scanNow(text);
   if (findings.length === 0) return { text, findings, replaced: [] };
-  // One vault cycle for the whole text, then one pass to rebuild it: findings
-  // come back sorted by position and never overlap.
-  const ordered = [...findings].sort((a, b) => a.start - b.start);
-  const placeholders = vault.recordSecrets(ordered.map((f) => ({ secret: f.secret, ruleId: f.ruleId, source })));
-  const pieces: string[] = [];
-  let at = 0;
-  ordered.forEach((f, i) => {
-    pieces.push(text.slice(at, f.start), placeholders[i]!);
-    at = f.end;
-  });
-  pieces.push(text.slice(at));
-  return { text: pieces.join(""), findings, replaced: ordered.map((f, i) => ({ placeholder: placeholders[i]!, ruleId: f.ruleId })) };
+  const replaced: RedactResult["replaced"] = [];
+  let current = text;
+  let found = findings;
+  for (let round = 0; found.length > 0 && round < MAX_ROUNDS; round++) {
+    // One vault cycle for the whole text, then one pass to rebuild it: findings
+    // come back sorted by position and never overlap.
+    const ordered = [...found].sort((a, b) => a.start - b.start);
+    const placeholders = vault.recordSecrets(ordered.map((f) => ({ secret: f.secret, ruleId: f.ruleId, source })));
+    const pieces: string[] = [];
+    let at = 0;
+    ordered.forEach((f, i) => {
+      pieces.push(current.slice(at, f.start), placeholders[i]!);
+      at = f.end;
+      replaced.push({ placeholder: placeholders[i]!, ruleId: f.ruleId });
+    });
+    pieces.push(current.slice(at));
+    current = pieces.join("");
+    found = scanNow(current);
+  }
+  return { text: current, findings, replaced };
 }
 
 export interface RestoreResult {

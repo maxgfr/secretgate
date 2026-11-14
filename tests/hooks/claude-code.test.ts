@@ -331,6 +331,37 @@ describe("PostToolBatch — results no hook could redact", () => {
     session = "s1";
   });
 
+  // PostToolUse and this hook scan the same text with the same engine: what
+  // the first lets through, the second must not stop on. The placeholder's
+  // text used to count as a credential-sounding NAME for what followed it.
+  it("reaches the verdict PostToolUse reached on the output it redacted", async () => {
+    const random = FAKE.genericSecret;
+    const awsSecret = "wJalrXUtnFEMI" + "/K7MDENG/" + "bPxRfiCYzQ9kT4mB2x";
+    for (const [stdout, alsoGone] of [
+      [`${FAKE.githubPat}: ${random}`, random],
+      [`${FAKE.githubPat}=${random}`, random],
+      [`${FAKE.awsKeyId},${random}`, random],
+      [`Access key ID,Secret access key\n${FAKE.awsKeyId},${awsSecret}\n`, awsSecret],
+      [`id,key\n1,${FAKE.githubPat} ${random}`, undefined],
+      [`pushed with ${FAKE.githubPat}: build-2026.11.14-r7xQ`, undefined],
+      [`TOKEN=${FAKE.githubPat}`, undefined],
+    ] as const) {
+      const post = await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "x" }, { stdout, stderr: "", interrupted: false, isImage: false }));
+      const redacted = JSON.parse(post.stdout).hookSpecificOutput.updatedToolOutput;
+      // The value attached to a credential is redacted in the first place.
+      if (alsoGone) expect(redacted.stdout, stdout).not.toContain(alsoGone);
+      const batch = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "Bash", tool_response: redacted.stdout }));
+      expect(batch.stdout, redacted.stdout).toBe("");
+    }
+  });
+
+  it("says what it knows when it stops: a secret is about to be sent, not why", async () => {
+    const out = JSON.parse((await handleClaudeCode("post-tool-batch", batchEvent(failed))).stdout);
+    expect(out.stopReason).toContain("still holds a secret (github-pat)");
+    expect(out.stopReason).toContain("a call that failed");
+    expect(out.stopReason).not.toContain("this one failed");
+  });
+
   it("does not stop on a result PostToolUse redacted next to punctuation", async () => {
     const redacted = JSON.parse(
       (await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "cat notes" }, { stdout: `token: ${FAKE.githubPat}.`, stderr: "" }))).stdout,

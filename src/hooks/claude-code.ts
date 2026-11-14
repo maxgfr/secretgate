@@ -336,13 +336,15 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookRes
   return updatedOutput(value);
 }
 
-// The last gate before the next model request. PostToolUse fires only for a
-// call that succeeded: the output of a failed one (a shell command exiting
-// non-zero, an MCP error result) reaches the model as the tool printed it, and
-// no hook can rewrite it. PostToolBatch receives every result of the batch as
-// the model will read it — what PostToolUse redacted arrives here redacted —
-// so a secret still found is about to be sent. It cannot be replaced either;
-// the turn can be stopped, and that is what happens.
+// The last gate before the next model request. PostToolBatch receives every
+// result of the batch as the model will read it: what PostToolUse redacted
+// arrives here redacted, and scanned by the same engine it holds no finding
+// (redactText returns a fixed point). A secret found here is one no hook
+// replaced: PostToolUse fires only for a call that succeeded, so the output of
+// a failed one (a shell command exiting non-zero, an MCP error result) reaches
+// the model as the tool printed it — or the host did not apply a replacement.
+// It cannot be replaced here either; the turn can be stopped, and that is
+// what happens.
 function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
   const calls: unknown[] = Array.isArray(input.tool_calls) ? input.tool_calls : [];
   const deadline = performance.now() + SCAN_DEADLINE_MS;
@@ -365,7 +367,7 @@ function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig): HookR
   }
   if (rules.size === 0) return PASS;
   return stopTurn(
-    `the result of ${[...tools].join(", ")} holds a secret (${[...rules].join(", ")}) that could not be redacted: Claude Code lets a hook rewrite the output of a successful call only, not of a failed one`,
+    `the result of ${[...tools].join(", ")} still holds a secret (${[...rules].join(", ")}) on its way to the model. A hook can rewrite the output of a successful call only: this is the output of a call that failed (a command that exits non-zero, a tool error), or one whose redacted output Claude Code did not apply`,
     input.session_id,
     "that result stays in this session's transcript, so start a fresh session (if the value is not a secret, `secretgate allow` it first)",
   );

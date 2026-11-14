@@ -76,6 +76,27 @@ describe("redactText", () => {
     }
   });
 
+  // What the model receives is scanned again by the hook that runs before the
+  // next request. Whatever redactText returns must hold nothing it would flag.
+  it("returns a fixed point: its own output holds no finding", () => {
+    const random = FAKE.genericSecret;
+    for (const text of [
+      `${FAKE.githubPat}: ${random}`,
+      `${FAKE.githubPat}=${random}`,
+      `${FAKE.awsKeyId},${random}`,
+      `id,key\n1,${FAKE.githubPat} ${random}`,
+      `pushed with ${FAKE.githubPat}: build-2026.11.14-r7xQ`,
+      `${FAKE.awsKeyId},${random},${random.split("").reverse().join("")}`,
+      `auth_token = "${FAKE.githubPat}:1234"`,
+      `{"a":"${FAKE.githubPat}","b":"${random}"}`,
+      `url: https://svc:${random}@host/x, token: ${FAKE.githubPat}.`,
+    ]) {
+      const once = redactText(text, vault, "test");
+      expect(redactText(once.text, vault, "test").findings, once.text).toEqual([]);
+      expect(restorePlaceholders(once.text, vault).text, text).toBe(text);
+    }
+  });
+
   it("still redacts what is added around a placeholder", () => {
     const first = redactText(`key: ${FAKE.awsKeyId}`, vault, "test").text.slice("key: ".length);
     const composed = `password = "${first}:Zx9kLm2Qw8rT5yU"`;

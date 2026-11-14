@@ -499,7 +499,12 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
   }
 
-  const lower = text.toLowerCase();
+  // The rules read a copy in which each placeholder is blanked: its text holds
+  // the word "secret", which the generic rule would take for a
+  // credential-sounding NAME in front of whatever follows it. Offsets are the
+  // same in both, and every value is taken from the text itself.
+  const subject = text.includes("SECRETGATE_") ? text.replace(PLACEHOLDER, (p) => "_".repeat(p.length)) : text;
+  const lower = subject.toLowerCase();
   const starts = lineStarts(text);
   const pragmaLines = cfg.pragmas === false ? new Set<number>() : pragmaAllowedLines(text);
   const findings: Finding[] = [];
@@ -516,14 +521,16 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
 
     rule.re.lastIndex = 0;
-    for (const match of text.matchAll(rule.re)) {
-      const { secret, start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
+    for (const match of subject.matchAll(rule.re)) {
+      const { start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
+      const secret = text.slice(start, end);
+      const fullMatch = text.slice(match.index, match.index + match[0].length);
       if (secret.length === 0) continue;
       if (alreadyRedacted(secret)) continue; // our own marker
       // Every gate below must pass, so the cheap, rule-specific ones (Luhn,
       // IIN, the URL username) run before the ones that search shared tables.
       if (rule.post && !rule.post(secret)) continue;
-      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
+      if (rule.postMatch && !rule.postMatch(secret, fullMatch)) continue;
       if (isRuleSourceText(secret)) continue; // our own detection patterns
       // PLACEHOLDER_WORDS encodes "this string is not a real secret", so it
       // holds no matter which rule matched. It used to be consulted only by
@@ -541,7 +548,6 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
       if (pragmaLines.has(line)) continue;
       if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(text, starts[line]!, start))) continue;
 
-      const fullMatch = match[0];
       let allowed = false;
       for (const a of rule.allowlists) {
         const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText(text, starts, line) : secret;
@@ -559,7 +565,49 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     }
   }
 
-  return dedupe(findings, text);
+  const kept = dedupe(findings, text);
+  if (isDisabledRule(PAIRED_RULE, cfg.allowlist)) return kept;
+  return withPairedValues(kept, text, starts, pragmaLines, cfg);
+}
+
+// ---------------------------------------------------------------- pairs
+// A value attached to a credential is the other half of it: the secret key
+// after the key id in an AWS credentials CSV row, `<client id>:<client secret>`.
+// No name announces it; the credential next to it does. An existing
+// placeholder counts as a credential too, so a text gets the same verdict
+// before and after its first half was redacted — the hook that scans the
+// output and the one that scans it again before the next request agree.
+// The gates are the generic rule's own, without its lists of words: 16
+// characters or more, an entropy above 3.5, not letters alone, not a path.
+const PAIRED_RULE = "paired-credential";
+const PAIRED_VALUE = /["'`]?[ \t]{0,3}[:=,][ \t]{0,3}["'`]?([A-Za-z0-9+/=_.-]{16,200})(?![A-Za-z0-9+/=_-])/y;
+const PAIRED_ENTROPY = 3.5;
+
+function withPairedValues(findings: Finding[], text: string, starts: number[], pragmaLines: Set<number>, cfg: ScanConfig): Finding[] {
+  const anchors: Array<{ start: number; end: number }> = findings.map((f) => ({ start: f.start, end: f.end }));
+  if (text.includes("SECRETGATE_")) for (const m of text.matchAll(PLACEHOLDER)) anchors.push({ start: m.index, end: m.index + m[0].length });
+  if (anchors.length === 0) return findings;
+  const taken = [...anchors];
+  const paired: Finding[] = [];
+  // A paired value is a credential in turn: `<id>,<secret>,<token>`.
+  for (let i = 0; i < anchors.length; i++) {
+    PAIRED_VALUE.lastIndex = anchors[i]!.end;
+    const m = PAIRED_VALUE.exec(text);
+    if (!m) continue;
+    const secret = m[1]!;
+    const start = m.index + m[0].length - secret.length;
+    const end = start + secret.length;
+    if (taken.some((t) => t.start < end && start < t.end)) continue;
+    if (/^[A-Za-z_.-]+$/.test(secret) || looksLikeFilesystemPath(secret) || looksLikePlaceholder(secret) || isRuleSourceText(secret)) continue;
+    const entropy = shannonEntropy(secret);
+    if (entropy <= PAIRED_ENTROPY) continue;
+    const line = lineAt(starts, start);
+    if (pragmaLines.has(line) || isAllowedValue(secret, cfg.allowlist)) continue;
+    paired.push({ ruleId: PAIRED_RULE, match: m[0], secret, start, end, entropy, line });
+    anchors.push({ start, end });
+    taken.push({ start, end });
+  }
+  return paired.length === 0 ? findings : [...findings, ...paired].sort((a, b) => a.start - b.start);
 }
 
 // When two findings' secret spans overlap, one finding is kept and it must

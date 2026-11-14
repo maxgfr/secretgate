@@ -8867,7 +8867,8 @@ function scan(text, cfg = {}) {
     if (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath))) return [];
     if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
   }
-  const lower = text.toLowerCase();
+  const subject = text.includes("SECRETGATE_") ? text.replace(PLACEHOLDER, (p) => "_".repeat(p.length)) : text;
+  const lower = subject.toLowerCase();
   const starts = lineStarts(text);
   const pragmaLines = cfg.pragmas === false ? /* @__PURE__ */ new Set() : pragmaAllowedLines(text);
   const findings = [];
@@ -8878,12 +8879,14 @@ function scan(text, cfg = {}) {
     if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
     rule.re.lastIndex = 0;
-    for (const match of text.matchAll(rule.re)) {
-      const { secret, start, end } = pickSecret(match, rule.secretGroup);
+    for (const match of subject.matchAll(rule.re)) {
+      const { start, end } = pickSecret(match, rule.secretGroup);
+      const secret = text.slice(start, end);
+      const fullMatch = text.slice(match.index, match.index + match[0].length);
       if (secret.length === 0) continue;
       if (alreadyRedacted(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
-      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
+      if (rule.postMatch && !rule.postMatch(secret, fullMatch)) continue;
       if (isRuleSourceText(secret)) continue;
       if (looksLikePlaceholder(secret)) continue;
       if (GITHUB_TOKEN_RULES.has(rule.id) && EIGHT_IN_A_ROW.test(secret)) continue;
@@ -8892,7 +8895,6 @@ function scan(text, cfg = {}) {
       const line = lineAt(starts, start);
       if (pragmaLines.has(line)) continue;
       if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(text, starts[line], start))) continue;
-      const fullMatch = match[0];
       let allowed = false;
       for (const a of rule.allowlists) {
         const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText(text, starts, line) : secret;
@@ -8908,7 +8910,37 @@ function scan(text, cfg = {}) {
       findings.push({ ruleId: rule.id, match: fullMatch, secret, start, end, entropy, line });
     }
   }
-  return dedupe(findings, text);
+  const kept = dedupe(findings, text);
+  if (isDisabledRule(PAIRED_RULE, cfg.allowlist)) return kept;
+  return withPairedValues(kept, text, starts, pragmaLines, cfg);
+}
+var PAIRED_RULE = "paired-credential";
+var PAIRED_VALUE = /["'`]?[ \t]{0,3}[:=,][ \t]{0,3}["'`]?([A-Za-z0-9+/=_.-]{16,200})(?![A-Za-z0-9+/=_-])/y;
+var PAIRED_ENTROPY = 3.5;
+function withPairedValues(findings, text, starts, pragmaLines, cfg) {
+  const anchors = findings.map((f) => ({ start: f.start, end: f.end }));
+  if (text.includes("SECRETGATE_")) for (const m of text.matchAll(PLACEHOLDER)) anchors.push({ start: m.index, end: m.index + m[0].length });
+  if (anchors.length === 0) return findings;
+  const taken = [...anchors];
+  const paired = [];
+  for (let i = 0; i < anchors.length; i++) {
+    PAIRED_VALUE.lastIndex = anchors[i].end;
+    const m = PAIRED_VALUE.exec(text);
+    if (!m) continue;
+    const secret = m[1];
+    const start = m.index + m[0].length - secret.length;
+    const end = start + secret.length;
+    if (taken.some((t) => t.start < end && start < t.end)) continue;
+    if (/^[A-Za-z_.-]+$/.test(secret) || looksLikeFilesystemPath(secret) || looksLikePlaceholder(secret) || isRuleSourceText(secret)) continue;
+    const entropy = shannonEntropy(secret);
+    if (entropy <= PAIRED_ENTROPY) continue;
+    const line = lineAt(starts, start);
+    if (pragmaLines.has(line) || isAllowedValue(secret, cfg.allowlist)) continue;
+    paired.push({ ruleId: PAIRED_RULE, match: m[0], secret, start, end, entropy, line });
+    anchors.push({ start, end });
+    taken.push({ start, end });
+  }
+  return paired.length === 0 ? findings : [...findings, ...paired].sort((a, b) => a.start - b.start);
 }
 var specificity = (ruleId) => ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2;
 function dedupe(findings, text) {
@@ -8967,19 +8999,30 @@ function applyPromptDirective(directive, sessionId, cwd) {
 }
 
 // src/redact.ts
+var MAX_ROUNDS = 3;
 function redactText(text, vault, source, cfg = {}) {
-  const findings = scan(text, { ...cfg, pragmas: cfg.pragmas ?? false });
+  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : void 0;
+  const scanNow = (t) => scan(t, { ...cfg, pragmas: cfg.pragmas ?? false, ...deadline !== void 0 ? { deadlineMs: deadline - performance.now() } : {} });
+  const findings = scanNow(text);
   if (findings.length === 0) return { text, findings, replaced: [] };
-  const ordered = [...findings].sort((a, b) => a.start - b.start);
-  const placeholders = vault.recordSecrets(ordered.map((f) => ({ secret: f.secret, ruleId: f.ruleId, source })));
-  const pieces = [];
-  let at = 0;
-  ordered.forEach((f, i) => {
-    pieces.push(text.slice(at, f.start), placeholders[i]);
-    at = f.end;
-  });
-  pieces.push(text.slice(at));
-  return { text: pieces.join(""), findings, replaced: ordered.map((f, i) => ({ placeholder: placeholders[i], ruleId: f.ruleId })) };
+  const replaced = [];
+  let current = text;
+  let found = findings;
+  for (let round = 0; found.length > 0 && round < MAX_ROUNDS; round++) {
+    const ordered = [...found].sort((a, b) => a.start - b.start);
+    const placeholders = vault.recordSecrets(ordered.map((f) => ({ secret: f.secret, ruleId: f.ruleId, source })));
+    const pieces = [];
+    let at = 0;
+    ordered.forEach((f, i) => {
+      pieces.push(current.slice(at, f.start), placeholders[i]);
+      at = f.end;
+      replaced.push({ placeholder: placeholders[i], ruleId: f.ruleId });
+    });
+    pieces.push(current.slice(at));
+    current = pieces.join("");
+    found = scanNow(current);
+  }
+  return { text: current, findings, replaced };
 }
 var MAX_NESTING = 4;
 function restorePlaceholders(text, vault) {
@@ -9537,7 +9580,7 @@ function postToolBatch(input, cfg) {
   }
   if (rules.size === 0) return PASS;
   return stopTurn(
-    `the result of ${[...tools].join(", ")} holds a secret (${[...rules].join(", ")}) that could not be redacted: Claude Code lets a hook rewrite the output of a successful call only, not of a failed one`,
+    `the result of ${[...tools].join(", ")} still holds a secret (${[...rules].join(", ")}) on its way to the model. A hook can rewrite the output of a successful call only: this is the output of a call that failed (a command that exits non-zero, a tool error), or one whose redacted output Claude Code did not apply`,
     input.session_id,
     "that result stays in this session's transcript, so start a fresh session (if the value is not a secret, `secretgate allow` it first)"
   );

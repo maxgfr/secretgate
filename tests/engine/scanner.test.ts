@@ -479,6 +479,59 @@ describe("scan — its own placeholders", () => {
   });
 });
 
+// A value attached to a credential by `:`, `=` or `,` is the other half of it:
+// the secret key after the key id in an AWS credentials CSV, `<token>:<secret>`.
+// The same holds once the first half is a placeholder, so text scanned before
+// and after redaction gets the same verdict.
+describe("scan — the value paired with a credential", () => {
+  const random = FAKE.genericSecret;
+  const awsSecret = "wJalrXUtnFEMI" + "/K7MDENG/" + "bPxRfiCYzQ9kT4mB2x";
+  const placeholder = "SECRETGATE_" + "0123456789ab";
+  const rules = (text: string) => scan(text, { pragmas: false }).map((f) => f.ruleId);
+
+  it("flags what follows a credential after `:`, `=` or `,`", () => {
+    expect(rules(`${FAKE.githubPat}: ${random}`)).toEqual(["github-pat", "paired-credential"]);
+    expect(rules(`${FAKE.githubPat}=${random}`)).toEqual(["github-pat", "paired-credential"]);
+    expect(rules(`Access key ID,Secret access key\n${FAKE.awsKeyId},${awsSecret}\n`)).toEqual(["aws-access-token", "paired-credential"]);
+    expect(rules(`"${FAKE.awsKeyId}","${awsSecret}"`)).toEqual(["aws-access-token", "paired-credential"]);
+    const text = `${FAKE.awsKeyId},${awsSecret},${random}`;
+    const found = scan(text);
+    expect(found.map((f) => text.slice(f.start, f.end))).toEqual([FAKE.awsKeyId, awsSecret, random]);
+    expect(found[1]).toMatchObject({ ruleId: "paired-credential", secret: awsSecret, line: 0 });
+  });
+
+  it("gives the same verdict once the credential is a placeholder", () => {
+    expect(rules(`${placeholder}: ${random}`)).toEqual(["paired-credential"]);
+    expect(rules(`${placeholder},${awsSecret}`)).toEqual(["paired-credential"]);
+    expect(rules(`${placeholder}: ${placeholder}`)).toEqual([]);
+  });
+
+  it("leaves alone what is not attached, or is not a random value", () => {
+    for (const text of [
+      `${FAKE.githubPat} ${random}`, // a space is not a separator
+      `${FAKE.githubPat}\nnext: ${random}`,
+      `${FAKE.githubPat}: short-1`,
+      `${FAKE.githubPat}: configuration_directory_name`, // letters only
+      `${FAKE.githubPat}: aaaaaaaaaaaaaaaa1111`, // low entropy
+      `${FAKE.githubPat}: /usr/local/share/app/config.d/10-main`,
+      `${FAKE.githubPat}, and then some prose`,
+    ]) {
+      expect(rules(text), text).toEqual(["github-pat"]);
+    }
+  });
+
+  // The placeholder's text holds the word "secret", a keyword of the generic
+  // rule: `SECRETGATE_….id = value` matched it as a NAME.
+  it("never takes a placeholder's own text for a credential-sounding name", () => {
+    expect(rules(`${placeholder}.id = ${random}`)).toEqual([]);
+    expect(rules(`x${placeholder} retries: ${random}`)).toEqual([]);
+  });
+
+  it("can be switched off like any rule", () => {
+    expect(scan(`${FAKE.githubPat}: ${random}`, { allowlist: { rules: ["paired-credential"] } }).map((f) => f.ruleId)).toEqual(["github-pat"]);
+  });
+});
+
 describe("scan — dedupe", () => {
   it("emits a single finding when a specific rule and generic-api-key overlap", () => {
     const findings = scan(`key = ${FAKE.awsKeyId}`);
