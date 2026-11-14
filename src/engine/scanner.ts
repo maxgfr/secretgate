@@ -56,15 +56,18 @@ export class ScanBudgetError extends Error {
 // undoes), and no hexadecimal digit right after — a placeholder must not
 // swallow the first characters of a value written behind it.
 const PLACEHOLDER = /SECRETGATE_[0-9a-f]{12}(?![0-9a-f])/g;
-// What stands around a token without being part of any secret: punctuation
-// and separators. A letter or a digit is material.
-const hasMaterial = (text: string): boolean => /[\p{L}\p{N}]/u.test(text);
-// A placeholder, alone or with the punctuation a wider rule captures around a
+// What a wider rule takes with a token without it being part of any secret:
+// a separator or two (the dot that ends a sentence, a quote, `=`, `__`). The
+// allowance is short and closed: a letter, a digit, any other symbol, or a
+// longer run is material — a password can be made of punctuation.
+const SEPARATORS_ONLY = /^[\s"'`.,;:=_\-()[\]{}<>|/\\]{0,3}$/;
+const hasMaterial = (text: string): boolean => !SEPARATORS_ONLY.test(text);
+// A placeholder, alone or with the separators a wider rule captures around a
 // token: `key: ghp_….` is redacted to `key: SECRETGATE_….`, and the generic
 // rule, which took the dot with the token, must not see a new secret in it.
-// Letters or digits around the placeholder are material of their own: the
-// value is redacted whole (a forged `SECRETGATE_…` in front of a real
-// password hides nothing), and the restore resolves the placeholder inside.
+// Anything more around the placeholder is material of its own: the value is
+// redacted whole (a forged `SECRETGATE_…` in front of a real password hides
+// nothing), and the restore resolves the placeholder inside.
 function alreadyRedacted(secret: string): boolean {
   if (!secret.includes("SECRETGATE_")) return false;
   const rest = secret.replace(PLACEHOLDER, "");
@@ -637,9 +640,10 @@ function withPairedValues(findings: Finding[], text: string, starts: number[], p
 //   - One span inside the other: the more specific rule names the secret (a
 //     vendor rule beats password-assignment, which beats generic-api-key, then
 //     the longer secret wins) — unless the wider one holds a letter or a digit
-//     outside it. `api_key = "<key id>:<secret key>"` is one flagged value, and
-//     the vendor rule sees only the key id. Punctuation alone (the dot the
-//     generic rule takes with a token) does not make a wider secret.
+//     or any symbol outside it beyond a separator or two. `api_key = "<key
+//     id>:<secret key>"` is one flagged value, and the vendor rule sees only
+//     the key id. The dot the generic rule takes with a token does not make
+//     a wider secret.
 //   - Neither inside the other: one finding over both spans.
 const specificity = (ruleId: string): number => (ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2);
 // Findings are visited by start (longest first), so the kept spans stay sorted

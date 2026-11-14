@@ -517,15 +517,36 @@ describe("scan — a value is dropped only when the text makes it certain", () =
 describe("scan — its own placeholders", () => {
   const placeholder = "SECRETGATE_" + "0123456789ab";
 
-  it("leaves a placeholder alone, bare or next to punctuation", () => {
+  it("leaves a placeholder alone, bare or next to a separator or two", () => {
+    const other = "SECRETGATE_" + "ba9876543210";
     for (const text of [
       `password = "${placeholder}"`,
       `token: ${placeholder}.`,
       `key=${placeholder}=`,
-      `secret = "${placeholder}!"`,
       `secret_key = ${placeholder}__`,
+      `password = "${placeholder}-${other}"`,
+      `password = "${placeholder}.${other}."`,
+      `api_key = "${placeholder}${other}"`,
     ]) {
       expect(scan(text), text).toEqual([]);
+    }
+  });
+
+  // The allowance is for the separator a wider rule takes with a token, not
+  // for a password made of symbols: a few separator characters, no more.
+  it("flags symbols around a placeholder beyond a separator or two", () => {
+    const other = "SECRETGATE_" + "ba9876543210";
+    for (const text of [
+      `password = "${placeholder}!@#$%^&*()"`,
+      `password = "${placeholder}!@#$%^&*${other}"`,
+      `secret = "${placeholder}!"`,
+      `password = "${placeholder}....----"`,
+      `password = "~${placeholder}~"`,
+    ]) {
+      expect(
+        scan(text).map((f) => f.ruleId),
+        text,
+      ).toEqual(["password-assignment"]);
     }
   });
 

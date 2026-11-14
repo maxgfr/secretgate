@@ -8584,7 +8584,8 @@ var ScanBudgetError = class extends Error {
   }
 };
 var PLACEHOLDER = /SECRETGATE_[0-9a-f]{12}(?![0-9a-f])/g;
-var hasMaterial = (text) => /[\p{L}\p{N}]/u.test(text);
+var SEPARATORS_ONLY = /^[\s"'`.,;:=_\-()[\]{}<>|/\\]{0,3}$/;
+var hasMaterial = (text) => !SEPARATORS_ONLY.test(text);
 function alreadyRedacted(secret) {
   if (!secret.includes("SECRETGATE_")) return false;
   const rest = secret.replace(PLACEHOLDER, "");
