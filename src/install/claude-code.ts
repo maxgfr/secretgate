@@ -104,10 +104,17 @@ export function retiredRulesToRemove(deny: string[], owned: string[]): string[] 
 // secret another tool pulls in is still redacted by PostToolUse.
 export const PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|NotebookEdit|NotebookRead|Bash|mcp__.*";
 
+//
+// PostToolUse only fires for a call that SUCCEEDED. A failed one (a shell
+// command that exits non-zero, an MCP error result) goes to PostToolUseFailure,
+// which can neither replace the output nor stop the turn. PostToolBatch is the
+// one hook that still stands between that output and the model: it receives
+// every result of the batch as the model will read it, and can stop the turn.
 const EVENTS: Array<{ event: string; arg: string; matcher?: string }> = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
   { event: "PreToolUse", arg: "pre-tool-use", matcher: PRE_TOOL_MATCHER },
   { event: "PostToolUse", arg: "post-tool-use", matcher: "*" },
+  { event: "PostToolBatch", arg: "post-tool-batch" },
 ];
 
 /** Is a settings file wired with the current PreToolUse matcher? */
@@ -115,6 +122,12 @@ export function claudeCodeMatcherCurrent(settings: Record<string, any> | undefin
   const groups = settings?.hooks?.PreToolUse;
   if (!Array.isArray(groups)) return false;
   return groups.some((g: HookGroup) => g.matcher === PRE_TOOL_MATCHER && (g.hooks ?? []).some((h) => isSecretgateHook(h.command, "claude-code")));
+}
+
+/** Is a settings file wired with the hook that checks failed tool calls? */
+export function claudeCodeBatchHookWired(settings: Record<string, any> | undefined): boolean {
+  const groups = settings?.hooks?.PostToolBatch;
+  return Array.isArray(groups) && groups.some((g: HookGroup) => (g.hooks ?? []).some((h) => isSecretgateHook(h.command, "claude-code")));
 }
 
 interface HookGroup {

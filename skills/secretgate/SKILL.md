@@ -148,6 +148,9 @@ to Fable 5.1. Distinguish these checks in reports.
   tool transports are outside coverage.
 - Claude `@file` expansion can bypass tool hooks. Installed Read deny rules
   cover common sensitive paths, not every possible credential-bearing file.
+- Claude Code lets no hook rewrite the output of a failed tool call. When one
+  holds a secret, the turn is stopped before the next model request and the
+  session is closed: start a fresh one.
 - Failed MCP calls can bypass Codex's post hook. Raw tool output can remain in
   agents' local logs/telemetry even when model-bound output is masked.
 - On an unscannable result, supported output envelopes are replaced by a safe

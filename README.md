@@ -102,7 +102,7 @@ anything per-use.
 |---|---|---|---|
 | Secret pasted in a prompt | ✅ blocked + redacted copy | ✅ blocked + redacted copy | ✅ redacted in place |
 | Agent reads a sensitive file | ✅ hook deny + `permissions.deny` | ✅ hook deny | ✅ hook deny (`.env` also needs approval in OpenCode itself) |
-| Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
+| Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`); a **failed** call's output cannot be rewritten, so the turn is stopped before it is sent | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
 | Placeholder written to a file | ✅ real value restored (built-in file tools; never through MCP tools, which may write remotely) | ✅ real value restored (`apply_patch`) | ✅ real value restored (built-in file tools) |
 | Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ✅ **withheld** via block-and-replace | ✅ withheld on scan failure |
 | Agent leaves the project [scope](#scope) | ✅ Read/Edit/Write/LS/Glob/Grep/Bash/MCP denied, search results filtered, `@path` blocked | ✅ shell/`apply_patch` denied | ✅ tools denied, glob/grep/list filtered, attachments removed |
@@ -111,7 +111,11 @@ anything per-use.
 **Scan failures are explicit.** Supported output envelopes are replaced with a
 withholding notice. If Claude Code cannot accept a safe replacement, Secretgate
 stops the turn and blocks later prompts for that session ID; start a fresh
-session. Malformed events without a session ID cannot be marked for this
+session. The same happens when a **failed** tool call printed a secret (a
+command that exits non-zero, an MCP error result): Claude Code runs
+`PostToolUse` for successful calls only and lets no hook rewrite a failed one,
+so a `PostToolBatch` hook reads every result as the model is about to receive
+it and stops the turn if a secret is still there. Malformed events without a session ID cannot be marked for this
 resume protection. Host process kills/timeouts remain a fail-open limitation. A
 per-scan wall-clock budget stops a maliciously slow payload from stalling a hook
 past the agent's timeout (which would otherwise fail open).
@@ -123,6 +127,7 @@ past the agent's timeout (which would otherwise fail open).
 | Claude Code `@file` mentions | inlined without firing tool hooks | the prompt hook checks every `@path` in the prompt: a sensitive file (`@.env`, `@server.pem`, `@credentials.json`; test fixtures exempt) blocks the prompt, and with a scope so does an out-of-scope one. `permissions.deny` rules add a native layer for real secret locations (`.env`, `.env.local`, `.envrc`, `~/.ssh`, `~/.aws`, `.netrc`, `.npmrc`, `.git-credentials`, the vault…); project-wide `*.pem`/`*.key` rules are not installed, since they cannot exempt fixtures (`init` removes the ones older versions added) |
 | Shell commands are analysed, not sandboxed | what a program computes at run time (`$(…)` output, variables, `python -c`, a script's own `open()`) is invisible to any static check | quotes, `$'…'`, heredocs, brace lists and sequences, globs, `x/../y`, wrappers (`sudo -u`, `env -C`, `timeout`…), `bash -c '…' a0 a1`, scripts fed to a shell on stdin, `git -C`, and every `cd` (a `cd` that may fail keeps both directories) are resolved; a word that cannot be resolved is still checked by name (`$DIR/.env` is a `.env`); `ln`/`mv` of a sensitive file to an ordinary name is refused; recursive readers (`grep -r`, `rg`, `tar c`, `find -exec cat`) are checked against the files really below them (`rg` skipping hidden and `.gitignore`d ones, as it does), and refused past 20,000 entries; `"bash": "strict"` refuses what cannot be checked; for a hard guarantee add the agent's OS sandbox (Claude Code sandbox, Codex permission profiles) |
 | An agent running as you | it can reach anything your user can, given enough indirection | switching secretgate off from the agent needs your approval (Claude Code) or is refused (Codex, OpenCode); the OS sandbox is the hard boundary |
+| Claude Code failed tool calls | the output of a failed call cannot be redacted, only withheld by stopping (checked on Claude Code 2.1.263 and 2.1.323; an install older than this hook has no check at all — `secretgate status` says so) | the turn stops before the request and the session is closed, because its transcript holds the raw output: start a fresh one. A false positive stops the turn too — `secretgate allow` the value, or pause with `/secretgate off` before running such a command |
 | Codex failed/unsupported tool output | `PostToolUse` only fires for successful supported tools; native output rewrite remains unsupported | Bash/apply_patch and successful MCP/local-function results are block-and-replace protected; an MCP result marked as an error can still bypass the post hook |
 | Codex local telemetry/logs | block-and-replace changes the model-visible result, not Codex's local logging copy | the raw result stays local; protect access to Codex logs and telemetry configuration |
 | Low-entropy secrets (`password: hunter2`) | indistinguishable from prose without huge false positives | catches strong/quoted passwords; use a real password manager |

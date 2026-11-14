@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CC_DENY_RULES, installClaudeCode, uninstallClaudeCode } from "../../src/install/claude-code.js";
+import { CC_DENY_RULES, claudeCodeBatchHookWired, installClaudeCode, uninstallClaudeCode } from "../../src/install/claude-code.js";
 import { SettingsParseError } from "../../src/install/json-merge.js";
 
 let dir: string;
@@ -21,7 +21,22 @@ afterEach(() => {
 const read = () => JSON.parse(readFileSync(settingsPath, "utf8"));
 
 describe("installClaudeCode", () => {
-  it("creates settings.json from scratch with 3 hook events + deny rules", () => {
+  it("wires PostToolBatch, the only hook that sees a failed call's output, and removes it on uninstall", () => {
+    installClaudeCode({ settingsPath, command });
+    const group = read().hooks.PostToolBatch;
+    expect(group).toHaveLength(1);
+    expect(group[0].matcher).toBeUndefined();
+    expect(group[0].hooks[0].command).toBe(`${command} hook claude-code post-tool-batch`);
+    expect(claudeCodeBatchHookWired(read())).toBe(true);
+    // An install made before this hook existed is reported as incomplete.
+    const older = read();
+    delete older.hooks.PostToolBatch;
+    expect(claudeCodeBatchHookWired(older)).toBe(false);
+    uninstallClaudeCode({ settingsPath });
+    expect(read().hooks).toBeUndefined();
+  });
+
+  it("creates settings.json from scratch with its hook events + deny rules", () => {
     const r = installClaudeCode({ settingsPath, command });
     expect(r.changed).toBe(true);
     const s = read();

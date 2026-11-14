@@ -4,7 +4,7 @@
 // part of the signature: another tool's `… hook codex` (scopelet, …) is not
 // ours — counting it inflates `status`, and treating it as ours would let
 // install/uninstall delete a hook secretgate never wrote.
-const EVENT_ARGS = "(?:user-prompt-submit|pre-tool-use|post-tool-use)";
+const EVENT_ARGS = "(?:user-prompt-submit|pre-tool-use|post-tool-use|post-tool-batch)";
 
 export function isSecretgateHook(command: unknown, agent: "claude-code" | "codex"): boolean {
   return typeof command === "string" && new RegExp(`(?:^|\\s)hook\\s+${agent}\\s+${EVENT_ARGS}(?:\\s|$)`).test(command);

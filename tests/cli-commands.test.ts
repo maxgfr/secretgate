@@ -453,6 +453,25 @@ describe("secretgate status", () => {
     expect(text()).toMatch(/hooks start .*gone\/node, which is NOT FOUND/);
   });
 
+  it("flags an install that predates the failed-call check, until `install` adds it", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const hook = (event: string) => ({ hooks: [{ type: "command", command: `secretgate hook claude-code ${event}` }] });
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { UserPromptSubmit: [hook("user-prompt-submit")], PreToolUse: [hook("pre-tool-use")], PostToolUse: [hook("post-tool-use")] } }),
+    );
+    const before = capture();
+    await run(["status"], before.io);
+    expect(before.text()).toContain("no PostToolBatch hook");
+    await run(["install", "--claude-code"], capture().io);
+    const after = capture();
+    await run(["status"], after.io);
+    expect(after.text()).toContain("wired (4 hooks");
+    expect(after.text()).not.toContain("no PostToolBatch hook");
+  });
+
   it("names the env var when that is what is off", async () => {
     process.env.HOME = home;
     process.chdir(work);

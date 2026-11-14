@@ -223,6 +223,90 @@ describe("PostToolUse — output redaction", () => {
   });
 });
 
+// PostToolUse fires only for a call that succeeded. What a FAILED call printed
+// reaches the model unless the turn is stopped: PostToolBatch is the one hook
+// that still sees it (checked against Claude Code 2.1.263 and 2.1.323).
+describe("PostToolBatch — results no hook could redact", () => {
+  let session = "s1";
+  const batchEvent = (...tool_calls: Array<{ tool_name: string; tool_response: unknown }>) =>
+    JSON.stringify({
+      session_id: session,
+      hook_event_name: "PostToolBatch",
+      cwd: "/tmp",
+      tool_calls: tool_calls.map((c, i) => ({ tool_input: {}, tool_use_id: `toolu_${i}`, ...c })),
+    });
+  const failed = { tool_name: "Bash", tool_response: `Exit code 3\nCI_TOKEN=${FAKE.githubPat}` };
+
+  it("stops the turn when a failed command printed a secret, without echoing it", async () => {
+    const r = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "Read", tool_response: "1\tconst a = 1;" }, failed));
+    expect(r.exit).toBe(0);
+    const out = JSON.parse(r.stdout);
+    expect(out.continue).toBe(false);
+    expect(out.stopReason).toContain("github-pat");
+    expect(out.stopReason).toContain("Bash");
+    expect(out.stopReason).not.toContain("Read");
+    expect(r.stdout).not.toContain(FAKE.githubPat);
+  });
+
+  it("closes the session: its transcript holds the result a later prompt would send", async () => {
+    await handleClaudeCode("post-tool-batch", batchEvent(failed));
+    const next = JSON.parse((await handleClaudeCode("user-prompt-submit", promptEvent("go on"))).stdout);
+    expect(next.decision).toBe("block");
+    expect(next.reason).toContain("fresh session");
+  });
+
+  it("stays silent on clean results and on results PostToolUse already redacted", async () => {
+    const redacted = JSON.parse(
+      (await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "env" }, { stdout: `T=${FAKE.githubPat}`, stderr: "" }))).stdout,
+    ).hookSpecificOutput.updatedToolOutput.stdout;
+    expect(redacted).toMatch(/^T=SECRETGATE_/);
+    const r = await handleClaudeCode(
+      "post-tool-batch",
+      batchEvent({ tool_name: "Bash", tool_response: redacted }, { tool_name: "Bash", tool_response: "Exit code 1\nno such file" }),
+    );
+    expect(r).toEqual({ stdout: "", exit: 0 });
+  });
+
+  it("reads content-block results and leaves attachments alone, whatever their size", async () => {
+    // As Claude Code 2.1.323 hands over a Read of an image and of a PDF.
+    const data = "iVBORw0KGgo".repeat(300_000); // 3.3 MB of base64: over one result's text budget
+    const image = { type: "image", source: { type: "base64", data, media_type: "image/png" } };
+    const pdf = { type: "document", source: { type: "base64", media_type: "application/pdf", data } };
+    const clean = await handleClaudeCode(
+      "post-tool-batch",
+      batchEvent({ tool_name: "Read", tool_response: [image] }, { tool_name: "Read", tool_response: [{ type: "text", text: "PDF file read" }, pdf] }),
+    );
+    expect(clean.stdout).toBe("");
+    // A text attachment is text, and what is not base64 is not an attachment.
+    for (const source of [
+      { type: "text", media_type: "text/plain", data: `key ${FAKE.awsKeyId}` },
+      { type: "base64", media_type: "image/png", data: `key ${FAKE.githubPat}` },
+    ]) {
+      session = `s-${source.type}`; // a stop closes the session it happened in
+      const r = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "mcp__x__env", tool_response: [{ type: "document", source }] }));
+      expect(JSON.parse(r.stdout).stopReason, source.type).toContain("mcp__x__env");
+    }
+    session = "s1";
+  });
+
+  it("gives each result its own size budget, and fails closed past it", async () => {
+    const big = "lorem ipsum ".repeat(120_000); // 1.4 MB: fine alone, 2.8 MB together
+    const two = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "Read", tool_response: big }, { tool_name: "Read", tool_response: big }));
+    expect(two.stdout).toBe("");
+    const over = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "Bash", tool_response: big + big }));
+    expect(JSON.parse(over.stdout).continue).toBe(false);
+  });
+
+  it("fails closed on an event it cannot read", async () => {
+    expect(JSON.parse((await handleClaudeCode("post-tool-batch", "{not json")).stdout).continue).toBe(false);
+  });
+
+  it("honors the user allowlist and a pause", async () => {
+    await handleClaudeCode("user-prompt-submit", promptEvent("/secretgate off"));
+    expect((await handleClaudeCode("post-tool-batch", batchEvent(failed))).stdout).toBe("");
+  });
+});
+
 describe("Codex PostToolUse — block-and-replace redaction", () => {
   it("keeps Codex's required allow on restored patch input", async () => {
     const placeholder = new Vault().recordSecret(FAKE.githubPat, "github-pat", "test");

@@ -9042,7 +9042,9 @@ function preToolPolicy(call, cfg, cwd, opts) {
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
 function isBinaryField(key, value, parent) {
-  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
+  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || // A model content block's attachment: `{type: "image" | "document", source:
+  // {type: "base64", media_type, data}}`, as PostToolBatch carries an image or a PDF.
+  key === "data" && parent.type === "base64" && typeof parent.media_type === "string" && !parent.media_type.startsWith("text/") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
   key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
 }
 function eventRedactor(vault, source, allowlist) {
@@ -9053,6 +9055,15 @@ function eventRedactor(vault, source, allowlist) {
     const deadlineMs = deadline - performance.now();
     if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
     return redactText(text, vault, source, { allowlist, deadlineMs }).text;
+  };
+}
+function resultScanner(allowlist, deadline) {
+  let remaining = SCAN_CAP;
+  return (text) => {
+    remaining -= text.length;
+    const deadlineMs = deadline - performance.now();
+    if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
+    return scan(text, { allowlist, deadlineMs, pragmas: false });
   };
 }
 
@@ -9200,7 +9211,6 @@ function mapStrings(value, fn, skip) {
 var ALLOW_TAG = "[allow-secret]";
 var PASS = { stdout: "", exit: 0 };
 var DEFER = { stdout: "{}", exit: 0 };
-var SCAN_DEADLINE_MS2 = 5e3;
 function withholdOutput(reason, input, blockFallback = false) {
   const notice = `[secretgate withheld this tool output: ${reason}]`;
   const tool = String(input?.tool_name ?? "");
@@ -9213,19 +9223,7 @@ function withholdOutput(reason, input, blockFallback = false) {
     replacement = Array.isArray(input?.tool_response) ? [{ type: "text", text: notice }] : { content: [{ type: "text", text: notice }], isError: true };
   }
   if (replacement === void 0 && blockFallback) replacement = notice;
-  if (replacement === void 0) {
-    try {
-      stopSession(input?.session_id);
-    } catch {
-    }
-    return {
-      stdout: JSON.stringify({
-        continue: false,
-        stopReason: `secretgate: ${reason}. Processing stopped; start a fresh session before retrying with smaller output.`
-      }),
-      exit: 0
-    };
-  }
+  if (replacement === void 0) return stopTurn(reason, input?.session_id, "start a fresh session before retrying with smaller output");
   return {
     stdout: JSON.stringify({
       systemMessage: `secretgate: ${reason} \u2014 tool output withheld`,
@@ -9233,6 +9231,13 @@ function withholdOutput(reason, input, blockFallback = false) {
     }),
     exit: 0
   };
+}
+function stopTurn(reason, session, advice) {
+  try {
+    stopSession(session);
+  } catch {
+  }
+  return { stdout: JSON.stringify({ continue: false, stopReason: `secretgate: ${reason}. Processing stopped; ${advice}.` }), exit: 0 };
 }
 function parseOrUndefined(raw) {
   try {
@@ -9247,6 +9252,7 @@ function failClosed(event, input, blockFallback = false) {
   const reason = "secretgate could not scan this safely (invalid input, scan budget or local storage error)";
   if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
   if (event === "pre-tool-use") return deny(reason);
+  if (event === "post-tool-batch") return withholdOutput(reason, { session_id: input?.session_id });
   return withholdOutput(reason, input, blockFallback);
 }
 function disabledResult(event, input, state, notices) {
@@ -9283,6 +9289,7 @@ function disabledResult(event, input, state, notices) {
     const filtered = scopeFilter(input, cfg);
     return filtered.changed ? updatedOutput(filtered.value) : PASS;
   }
+  if (event === "post-tool-batch") return PASS;
   return { stdout: "", exit: 2 };
 }
 async function handleClaudeCode(event, rawStdin, opts = {}) {
@@ -9318,7 +9325,8 @@ function handleEnabled(event, rawStdin, parsed, opts) {
   }
   const input = parsed ?? JSON.parse(rawStdin);
   if (input === null || typeof input !== "object") throw new Error("event is not an object");
-  if (event !== "post-tool-use" && rawStdin.length > SCAN_CAP || input.__secretgate_unscannable) throw new Error("input exceeds scan budget");
+  const carriesResults = event === "post-tool-use" || event === "post-tool-batch";
+  if (!carriesResults && rawStdin.length > SCAN_CAP || input.__secretgate_unscannable) throw new Error("input exceeds scan budget");
   const cfg = loadConfig(str2(input.cwd));
   switch (event) {
     case "user-prompt-submit":
@@ -9327,6 +9335,8 @@ function handleEnabled(event, rawStdin, parsed, opts) {
       return preToolUse(input, cfg);
     case "post-tool-use":
       return postToolUse(input, cfg);
+    case "post-tool-batch":
+      return postToolBatch(input, cfg);
     default:
       return { stdout: "", exit: 2 };
   }
@@ -9343,7 +9353,7 @@ function userPromptSubmit(input, cfg) {
     return { stdout: JSON.stringify({ decision: "block", reason: reason2 }), exit: 0 };
   }
   const vault = new Vault();
-  const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS2 });
+  const r = redactText(prompt, vault, "claude-code:prompt", { allowlist: cfg.allowlist, deadlineMs: SCAN_DEADLINE_MS });
   if (r.findings.length === 0) return PASS;
   const rules = [...new Set(r.findings.map((f) => f.ruleId))].join(", ");
   const reason = [
@@ -9445,6 +9455,33 @@ function postToolUse(input, cfg) {
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
 }
+function postToolBatch(input, cfg) {
+  const calls = Array.isArray(input.tool_calls) ? input.tool_calls : [];
+  const deadline = performance.now() + SCAN_DEADLINE_MS;
+  const tools = /* @__PURE__ */ new Set();
+  const rules = /* @__PURE__ */ new Set();
+  for (const call of calls) {
+    if (call === null || typeof call !== "object" || !("tool_response" in call)) continue;
+    const findings = resultScanner(cfg.allowlist, deadline);
+    mapStrings(
+      call.tool_response,
+      (s) => {
+        for (const f of findings(s)) {
+          rules.add(f.ruleId);
+          tools.add(String(call.tool_name ?? "a tool"));
+        }
+        return s;
+      },
+      isBinaryField
+    );
+  }
+  if (rules.size === 0) return PASS;
+  return stopTurn(
+    `the result of ${[...tools].join(", ")} holds a secret (${[...rules].join(", ")}) that could not be redacted: Claude Code lets a hook rewrite the output of a successful call only, not of a failed one`,
+    input.session_id,
+    "that result stays in this session's transcript, so start a fresh session (if the value is not a secret, `secretgate allow` it first)"
+  );
+}
 
 // src/hooks/codex.ts
 async function handleCodex(event, rawStdin) {
@@ -9528,7 +9565,7 @@ function writeAllow(add) {
 }
 
 // src/install/hook-marker.ts
-var EVENT_ARGS = "(?:user-prompt-submit|pre-tool-use|post-tool-use)";
+var EVENT_ARGS = "(?:user-prompt-submit|pre-tool-use|post-tool-use|post-tool-batch)";
 function isSecretgateHook(command, agent) {
   return typeof command === "string" && new RegExp(`(?:^|\\s)hook\\s+${agent}\\s+${EVENT_ARGS}(?:\\s|$)`).test(command);
 }
@@ -9657,12 +9694,17 @@ var PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|NotebookEdit|Note
 var EVENTS = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
   { event: "PreToolUse", arg: "pre-tool-use", matcher: PRE_TOOL_MATCHER },
-  { event: "PostToolUse", arg: "post-tool-use", matcher: "*" }
+  { event: "PostToolUse", arg: "post-tool-use", matcher: "*" },
+  { event: "PostToolBatch", arg: "post-tool-batch" }
 ];
 function claudeCodeMatcherCurrent(settings) {
   const groups = settings?.hooks?.PreToolUse;
   if (!Array.isArray(groups)) return false;
   return groups.some((g) => g.matcher === PRE_TOOL_MATCHER && (g.hooks ?? []).some((h) => isSecretgateHook(h.command, "claude-code")));
+}
+function claudeCodeBatchHookWired(settings) {
+  const groups = settings?.hooks?.PostToolBatch;
+  return Array.isArray(groups) && groups.some((g) => (g.hooks ?? []).some((h) => isSecretgateHook(h.command, "claude-code")));
 }
 function withoutOurGroups(groups) {
   if (!Array.isArray(groups)) return [];
@@ -10968,6 +11010,18 @@ TOKEN=${fake}
       io.stdout("  \u2717 tool-output redaction FAILED \u2014 a secret would reach the model\n");
       ok = false;
     }
+    const batch = runHook("post-tool-batch", {
+      hook_event_name: "PostToolBatch",
+      cwd: tmpHome,
+      tool_calls: [{ tool_name: "Bash", tool_input: { command: "env" }, tool_response: `Exit code 1
+TOKEN=${fake}` }]
+    });
+    if (batch.continue === false && !JSON.stringify(batch).includes(fake)) {
+      io.stdout("  \u2713 a secret printed by a FAILED command stops the turn before it is sent\n");
+    } else {
+      io.stdout("  \u2717 failed-command check FAILED \u2014 the output of a failed tool call would reach the model\n");
+      ok = false;
+    }
     const cleanRaw = spawnHook(
       "claude-code",
       "pre-tool-use",
@@ -11286,6 +11340,9 @@ async function cmdStatus(_args, io) {
     reportMissingPrograms(ccCommands, `claude-code ${label}  `, io);
     if (wired > 0 && !claudeCodeMatcherCurrent(settings))
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) \u2014 run \`secretgate init\` to update
+`);
+    if (wired > 0 && !claudeCodeBatchHookWired(settings))
+      io.stdout(`claude-code ${label}  no PostToolBatch hook (the output of a FAILED tool call is not checked) \u2014 run \`secretgate init\` to add it
 `);
     const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
     const retired = retiredRulesToRemove(denyRules, Array.isArray(owned) ? owned.filter((r) => typeof r === "string") : []);

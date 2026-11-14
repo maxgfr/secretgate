@@ -226,6 +226,11 @@ for (const agent of agents) {
         anthropic(res, body.model, { name: "shell", args: { command: "sleep 1" } });
         return;
       }
+      if (phase === "failed") {
+        if (turn++ === 0) anthropic(res, body.model, { name: "Bash", args: { command: "cat ci-values.txt; exit 3" } });
+        else anthropic(res, body.model);
+        return;
+      }
       if (turn++ === 0) {
         const name =
           phase === "mcp"
@@ -370,6 +375,30 @@ for (const agent of agents) {
         `PASS ${agent} ${phase}: result redacted before model request, restore on disk, ${requests.filter((r) => r.phase === phase).length} requests inspected`,
       );
     }
+    // A failed command: Claude Code runs no PostToolUse for it and lets no hook
+    // rewrite its output, so the turn has to stop before the next request.
+    // (Every request is checked for the raw token by the server above.)
+    if (agent === "claude-code") {
+      phase = "failed";
+      turn = 0;
+      const stopped = await run(
+        command,
+        [
+          ...args.slice(0, args.indexOf("--allowedTools") + 1),
+          "mcp__audit__emit,Bash",
+          ...args.slice(args.indexOf("--allowedTools") + 2),
+          "Print ci-values.txt.",
+        ],
+        { cwd: project, env },
+      );
+      if (failure) {
+        console.error((stopped.stderr + stopped.stdout).replaceAll(fake, "[FAKE]").slice(-5000));
+        throw failure;
+      }
+      assert.equal(turn, 1, `claude-code: a failed command's output was followed by ${turn - 1} more model request(s)`);
+      console.log(`PASS ${agent} failed command: output held back, turn stopped, ${requests.filter((r) => r.phase === "failed").length} request(s) inspected`);
+    }
+
     // Scope: the project fences the agent into src/; a read of private/ is
     // denied before it runs, so its content never reaches a model request.
     phase = "scope";

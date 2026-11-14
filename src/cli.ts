@@ -25,7 +25,7 @@ import { isNonSecret, scan, sensitiveFileNameRule } from "./engine/scanner.js";
 import { failClosed, type HookResult, handleClaudeCode } from "./hooks/claude-code.js";
 import { handleCodex } from "./hooks/codex.js";
 import { AllowlistFileError, writeAllow } from "./install/allow-store.js";
-import { claudeCodeMatcherCurrent, installClaudeCode, retiredRulesToRemove, uninstallClaudeCode } from "./install/claude-code.js";
+import { claudeCodeBatchHookWired, claudeCodeMatcherCurrent, installClaudeCode, retiredRulesToRemove, uninstallClaudeCode } from "./install/claude-code.js";
 import { CODEX_HOOK_COUNT, codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
 import { SettingsParseError } from "./install/json-merge.js";
 import { isSecretgateHook } from "./install/hook-marker.js";
@@ -837,6 +837,18 @@ function verifyClaudeCodeWiring(io: Io): boolean {
       io.stdout("  ✗ tool-output redaction FAILED — a secret would reach the model\n");
       ok = false;
     }
+    // A failed call never reaches PostToolUse: its output can only be stopped.
+    const batch = runHook("post-tool-batch", {
+      hook_event_name: "PostToolBatch",
+      cwd: tmpHome,
+      tool_calls: [{ tool_name: "Bash", tool_input: { command: "env" }, tool_response: `Exit code 1\nTOKEN=${fake}` }],
+    });
+    if (batch.continue === false && !JSON.stringify(batch).includes(fake)) {
+      io.stdout("  ✓ a secret printed by a FAILED command stops the turn before it is sent\n");
+    } else {
+      io.stdout("  ✗ failed-command check FAILED — the output of a failed tool call would reach the model\n");
+      ok = false;
+    }
     const cleanRaw = spawnHook(
       "claude-code",
       "pre-tool-use",
@@ -1182,6 +1194,8 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
     reportMissingPrograms(ccCommands, `claude-code ${label}  `, io);
     if (wired > 0 && !claudeCodeMatcherCurrent(settings))
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) — run \`secretgate init\` to update\n`);
+    if (wired > 0 && !claudeCodeBatchHookWired(settings))
+      io.stdout(`claude-code ${label}  no PostToolBatch hook (the output of a FAILED tool call is not checked) — run \`secretgate init\` to add it\n`);
     const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
     const retired = retiredRulesToRemove(denyRules, Array.isArray(owned) ? owned.filter((r): r is string => typeof r === "string") : []);
     if (retired.length > 0)
