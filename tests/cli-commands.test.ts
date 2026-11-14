@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/cli.js";
 import { disableState, recordSession } from "../src/disable.js";
+import { Vault } from "../src/vault/vault.js";
 import { FAKE } from "./fixtures/fake-tokens.js";
 
 let home: string;
@@ -404,6 +405,23 @@ describe("secretgate disable + enable", () => {
     const pipeRun = capture(`token=${FAKE.githubPat}`);
     await run(["pipe"], pipeRun.io);
     expect(pipeRun.text()).not.toContain(FAKE.githubPat);
+  });
+});
+
+describe("secretgate pipe — fails closed", () => {
+  it("writes nothing when the text cannot be redacted to a clean result", async () => {
+    let n = 0;
+    const spy = vi
+      .spyOn(Vault.prototype, "recordSecrets")
+      .mockImplementation((items) => items.map(() => `ghp_${"aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0dF6h".slice(0, 32)}${String(n++).padStart(4, "0")}`));
+    try {
+      const out = capture(`token: ${FAKE.githubPat}\n`);
+      expect(await run(["pipe"], out.io)).toBe(2);
+      expect(out.text()).toBe("");
+      expect(out.errText()).toContain("could not be redacted safely");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

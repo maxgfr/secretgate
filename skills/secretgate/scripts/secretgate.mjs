@@ -8586,6 +8586,7 @@ var ScanBudgetError = class extends Error {
 var PLACEHOLDER = /SECRETGATE_[0-9a-f]{12}(?![0-9a-f])/g;
 var SEPARATORS_ONLY = /^[\s"'`.,;:=_\-()[\]{}<>|/\\]{0,3}$/;
 var hasMaterial = (text) => !SEPARATORS_ONLY.test(text);
+var blanked = (text) => text.includes("SECRETGATE_") ? text.replace(PLACEHOLDER, (p) => "_".repeat(p.length)) : text;
 function alreadyRedacted(secret) {
   if (!secret.includes("SECRETGATE_")) return false;
   const rest = secret.replace(PLACEHOLDER, "");
@@ -8824,7 +8825,7 @@ function isNonSecret(secret) {
 function isNonSecretInContext(text, start, secret, ruleId) {
   if (GITHUB_TOKEN_RULES.has(ruleId) && EIGHT_IN_A_ROW.test(secret)) return true;
   if (!NAME_TRUSTING_RULES.has(ruleId)) return false;
-  return notASecretInContext(secret, assignedName(text, text.lastIndexOf("\n", start - 1) + 1, start));
+  return notASecretInContext(secret, assignedName(blanked(text), text.lastIndexOf("\n", start - 1) + 1, start));
 }
 var PATH_RULES_COMPILED = PATH_RULES.map((r) => ({ id: r.id, re: new RegExp(r.path.source, r.path.flags.replaceAll(/[gy]/g, "")) }));
 function sensitiveFileNameRule(path) {
@@ -8887,7 +8888,7 @@ function scan(text, cfg = {}) {
     if (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath))) return [];
     if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
   }
-  const subject = text.includes("SECRETGATE_") ? text.replace(PLACEHOLDER, (p) => "_".repeat(p.length)) : text;
+  const subject = blanked(text);
   const lower = subject.toLowerCase();
   const starts = lineStarts(text);
   const pragmaLines = cfg.pragmas === false ? /* @__PURE__ */ new Set() : pragmaAllowedLines(text);
@@ -8903,10 +8904,11 @@ function scan(text, cfg = {}) {
       const { start, end } = pickSecret(match, rule.secretGroup);
       const secret = text.slice(start, end);
       const fullMatch = text.slice(match.index, match.index + match[0].length);
+      const matchContext = subject === text ? fullMatch : subject.slice(match.index, start) + secret + subject.slice(end, match.index + match[0].length);
       if (secret.length === 0) continue;
       if (alreadyRedacted(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
-      if (rule.postMatch && !rule.postMatch(secret, fullMatch)) continue;
+      if (rule.postMatch && !rule.postMatch(secret, matchContext)) continue;
       if (isRuleSourceText(secret)) continue;
       if (looksLikePlaceholder(secret)) continue;
       if (GITHUB_TOKEN_RULES.has(rule.id) && EIGHT_IN_A_ROW.test(secret)) continue;
@@ -8914,10 +8916,10 @@ function scan(text, cfg = {}) {
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
       const line = lineAt(starts, start);
       if (pragmaLines.has(line)) continue;
-      if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(text, starts[line], start))) continue;
+      if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(subject, starts[line], start))) continue;
       let allowed = false;
       for (const a of rule.allowlists) {
-        const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText(text, starts, line) : secret;
+        const target = a.regexTarget === "match" ? matchContext : a.regexTarget === "line" ? lineText(subject, starts, line) : secret;
         if (allowlistMatches(a, secret, target, cfg.sourcePath)) {
           allowed = true;
           break;
@@ -9020,6 +9022,12 @@ function applyPromptDirective(directive, sessionId, cwd) {
 
 // src/redact.ts
 var MAX_ROUNDS = 3;
+var RedactionUnsettledError = class extends Error {
+  constructor() {
+    super(`redaction did not settle in ${MAX_ROUNDS} rounds`);
+    this.name = "RedactionUnsettledError";
+  }
+};
 function redactText(text, vault, source, cfg = {}) {
   const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : void 0;
   const scanNow = (t) => scan(t, { ...cfg, pragmas: cfg.pragmas ?? false, ...deadline !== void 0 ? { deadlineMs: deadline - performance.now() } : {} });
@@ -9042,6 +9050,7 @@ function redactText(text, vault, source, cfg = {}) {
     current = pieces.join("");
     found = scanNow(current);
   }
+  if (found.length > 0) throw new RedactionUnsettledError();
   return { text: current, findings, replaced };
 }
 var MAX_NESTING = 4;
@@ -10788,7 +10797,13 @@ async function cmdPipe(_args, io) {
   const text = await readIoStdin(io);
   const cfg = loadConfig(process.cwd());
   const vault = new Vault();
-  const r = redactText(text, vault, "pipe", { allowlist: cfg.allowlist });
+  let r;
+  try {
+    r = redactText(text, vault, "pipe", { allowlist: cfg.allowlist });
+  } catch {
+    io.stderr("pipe: this input could not be redacted safely \u2014 nothing was written\n");
+    return 2;
+  }
   io.stdout(r.text);
   return 0;
 }

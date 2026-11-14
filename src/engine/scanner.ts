@@ -68,6 +68,10 @@ const hasMaterial = (text: string): boolean => !SEPARATORS_ONLY.test(text);
 // Anything more around the placeholder is material of its own: the value is
 // redacted whole (a forged `SECRETGATE_…` in front of a real password hides
 // nothing), and the restore resolves the placeholder inside.
+/** `text` with each placeholder replaced by filler of the same length: what
+ *  may be read as CONTEXT (see scan). */
+const blanked = (text: string): string => (text.includes("SECRETGATE_") ? text.replace(PLACEHOLDER, (p) => "_".repeat(p.length)) : text);
+
 function alreadyRedacted(secret: string): boolean {
   if (!secret.includes("SECRETGATE_")) return false;
   const rest = secret.replace(PLACEHOLDER, "");
@@ -446,7 +450,7 @@ export function isNonSecret(secret: string): boolean {
 export function isNonSecretInContext(text: string, start: number, secret: string, ruleId: string): boolean {
   if (GITHUB_TOKEN_RULES.has(ruleId) && EIGHT_IN_A_ROW.test(secret)) return true;
   if (!NAME_TRUSTING_RULES.has(ruleId)) return false;
-  return notASecretInContext(secret, assignedName(text, text.lastIndexOf("\n", start - 1) + 1, start));
+  return notASecretInContext(secret, assignedName(blanked(text), text.lastIndexOf("\n", start - 1) + 1, start));
 }
 
 const PATH_RULES_COMPILED = PATH_RULES.map((r) => ({ id: r.id, re: new RegExp(r.path.source, r.path.flags.replaceAll(/[gy]/g, "")) }));
@@ -523,11 +527,14 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
   }
 
-  // The rules read a copy in which each placeholder is blanked: its text holds
-  // the word "secret", which the generic rule would take for a
-  // credential-sounding NAME in front of whatever follows it. Offsets are the
-  // same in both, and every value is taken from the text itself.
-  const subject = text.includes("SECRETGATE_") ? text.replace(PLACEHOLDER, (p) => "_".repeat(p.length)) : text;
+  // Everything AROUND a value is read from a copy in which each placeholder is
+  // blanked: the rules' patterns and keywords, the name a value is assigned
+  // to, the match and the line an allowlist looks at. A placeholder's text
+  // holds the word "secret"; read as context, it turned into a
+  // credential-sounding name for whatever followed, and a text got one
+  // verdict before redaction and another after. Offsets are the same in both
+  // copies, and the VALUE is always taken from the text itself.
+  const subject = blanked(text);
   const lower = subject.toLowerCase();
   const starts = lineStarts(text);
   const pragmaLines = cfg.pragmas === false ? new Set<number>() : pragmaAllowedLines(text);
@@ -549,12 +556,14 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
       const { start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
       const secret = text.slice(start, end);
       const fullMatch = text.slice(match.index, match.index + match[0].length);
+      // The match as a gate may read it: blanked context around the real value.
+      const matchContext = subject === text ? fullMatch : subject.slice(match.index, start) + secret + subject.slice(end, match.index + match[0].length);
       if (secret.length === 0) continue;
       if (alreadyRedacted(secret)) continue; // our own marker
       // Every gate below must pass, so the cheap, rule-specific ones (Luhn,
       // IIN, the URL username) run before the ones that search shared tables.
       if (rule.post && !rule.post(secret)) continue;
-      if (rule.postMatch && !rule.postMatch(secret, fullMatch)) continue;
+      if (rule.postMatch && !rule.postMatch(secret, matchContext)) continue;
       if (isRuleSourceText(secret)) continue; // our own detection patterns
       // PLACEHOLDER_WORDS encodes "this string is not a real secret", so it
       // holds no matter which rule matched. It used to be consulted only by
@@ -570,11 +579,11 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
 
       const line = lineAt(starts, start);
       if (pragmaLines.has(line)) continue;
-      if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(text, starts[line]!, start))) continue;
+      if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(subject, starts[line]!, start))) continue;
 
       let allowed = false;
       for (const a of rule.allowlists) {
-        const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText(text, starts, line) : secret;
+        const target = a.regexTarget === "match" ? matchContext : a.regexTarget === "line" ? lineText(subject, starts, line) : secret;
         if (allowlistMatches(a, secret, target, cfg.sourcePath)) {
           allowed = true;
           break;

@@ -18,8 +18,17 @@ export interface RedactResult {
 // scanned again further on (by the hook that runs before the next model
 // request, by the history scan), and what is let through here must not be a
 // secret there. The engine is built to settle in one pass; the extra rounds
-// are the guarantee, not the mechanism.
+// are the guarantee, not the mechanism — and if they ever run out with
+// something left, the text is NOT clean: redactText throws, and the caller
+// fails closed as it does for any text it could not scan.
 const MAX_ROUNDS = 3;
+
+export class RedactionUnsettledError extends Error {
+  constructor() {
+    super(`redaction did not settle in ${MAX_ROUNDS} rounds`);
+    this.name = "RedactionUnsettledError";
+  }
+}
 
 export function redactText(text: string, vault: Vault, source: string, cfg: ScanConfig = {}): RedactResult {
   const deadline = cfg.deadlineMs !== undefined ? performance.now() + cfg.deadlineMs : undefined;
@@ -46,6 +55,7 @@ export function redactText(text: string, vault: Vault, source: string, cfg: Scan
     current = pieces.join("");
     found = scanNow(current);
   }
+  if (found.length > 0) throw new RedactionUnsettledError();
   return { text: current, findings, replaced };
 }
 

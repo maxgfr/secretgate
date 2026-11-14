@@ -337,7 +337,14 @@ async function cmdPipe(_args: string[], io: Io): Promise<number> {
   const text = await readIoStdin(io);
   const cfg = loadConfig(process.cwd());
   const vault = new Vault();
-  const r = redactText(text, vault, "pipe", { allowlist: cfg.allowlist });
+  let r: ReturnType<typeof redactText>;
+  try {
+    r = redactText(text, vault, "pipe", { allowlist: cfg.allowlist });
+  } catch {
+    // Nothing is written: a partly redacted stream would pass for a clean one.
+    io.stderr("pipe: this input could not be redacted safely — nothing was written\n");
+    return 2;
+  }
   io.stdout(r.text);
   return 0;
 }
