@@ -19,8 +19,8 @@
 // matching loop (`traceMatches` in src/engine/scanner.ts), with the file's
 // path as source path.
 //
-//   Rules     every gitleaks-derived rule and every built-in rule, and
-//             `generic-keyword` (below).
+//   Rules     every gitleaks-derived rule and every built-in rule, and two
+//             rules of its own, `generic-keyword` and `auth-scheme` (below).
 //   Stays on  the keyword prefilter; the global path allowlist (a file under
 //             it gives no candidate) and the path-scoped rules; the built-in
 //             rules' own gates (Luhn and IIN for card numbers, the URL
@@ -35,23 +35,50 @@
 //             GitHub token with one character eight times in a row); inline
 //             pragmas. Each is recorded in `filters` instead.
 //
+//   This is revision 1 of the generator, its single revision (the first
+//   state read name, quote, separator, quote, value, and had no auth-scheme).
+//
 //   generic-keyword, case-insensitive, on one line:
-//     1. a name (letters, digits, `_`, `.`, `$`, `-`) that contains one of
-//        password, passwd, pwd, pass, secret, token, key, api, auth,
-//        credential, cred, nonce, salt;
-//     2. an optional quote (", ' or a backtick);
+//     1. a name: a maximal run of letters, digits, `_`, `.`, `$`, `-` that
+//        contains one of password, passwd, pwd, pass, secret, token, key, api,
+//        auth, credential, cred, nonce, salt;
+//     2. an optional closing quote of the name (", ' or a backtick), plain or
+//        escaped with one backslash, then an optional `]` or `)`;
 //     3. a separator, with optional spaces and tabs around it:
 //        `:`, `=`, `:=`, `=>`, `==`, `!=`;
-//     4. an optional quote;
-//     5. a value of 4 to 256 characters: up to the same quote when one opened
-//        it, else up to the first whitespace, `;`, `,` or the end of the line.
-//   In `dedupe` it ranks below every other rule: where another rule's value
-//   overlaps its own, the other rule names the candidate (and the span is
-//   the engine's: the narrower value when at most 5 characters stand around
-//   it, else the wider one; one span over both when neither holds the other).
+//     4. an optional `[`;
+//     5. an optional opening quote, plain or escaped with one backslash;
+//     6. an optional scheme word, one of Bearer, Basic, Token, Digest,
+//        Negotiate, ApiKey, followed by one or more spaces: it is not part of
+//        the value;
+//     7. a value of 4 to 256 characters. Quoted, it runs to the same quote;
+//        opened by an escaped quote, to the same quote escaped, with no bare
+//        quote of that kind before it. Bare, it runs to the first whitespace,
+//        `;`, `,` or the end of the line.
+//   Narrow readings: nothing but what is listed may stand between two steps
+//   (no space between the name's quote and `]`, none after `[`). An optional
+//   element that is there is taken as that element, never as the start of the
+//   value: after `[`, the value does not fall back to a bare `[…`; a bare
+//   value cannot begin with a quote, escaped or not; a scheme word followed
+//   by a space is never the value, so a scheme with nothing of 4 characters
+//   after it gives no candidate. A longer or shorter text is not a candidate.
+//
+//   auth-scheme, case-insensitive: the word Bearer or Basic at a word
+//   boundary, one or more spaces, then a value of 16 to 512 characters among
+//   ASCII letters, digits and `. _ ~ + / = -`. The value is the whole run of
+//   such characters: a longer run is not a candidate. It covers a header value
+//   whose header name is on another line.
+//
+//   In `dedupe` both rank below every other rule: where another rule's value
+//   overlaps theirs, the other rule names the candidate (and the span is the
+//   engine's: the narrower value when at most 5 characters stand around it,
+//   else the wider one; one span over both when neither holds the other).
+//   Between the two, the wider value wins, and generic-keyword on the same
+//   span.
 //
 // Each line of the export is one candidate:
 //   generator  "sg-cand-1"
+//   revision   1
 //   file       the file's path as listed or walked (below --base when given)
 //   ext        its extension, lower-case, with the dot ("" when none)
 //   rule       rule id
@@ -86,9 +113,9 @@
 //                context      what the value says of itself (see "Off")
 //                pragma       an allow pragma on or above the line
 //              They are those of the match that names the candidate.
-//              generic-keyword has no threshold, allowlist or stopword of its
-//              own: only placeholder, the global lists, context and pragma
-//              can be set on it.
+//              generic-keyword and auth-scheme have no threshold, allowlist
+//              or stopword of their own: only placeholder, the global lists
+//              and pragma can be set on them, and context on generic-keyword.
 //   reported   whether the default engine (`scan`, same text, same path)
 //              reports a finding that overlaps the value
 //   masked     whether value, name, lineText, prevLine and nextLine are
@@ -540,27 +567,60 @@ export function candidatesOf(text, engine, opts = {}) {
 
 export const GENERATOR = "sg-cand-1";
 
-// The one rule the mode adds. A name is a run of letters, digits, `_`, `.`,
-// `$` and `-`; it only has to CONTAIN a keyword. Spaces and tabs may stand on
-// both sides of the separator, on the same line. A quoted value runs to the
-// same quote; a bare one cannot begin with a quote and runs to the first
-// whitespace, `;` or `,` (or the end of the line). Either has 4 to 256
-// characters: a longer or shorter one is not a candidate, whatever its start.
+// Revision 1 of the generator (its single revision): `generic-keyword` reads a
+// few more forms, and `auth-scheme` is added.
+export const REVISION = 1;
+
+// generic-keyword. A name is a run of letters, digits, `_`, `.`, `$` and `-`;
+// it only has to CONTAIN a keyword. Everything stands on one line. An optional
+// element that is there is always taken as that element: the value never
+// begins with the bracket, the quote or the scheme word that precedes it.
 const NAME_CHAR = String.raw`[\w.$-]`;
+const QUOTES = ['"', "'", "\x60"];
 const SEPARATOR = "(?::=|=>|==|!=|:|=)";
+// An authentication scheme and the spaces after it: not part of the value.
+const SCHEME_WORDS = "(?:bearer|basic|token|digest|negotiate|apikey) +";
+const SCHEME = `(?:${SCHEME_WORDS}|(?!${SCHEME_WORDS}))`;
 const VALUE = [
-  String.raw`"([^"\r\n]{4,256})"`,
-  String.raw`'([^'\r\n]{4,256})'`,
-  String.raw`\x60([^\x60\r\n]{4,256})\x60`,
-  String.raw`(?!["'\x60])([^\s;,]{4,256})(?![^\s;,])`,
+  // A quoted value runs to the same quote.
+  ...QUOTES.map((q) => `${q}${SCHEME}([^${q}\\r\\n]{4,256})${q}`),
+  // Opened by an escaped quote (one backslash), it runs to the same quote,
+  // escaped too, with no bare quote of that kind before it.
+  ...QUOTES.map((q) => `\\\\${q}${SCHEME}([^${q}\\r\\n]{4,256})\\\\${q}`),
+  // A bare value runs to the first whitespace, `;` or `,` (or the end of the
+  // line), and cannot begin with a quote, escaped or not.
+  String.raw`(?!\\?["'\x60])${SCHEME}(?!\\?["'\x60])([^\s;,]{4,256})(?![^\s;,])`,
 ].join("|");
 export const GENERIC_KEYWORD = Object.freeze({
   id: "generic-keyword",
   keywords: KEYWORDS,
   // Judged like the engine's two rules that trust a name, for the `context` flag.
   nameTrusting: true,
-  re: new RegExp(String.raw`(?<!${NAME_CHAR})${NAME_CHAR}*?(?:${KEYWORDS.join("|")})${NAME_CHAR}*["'\x60]?[ \t]*${SEPARATOR}[ \t]*(?:${VALUE})`, "i"),
+  re: new RegExp(
+    [
+      String.raw`(?<!${NAME_CHAR})${NAME_CHAR}*?(?:${KEYWORDS.join("|")})${NAME_CHAR}*`, // 1. the name
+      String.raw`(?:\\?["'\x60])?[\])]?`, // 2. its closing quote, plain or escaped, then `]` or `)`
+      `[ \\t]*${SEPARATOR}[ \\t]*`, // 3. the separator
+      String.raw`(?:\[|(?!\[))`, // 4. `[`
+      `(?:${VALUE})`, // 5 to 7. the opening quote, the scheme word, the value
+    ].join(""),
+    "i",
+  ),
 });
+
+// auth-scheme: the value after `Bearer` or `Basic`, wherever the header name
+// is (often on another line). 16 to 512 characters of the set; a longer run is
+// not a candidate.
+const AUTH_VALUE_CHAR = "[A-Za-z0-9._~+/=-]";
+export const AUTH_SCHEME = Object.freeze({
+  id: "auth-scheme",
+  keywords: ["bearer", "basic"],
+  re: new RegExp(`\\b(?:bearer|basic) +(${AUTH_VALUE_CHAR}{16,512})(?!${AUTH_VALUE_CHAR})`, "i"),
+});
+// In the order `dedupe` sees them: on the same span, generic-keyword names the
+// candidate (it has the name the value is assigned to).
+const EXTRA_RULES = [GENERIC_KEYWORD, AUTH_SCHEME];
+const EXTRA_IDS = new Set(EXTRA_RULES.map((r) => r.id));
 
 // Gates that still drop a match in candidate mode: the built-in rules' own
 // checks (Luhn and IIN, the URL username, no whitespace and no file path in a
@@ -637,22 +697,25 @@ export function candidateRecords(text, engine, opts = {}) {
 
   const live = [];
   const dropped = [];
-  for (const m of engine.traceMatches(text, cfg, [GENERIC_KEYWORD])) {
+  for (const m of engine.traceMatches(text, cfg, EXTRA_RULES)) {
     const gate = m.gates.find((g) => KEPT_GATES.has(g));
     if (gate === undefined) live.push(m);
     else dropped.push({ ...m, gate });
   }
   // `dedupe` over the engine's own rules, as `scan` does; then once more with
-  // generic-keyword ranked below every one of them: it keeps a value only
-  // where no other rule names it, or where it holds 6 characters and more
-  // around the other rule's value.
+  // generic-keyword and auth-scheme ranked below every one of them: they keep
+  // a value only where no engine rule names it, or where it holds 6
+  // characters and more around the engine rule's value. The two rank
+  // together: the wider value wins, generic-keyword on the same span.
   const own = engine.dedupeFindings(
-    live.filter((m) => m.ruleId !== GENERIC_KEYWORD.id),
+    live.filter((m) => !EXTRA_IDS.has(m.ruleId)),
     text,
   );
-  const keyword = live.filter((m) => m.ruleId === GENERIC_KEYWORD.id).map((m) => ({ ...m, name: /^[\w.$-]+/.exec(m.match)?.[0] }));
+  const extra = EXTRA_RULES.flatMap((rule) => live.filter((m) => m.ruleId === rule.id)).map((m) =>
+    m.ruleId === GENERIC_KEYWORD.id ? { ...m, name: /^[\w.$-]+/.exec(m.match)?.[0] } : m,
+  );
   const kept = engine
-    .dedupeFindings([...own.map((m) => ({ ...m, rule: m.ruleId, ruleId: TOP_RANK_ID })), ...keyword.map((m) => ({ ...m, rule: m.ruleId, ruleId: LOWEST_RANK_ID }))], text)
+    .dedupeFindings([...own.map((m) => ({ ...m, rule: m.ruleId, ruleId: TOP_RANK_ID })), ...extra.map((m) => ({ ...m, rule: m.ruleId, ruleId: LOWEST_RANK_ID }))], text)
     .sort((a, b) => a.start - b.start);
 
   // What the default engine reports in the same text, with the same path.
@@ -696,6 +759,7 @@ export function candidateRecords(text, engine, opts = {}) {
     const { name, place: namePlace } = nameIn(text, m.name ?? assignedName(text, m.start), m.start, { raw: opts.raw, key });
     return {
       generator: GENERATOR,
+      revision: REVISION,
       file: opts.sourcePath ?? null,
       ext: opts.sourcePath ? extname(opts.sourcePath).toLowerCase() : "",
       rule: m.rule,
@@ -904,7 +968,7 @@ async function main(argv) {
   out.close();
   droppedOut?.close();
   const summary = {
-    ...(opt.candidates ? { generator: GENERATOR } : {}),
+    ...(opt.candidates ? { generator: GENERATOR, revision: REVISION } : {}),
     ...stats,
     filesWithCandidates,
     candidates: total,
@@ -918,7 +982,7 @@ async function main(argv) {
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `${n} ${k}`);
   console.error(
-    `rule-candidates: ${stats.read} files${skipped.length > 0 ? ` (skipped: ${skipped.join(", ")})` : ""}, ${stats.lines} lines, ${filesWithCandidates} with candidates, ${total} candidates${opt.candidates ? ` (${GENERATOR})` : ` ${JSON.stringify(byMode)}`}${opt.raw ? " (RAW values)" : " (values masked)"}`,
+    `rule-candidates: ${stats.read} files${skipped.length > 0 ? ` (skipped: ${skipped.join(", ")})` : ""}, ${stats.lines} lines, ${filesWithCandidates} with candidates, ${total} candidates${opt.candidates ? ` (${GENERATOR}, revision ${REVISION})` : ` ${JSON.stringify(byMode)}`}${opt.raw ? " (RAW values)" : " (values masked)"}`,
   );
   console.error(`rule-candidates: by rule ${JSON.stringify(byRule)}`);
   if (opt.candidates) console.error(`rule-candidates: dropped by a kept gate ${JSON.stringify(byGate)}; ${stats.pathAllowlisted} files under the global path allowlist`);

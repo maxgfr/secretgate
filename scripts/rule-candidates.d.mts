@@ -29,6 +29,7 @@ export interface TraceEngine {
 
 export interface CandidateRecord {
   generator: "sg-cand-1";
+  revision: 1;
   file: string | null;
   ext: string;
   rule: string;
@@ -105,7 +106,9 @@ export function candidatesOf(
   opts?: { generic?: boolean; context?: number; raw?: boolean; maskKey?: Buffer | string; known?: Map<string, string[]> },
 ): Candidate[];
 export const GENERATOR: "sg-cand-1";
+export const REVISION: 1;
 export const GENERIC_KEYWORD: { id: "generic-keyword"; keywords: string[]; nameTrusting: true; re: RegExp };
+export const AUTH_SCHEME: { id: "auth-scheme"; keywords: string[]; re: RegExp };
 export function candidateRecords(
   text: string,
   engine: TraceEngine,

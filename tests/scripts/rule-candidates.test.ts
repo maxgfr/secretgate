@@ -9,6 +9,7 @@ import {
   candidateRecords,
   candidatesOf,
   charClasses,
+  AUTH_SCHEME,
   type DroppedMatch,
   GENERATOR,
   GENERIC_KEYWORD,
@@ -17,6 +18,7 @@ import {
   maskKnown,
   maskName,
   maskValue,
+  REVISION,
   readText,
   valueIndex,
   walkFiles,
@@ -294,9 +296,77 @@ describe("generic-keyword", () => {
     expect(parse(`{"token": "abcd"}`)).toEqual(["token", "abcd"]);
     expect(parse(`'token' => 'abcd'`)).toEqual(["token", "abcd"]);
     expect(parse("`token` = `abcd`")).toEqual(["token", "abcd"]);
-    // Nothing else may stand between the name and the separator.
-    expect(parse(`config["token"] = "abcdefgh"`)).toBeNull();
-    expect(parse(`\\"token\\": \\"abcdefgh\\"`)).toBeNull();
+  });
+
+  it("takes an escaped quote after the name and around the value (a string inside a string)", () => {
+    expect(parse(`"{\\"token\\": \\"abcdefgh\\"}"`)).toEqual(["token", "abcdefgh"]);
+    expect(parse(`'{\\'token\\' => \\'abcd efgh\\'}'`)).toEqual(["token", "abcd efgh"]);
+    expect(parse(`\\"token\\": abcdefgh`)).toEqual(["token", "abcdefgh"]);
+    expect(parse(`token = \\"abcdefgh\\"`)).toEqual(["token", "abcdefgh"]);
+    // Opened escaped, it closes escaped: a bare quote of that kind first, or no
+    // escaped one on the line, and there is no value. One backslash: two
+    // backslashes and a quote are not an escaped quote.
+    expect(parse(`token = \\"abcd"efgh\\"`)).toBeNull();
+    expect(parse(`token = \\"abcdefgh"`)).toBeNull();
+    expect(parse(`token = \\"abcdefgh`)).toBeNull();
+    expect(parse(`token = \\\\"abcdefgh\\\\"`)).toEqual(["token", `\\\\"abcdefgh\\\\"`]); // a bare value, as before
+    expect(parse(`\\\\"token\\\\": "abcdefgh"`)).toBeNull();
+    // Opened plain, it closes at the next quote, as before.
+    expect(parse(`token = "abcd\\"efgh"`)).toEqual(["token", "abcd\\"]);
+  });
+
+  it("takes a closing bracket or parenthesis after the name (a subscript)", () => {
+    expect(parse(`config["token"] = "abcdefgh"`)).toEqual(["token", "abcdefgh"]);
+    expect(parse(`$_ENV['db_password'] => 'abcdefgh'`)).toEqual(["db_password", "abcdefgh"]);
+    expect(parse(`env[API_KEY]=abcdefgh`)).toEqual(["API_KEY", "abcdefgh"]);
+    expect(parse(`getenv("API_KEY") == "abcdefgh"`)).toEqual(["API_KEY", "abcdefgh"]);
+    expect(parse(`config[\\"token\\"] = \\"abcdefgh\\"`)).toEqual(["token", "abcdefgh"]);
+    // Nothing else may stand between the name and the separator, and nothing
+    // between the name's quote and the bracket.
+    expect(parse(`config["token" ] = "abcdefgh"`)).toBeNull();
+    expect(parse(`config["token"]] = "abcdefgh"`)).toBeNull();
+    expect(parse(`config["token"].x = "abcdefgh"`)).toBeNull();
+    expect(parse(`token: str = "abcdefgh"`)).toBeNull();
+  });
+
+  it("takes an opening bracket before the value (a list), and never as the value's start", () => {
+    expect(parse(`tokens: ["abcdefgh", "ijklmnop"]`)).toEqual(["tokens", "abcdefgh"]);
+    expect(parse(`tokens = ['abcdefgh']`)).toEqual(["tokens", "abcdefgh"]);
+    expect(parse(`tokens: [abcdefgh, ijklmnop]`)).toEqual(["tokens", "abcdefgh"]);
+    expect(parse(`tokens: [\\"abcdefgh\\"]`)).toEqual(["tokens", "abcdefgh"]);
+    // Only the first element, only right after the bracket, and no fallback to
+    // a bare value that would begin with the bracket.
+    expect(parse(`tokens: ["abc", "defghijk"]`)).toBeNull();
+    expect(parse(`tokens: [ "abcdefgh" ]`)).toBeNull();
+    expect(parse(`tokens: [[abcdefgh]]`)).toEqual(["tokens", "[abcdefgh]]"]);
+    expect(parse(`tokens: {"abcdefgh"}`)).toEqual(["tokens", `{"abcdefgh"}`]);
+  });
+
+  it("leaves a scheme word and its spaces out of the value", () => {
+    for (const scheme of ["Bearer", "Basic", "Token", "Digest", "Negotiate", "ApiKey", "bearer", "BASIC"]) {
+      expect(parse(`Authorization: ${scheme} abcdefgh`), scheme).toEqual(["Authorization", "abcdefgh"]);
+      expect(parse(`"auth": "${scheme}   abcd efgh"`), scheme).toEqual(["auth", "abcd efgh"]);
+      expect(parse(`auth = \\"${scheme} abcdefgh\\"`), scheme).toEqual(["auth", "abcdefgh"]);
+      expect(parse(`auth: [${scheme} abcdefgh]`), scheme).toEqual(["auth", "abcdefgh]"]);
+    }
+    // A scheme word followed by a space is never the value itself.
+    expect(parse("Authorization: Bearer abc")).toBeNull();
+    expect(parse(`Authorization: "Bearer abc"`)).toBeNull();
+    expect(parse("Authorization: Bearer ")).toBeNull();
+    expect(parse(`Authorization: Bearer "abcdefgh"`)).toBeNull();
+    // Without a space after it, it is a value like any other; so is another word.
+    expect(parse("Authorization: Bearer")).toEqual(["Authorization", "Bearer"]);
+    expect(parse("Authorization: Bearer\tabcdefgh")).toEqual(["Authorization", "Bearer"]);
+    expect(parse("Authorization: Bearerabcd efgh")).toEqual(["Authorization", "Bearerabcd"]);
+    expect(parse("Authorization: Custom abcdefgh")).toEqual(["Authorization", "Custom"]);
+    expect(parse("Authorization: Bearer Basic abcdefgh")).toEqual(["Authorization", "Basic"]);
+  });
+
+  it("proposes neither an identifier under a name with no keyword, nor a call argument", () => {
+    const uuid = ["123e4567", "e89b", "12d3", "a456", "426614174000"].join("-");
+    for (const line of [`id: ${uuid}`, `"_postman_id": "${uuid}"`, `collectionId = '${uuid}'`, `folder: ${uuid}`, uuid]) expect(parse(line), line).toBeNull();
+    for (const line of [`token("abcdefgh")`, "token(abcdefgh)", `setPassword("abcdefgh")`, `password("abcdefgh", 1)`, `login(password, "abcdefgh")`])
+      expect(parse(line), line).toBeNull();
   });
 
   it("reads a quoted value up to its closing quote", () => {
@@ -341,6 +411,42 @@ describe("generic-keyword", () => {
   });
 });
 
+describe("auth-scheme", () => {
+  const re = new RegExp(AUTH_SCHEME.re.source, AUTH_SCHEME.re.flags);
+  const value = (line: string): string | null => re.exec(line)?.[1] ?? null;
+  const token = FAKE.genericSecret;
+
+  it("reads the value after Bearer or Basic, whatever stands before", () => {
+    expect(AUTH_SCHEME.id).toBe("auth-scheme");
+    expect(AUTH_SCHEME.keywords).toEqual(["bearer", "basic"]);
+    for (const scheme of ["Bearer", "Basic", "bearer", "BASIC"]) {
+      expect(value(`${scheme} ${token}`), scheme).toBe(token);
+      expect(value(`  - "${scheme}   ${token}"`), scheme).toBe(token);
+      expect(value(`-H 'X: ${scheme} ${token}'`), scheme).toBe(token);
+    }
+    expect(value(`Bearer abc.DEF_ghi~jkl+mno/pqr=stu-0123`)).toBe("abc.DEF_ghi~jkl+mno/pqr=stu-0123");
+    // The value stops at the first character outside the set.
+    expect(value(`Bearer ${token}" trailing`)).toBe(token);
+    expect(value(`Bearer ${token}:rest`)).toBe(token);
+  });
+
+  it("wants a word boundary, spaces, and 16 to 512 characters of the set", () => {
+    expect(value("Bearer abcdefgh1234567")).toBeNull(); // 15
+    expect(value("Bearer abcdefgh12345678")).toHaveLength(16);
+    expect(value(`Bearer ${"a1".repeat(256)}`)).toHaveLength(512);
+    expect(value(`Bearer ${"a1".repeat(256)}b`)).toBeNull(); // a longer run is not a candidate
+    expect(value(`Bearer\t${token}`)).toBeNull();
+    expect(value(`Bearer${token}`)).toBeNull();
+    expect(value(`Bearer: ${token}`)).toBeNull();
+    expect(value(`token_bearer ${token}`)).toBeNull();
+    expect(value(`Bearers ${token}`)).toBeNull();
+    expect(value(`Digest ${token}`)).toBeNull();
+    expect(value(`Token ${token}`)).toBeNull();
+    expect(value(`Bearer\n${token}`)).toBeNull();
+    expect(value("Bearer abcd!efgh12345678")).toBeNull();
+  });
+});
+
 describe("candidateRecords (sg-cand-1)", () => {
   const trace = { scan, traceMatches, dedupeFindings };
   const raw = (text: string, opts: { sourcePath?: string; maxLine?: number; dropped?: DroppedMatch[] } = {}): CandidateRecord[] =>
@@ -359,6 +465,7 @@ describe("candidateRecords (sg-cand-1)", () => {
     expect(rest).toEqual([]);
     expect(c).toEqual({
       generator: "sg-cand-1",
+      revision: 1,
       file: "conf/Service.ENV",
       ext: ".env",
       rule: "generic-keyword",
@@ -382,6 +489,7 @@ describe("candidateRecords (sg-cand-1)", () => {
       masked: false,
     });
     expect(GENERATOR).toBe("sg-cand-1");
+    expect(REVISION).toBe(1);
     expect(c!.lineText.slice(c!.start, c!.end)).toBe(c!.value);
   });
 
@@ -459,6 +567,66 @@ describe("candidateRecords (sg-cand-1)", () => {
     // More than that around it: the keyword rule's wider value is the candidate.
     const wide = `user ${FAKE.githubPat} and more`;
     expect(one(`auth = "${wide}"`)).toMatchObject({ rule: "generic-keyword", value: wide, name: "auth", reported: true });
+  });
+
+  it("reads the new forms of generic-keyword with their place in the line", () => {
+    for (const [text, name, value] of [
+      [`payload = "{\\"api_token\\": \\"Zx9!kLm2#Qw8\\"}"`, "api_token", "Zx9!kLm2#Qw8"],
+      [`config["db_password"] = "Zx9!kLm2#Qw8"`, "db_password", "Zx9!kLm2#Qw8"],
+      [`tokens: ["Zx9!kLm2#Qw8", "other"]`, "tokens", "Zx9!kLm2#Qw8"],
+      [`X-Auth: Token Zx9!kLm2#Qw8`, "X-Auth", "Zx9!kLm2#Qw8"],
+    ] as const) {
+      const c = one(text);
+      expect([c.rule, c.name, c.value], text).toEqual(["generic-keyword", name, value]);
+      expect(c.lineText.slice(c.start, c.end)).toBe(value);
+    }
+  });
+
+  it("finds a header value whose header name is on another line (auth-scheme)", () => {
+    const text = `headers:\n  Authorization:\n    - "Bearer ${FAKE.genericSecret}"\n`;
+    expect(scan(text)).toEqual([]);
+    const c = one(text);
+    expect(c).toMatchObject({
+      rule: "auth-scheme",
+      line: 3,
+      value: FAKE.genericSecret,
+      name: null,
+      prevLine: "  Authorization:",
+      filters: NONE,
+      reported: false,
+    });
+    expect(c.lineText.slice(c.start, c.end)).toBe(FAKE.genericSecret);
+    // Nothing shorter, and no flag of a rule it is not.
+    expect(raw(`  - "Bearer abcdefgh1234"\n`)).toEqual([]);
+    expect(one(`curl -H "X: Basic ${"a".repeat(20)}"`)).toMatchObject({ rule: "auth-scheme", filters: { ...NONE, placeholder: true, allowlist: true } });
+  });
+
+  it("ranks auth-scheme with generic-keyword, below every engine rule", () => {
+    // The wider value wins between the two; on the same span generic-keyword
+    // names it, and it has the name.
+    expect(one(`Authorization: Bearer ${FAKE.genericSecret}x!`)).toMatchObject({
+      rule: "generic-keyword",
+      name: "Authorization",
+      value: `${FAKE.genericSecret}x!`,
+    });
+    const same = raw(`X-Auth: Bearer ${FAKE.genericSecret}`);
+    expect(same.map((c) => [c.rule, c.name, c.value])).toEqual([["generic-keyword", "X-Auth", FAKE.genericSecret]]);
+    // An engine rule on the value: the engine rule names it.
+    expect(one(`  - Bearer ${FAKE.githubPat}`)).toMatchObject({ rule: "github-pat", value: FAKE.githubPat, reported: true });
+    expect(one(`Authorization: Bearer ${FAKE.githubPat}`)).toMatchObject({ rule: "github-pat", value: FAKE.githubPat, reported: true });
+  });
+
+  it("proposes neither a UUID under a name with no keyword nor a call argument", () => {
+    const uuid = ["123e4567", "e89b", "12d3", "a456", "426614174000"].join("-");
+    const text = [
+      `id: ${uuid}`,
+      `"_postman_id": "${uuid}"`,
+      `collectionId = '${uuid}'`,
+      `  - ${uuid}`,
+      `setPassword("Zx9!kLm2#Qw8")`,
+      `login(user, "Zx9!kLm2#Qw8")`,
+    ].join("\n");
+    expect(raw(text)).toEqual([]);
   });
 
   it("covers every finding of the default engine", () => {
@@ -677,7 +845,7 @@ describe.skipIf(Number(process.versions.node.split(".")[0]) < 24)("rule-candidat
       expect(masked.stderr).toContain("values masked");
       expect(readFileSync(join(dir, "out.jsonl"), "utf8")).not.toContain("Zx9!kLm2#Qw8rT5yU");
       expect(lines("out.jsonl")).toMatchObject([
-        { generator: "sg-cand-1", file: "repo/src/a.env", ext: ".env", rule: "generic-keyword", line: 2, masked: true },
+        { generator: "sg-cand-1", revision: 1, file: "repo/src/a.env", ext: ".env", rule: "generic-keyword", line: 2, masked: true },
       ]);
 
       const real = run("--raw");
@@ -689,6 +857,7 @@ describe.skipIf(Number(process.versions.node.split(".")[0]) < 24)("rule-candidat
       ]);
       expect(JSON.parse(readFileSync(join(dir, "stats.json"), "utf8"))).toMatchObject({
         generator: "sg-cand-1",
+        revision: 1,
         files: 4,
         read: 2,
         skipped: { missing: 1, empty: 0, large: 0, binary: 1 },
