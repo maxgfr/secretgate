@@ -9192,22 +9192,71 @@ function preToolPolicy(call, cfg, cwd, opts) {
 // src/hooks/scan-budget.ts
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
-var isBase64Text = (value) => typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
 function isBinaryField(key, value, parent) {
-  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && isBase64Text(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
-  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && isBase64Text(value);
+  const media = ["image", "audio"].includes(parent.type ?? "");
+  if ((key === "data" || key === "base64") && media) return isAttachmentPayload(value, parent.mimeType ?? parent.mime);
+  if ((key === "url" || key === "uri") && typeof value === "string") {
+    const m = /^data:((?:image|audio)\/[^;,]*)(?:;[^;,]*)*;base64,/.exec(value);
+    return m !== null && isAttachmentPayload(value.slice(m[0].length), m[1]);
+  }
+  if (key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime))
+    return isAttachmentPayload(value, parent.mime);
+  return false;
 }
-var ATTACHMENT_START = {
-  "image/png": "iVBORw0KGgo",
-  "image/jpeg": "/9j/",
-  "image/gif": "R0lGOD",
-  "image/webp": "UklGR",
-  "application/pdf": "JVBERi0"
-};
-function isAttachmentPayload(value, mediaType) {
-  if (typeof value !== "string" || typeof mediaType !== "string") return false;
-  const start = ATTACHMENT_START[mediaType.toLowerCase()];
-  return start !== void 0 && value.startsWith(start) && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+var ascii = (text) => [...text].map((c) => c.charCodeAt(0));
+var SIGNATURES = [
+  [[0, [137, ...ascii("PNG\r\n"), 26, 10]]],
+  [[0, [255, 216, 255]]],
+  // JPEG
+  [[0, ascii("GIF87a")]],
+  [[0, ascii("GIF89a")]],
+  [
+    [0, ascii("RIFF")],
+    [8, ascii("WEBP")]
+  ],
+  [
+    [0, ascii("RIFF")],
+    [8, ascii("WAVE")]
+  ],
+  [
+    [0, ascii("FORM")],
+    [8, ascii("AIF")]
+  ],
+  [[0, [73, 73, 42, 0]]],
+  // TIFF
+  [[0, [77, 77, 0, 42]]],
+  [[4, ascii("ftyp")]],
+  // HEIC, AVIF, MP4, M4A
+  [[0, [0, 0, 1, 0]]],
+  // ICO
+  [[0, ascii("8BPS")]],
+  [[0, ascii("OggS")]],
+  [[0, ascii("fLaC")]],
+  [[0, ascii("ID3")]],
+  [[0, ascii("MThd")]],
+  [[0, [26, 69, 223, 163]]]
+  // WebM, Matroska
+];
+var SIGNATURES_BY_TYPE = [
+  [/^image\/(?:x-)?(?:ms-)?bmp$/, ascii("BM")],
+  [/^image\/jxl$/, [255, 10]],
+  [/^audio\/(?:mpeg|mp3|aac|aacp)$/, [255, 224], 224]
+  // frame sync: 11 set bits
+];
+function hasSignature(head, declared) {
+  const at = (offset, bytes) => bytes.every((b, i2) => head[offset + i2] === b);
+  if (SIGNATURES.some((parts) => parts.every(([offset, bytes]) => at(offset, bytes)))) return true;
+  for (const [type, bytes, mask] of SIGNATURES_BY_TYPE) {
+    if (!type.test(declared)) continue;
+    if (mask === void 0 ? at(0, bytes) : head[0] === bytes[0] && ((head[1] ?? 0) & mask) === bytes[1]) return true;
+  }
+  let i = at(0, [239, 187, 191]) ? 3 : 0;
+  while (i < 1024 && [0, 9, 10, 12, 13, 32].includes(head[i] ?? -1)) i++;
+  return at(i, ascii("%PDF-"));
+}
+function isAttachmentPayload(value, declared) {
+  if (typeof value !== "string" || value.length < 8 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+  return hasSignature(Buffer.from(value.slice(0, 1400), "base64"), typeof declared === "string" ? declared.toLowerCase() : "");
 }
 function eventRedactor(vault, source, allowlist) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;

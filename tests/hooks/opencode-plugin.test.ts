@@ -483,7 +483,7 @@ describe("OpenCode 2 events", () => {
 
   // Real OpenCode 2.0.26 shapes for `read` of a PNG.
   it("passes a base64 image read through untouched, in the result and in later context", async () => {
-    const base64 = `iVBORw0K${"A".repeat(2 * 1024 * 1024)}`;
+    const base64 = Buffer.concat([Buffer.from("\x89PNG\r\n\x1a\n", "latin1"), Buffer.alloc(1_600_000, 0x41)]).toString("base64");
     const imageParts = () => [
       { type: "text", text: "Image read successfully" },
       { type: "file", uri: `data:image/png;base64,${base64}`, mime: "image/png", name: "img.png" },

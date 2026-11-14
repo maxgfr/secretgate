@@ -190,9 +190,20 @@ describe("PostToolUse — output redaction", () => {
   // As Claude Code 2.1.323 hands them over. Scanned as text, the base64 of a
   // 1.5 MB PDF exceeded the scan budget and reading it stopped the session.
   it("passes a PDF or an image read as the attachment it is, whatever its size", async () => {
-    const pdfBytes = "JVBERi0xLjQK".repeat(300_000); // 3.6 MB of base64, as a PDF starts
-    const jpegBytes = "/9j/4AAQSkZJ".repeat(300_000);
+    const big = (head: string) => Buffer.concat([Buffer.from(head, "latin1"), Buffer.alloc(2_700_000, 0x41)]).toString("base64"); // 3.6 MB of base64
+    const pdfBytes = big("%PDF-1.4\n");
+    const jpegBytes = big("\xff\xd8\xff\xe0\x00\x10JFIF");
     const pdf = { type: "pdf", file: { filePath: "/tmp/spec.pdf", base64: pdfBytes, originalSize: 2_700_000 } };
+    // A PDF may start with a newline or a byte-order mark; a JPEG may be filed as a PNG.
+    const odd = [
+      { type: "pdf", file: { filePath: "/tmp/a.pdf", base64: big("\n%PDF-1.4\n") } },
+      { type: "pdf", file: { filePath: "/tmp/a.pdf", base64: big("\xef\xbb\xbf%PDF-1.4\n") } },
+      { type: "image", file: { base64: jpegBytes, type: "image/png" } },
+    ];
+    for (const response of odd) {
+      const r = await handleClaudeCode("post-tool-use", postToolEvent("Read", { file_path: "/tmp/a" }, response));
+      expect(r, response.type).toEqual({ stdout: "", exit: 0 });
+    }
     const image = {
       type: "image",
       file: { base64: jpegBytes, type: "image/jpeg", originalSize: 2_700_000, dimensions: { originalWidth: 1000, originalHeight: 1000 } },
@@ -336,8 +347,9 @@ describe("PostToolBatch — results no hook could redact", () => {
 
   it("reads content-block results and leaves attachments alone, whatever their size", async () => {
     // As Claude Code 2.1.323 hands over a Read of an image and of a PDF.
-    const image = { type: "image", source: { type: "base64", data: "iVBORw0KGgoA".repeat(300_000), media_type: "image/png" } };
-    const pdf = { type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQK".repeat(300_000) } };
+    const big = (head: string) => Buffer.concat([Buffer.from(head, "latin1"), Buffer.alloc(2_700_000, 0x41)]).toString("base64");
+    const image = { type: "image", source: { type: "base64", data: big("\x89PNG\r\n\x1a\n"), media_type: "image/png" } };
+    const pdf = { type: "document", source: { type: "base64", media_type: "application/pdf", data: big("\n%PDF-1.4\n") } };
     const clean = await handleClaudeCode(
       "post-tool-batch",
       batchEvent({ tool_name: "Read", tool_response: [image] }, { tool_name: "Read", tool_response: [{ type: "text", text: "PDF file read" }, pdf] }),
