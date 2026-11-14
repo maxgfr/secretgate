@@ -40,20 +40,32 @@ export interface RestoreResult {
 // 12 hex digits, or 16 after a collision, and the text after it can be hex
 // too (`SECRETGATE_…cafe`): the greedy match is tried as the long form, then
 // the short one, and whatever it did not consume stays in the text.
+//
+// A recorded value can itself hold a placeholder: text that was already
+// redacted, with more secret material added around it, is redacted again as
+// one value. Restoring goes on until nothing known is left (the depth is
+// bounded, so a vault that loops on itself cannot hang a hook).
+const MAX_NESTING = 4;
+
 export function restorePlaceholders(text: string, vault: Vault): RestoreResult {
   if (!text.includes(PLACEHOLDER_PREFIX)) return { text, restored: 0 };
   const lookup = vault.lookup();
   let restored = 0;
-  const out = text.replace(PLACEHOLDER_RE, (match) => {
-    const hex = match.slice(PLACEHOLDER_PREFIX.length);
-    for (const len of PLACEHOLDER_LENGTHS) {
-      if (hex.length < len) continue;
-      const secret = lookup(PLACEHOLDER_PREFIX + hex.slice(0, len));
-      if (secret === undefined) continue;
-      restored++;
-      return secret + hex.slice(len);
-    }
-    return match;
-  });
+  let out = text;
+  for (let depth = 0; depth < MAX_NESTING; depth++) {
+    const before = restored;
+    out = out.replace(PLACEHOLDER_RE, (match) => {
+      const hex = match.slice(PLACEHOLDER_PREFIX.length);
+      for (const len of PLACEHOLDER_LENGTHS) {
+        if (hex.length < len) continue;
+        const secret = lookup(PLACEHOLDER_PREFIX + hex.slice(0, len));
+        if (secret === undefined) continue;
+        restored++;
+        return secret + hex.slice(len);
+      }
+      return match;
+    });
+    if (restored === before || !out.includes(PLACEHOLDER_PREFIX)) break;
+  }
   return { text: out, restored };
 }

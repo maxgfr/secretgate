@@ -8575,7 +8575,13 @@ var ScanBudgetError = class extends Error {
     this.name = "ScanBudgetError";
   }
 };
-var PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
+var PLACEHOLDER = /SECRETGATE_[0-9a-f]{12,16}/g;
+var MIN_REMAINDER = 6;
+function alreadyRedacted(secret) {
+  if (!secret.includes("SECRETGATE_")) return false;
+  const rest = secret.replace(PLACEHOLDER, "");
+  return rest.length < secret.length && rest.length < MIN_REMAINDER;
+}
 function compileAllowlist(a) {
   return {
     condition: a.condition === "AND" ? "AND" : "OR",
@@ -8750,7 +8756,7 @@ var BUILTIN_RULES = [
     // (`"password": "Client Secret"` in Airflow's connection-form metadata).
     // The cost is a spaced passphrase, which this rule now leaves to a real
     // password manager — the same trade-off the README already states.
-    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !PLACEHOLDER_ONLY.test(secret)
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !alreadyRedacted(secret)
   },
   // Credentials a coding agent's .env commonly holds and gitleaks ships no rule
   // for (fed one by one to both engines, gitleaks 8.30 missed all four). The
@@ -8804,7 +8810,7 @@ function isRuleSourceText(secret) {
   return !secret.includes("\0") && RULE_SOURCE_BLOB.includes(secret);
 }
 function isNonSecret(secret) {
-  return PLACEHOLDER_ONLY.test(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
+  return alreadyRedacted(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
 }
 function isNonSecretInContext(text, start, secret, ruleId) {
   if (GITHUB_TOKEN_RULES.has(ruleId) && EIGHT_IN_A_ROW.test(secret)) return true;
@@ -8886,7 +8892,7 @@ function scan(text, cfg = {}) {
     for (const match of text.matchAll(rule.re)) {
       const { secret, start, end } = pickSecret(match, rule.secretGroup);
       if (secret.length === 0) continue;
-      if (PLACEHOLDER_ONLY.test(secret)) continue;
+      if (alreadyRedacted(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
       if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
       if (isRuleSourceText(secret)) continue;
@@ -8916,7 +8922,6 @@ function scan(text, cfg = {}) {
   return dedupe(findings, text);
 }
 var specificity = (ruleId) => ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2;
-var MIN_REMAINDER = 6;
 function dedupe(findings, text) {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
   const kept = [];
@@ -8987,21 +8992,27 @@ function redactText(text, vault, source, cfg = {}) {
   pieces.push(text.slice(at));
   return { text: pieces.join(""), findings, replaced: ordered.map((f, i) => ({ placeholder: placeholders[i], ruleId: f.ruleId })) };
 }
+var MAX_NESTING = 4;
 function restorePlaceholders(text, vault) {
   if (!text.includes(PLACEHOLDER_PREFIX)) return { text, restored: 0 };
   const lookup = vault.lookup();
   let restored = 0;
-  const out = text.replace(PLACEHOLDER_RE, (match) => {
-    const hex = match.slice(PLACEHOLDER_PREFIX.length);
-    for (const len of PLACEHOLDER_LENGTHS) {
-      if (hex.length < len) continue;
-      const secret = lookup(PLACEHOLDER_PREFIX + hex.slice(0, len));
-      if (secret === void 0) continue;
-      restored++;
-      return secret + hex.slice(len);
-    }
-    return match;
-  });
+  let out = text;
+  for (let depth = 0; depth < MAX_NESTING; depth++) {
+    const before = restored;
+    out = out.replace(PLACEHOLDER_RE, (match) => {
+      const hex = match.slice(PLACEHOLDER_PREFIX.length);
+      for (const len of PLACEHOLDER_LENGTHS) {
+        if (hex.length < len) continue;
+        const secret = lookup(PLACEHOLDER_PREFIX + hex.slice(0, len));
+        if (secret === void 0) continue;
+        restored++;
+        return secret + hex.slice(len);
+      }
+      return match;
+    });
+    if (restored === before || !out.includes(PLACEHOLDER_PREFIX)) break;
+  }
   return { text: out, restored };
 }
 

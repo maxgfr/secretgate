@@ -54,6 +54,37 @@ describe("redactText", () => {
     expect(restorePlaceholders(r.text, vault).text).toBe(`api_key = "${FAKE.awsKeyId}:${rest}"`);
   });
 
+  // A wider rule often captures a stray character around a token (the dot that
+  // ends a sentence). Once the token is a placeholder, that rule saw
+  // `SECRETGATE_….` as a new secret: the redacted text was flagged again.
+  it("is stable: redacted text holds nothing to redact", () => {
+    for (const text of [
+      `token: ${FAKE.githubPat}.`,
+      `TOKEN=${FAKE.githubPat}.\n`,
+      `api_key = "x-${FAKE.githubPat}"`,
+      `password = "ab:${FAKE.awsKeyId}"`,
+      `secret = "${FAKE.awsKeyId}!"`,
+      `key=${FAKE.awsKeyId}=`,
+      `auth_token = '${FAKE.slackBotToken}.x'`,
+      `secret_key = ${FAKE.groqKey}__`,
+    ]) {
+      const once = redactText(text, vault, "test");
+      expect(once.findings.length, text).toBeGreaterThan(0);
+      const twice = redactText(once.text, vault, "test");
+      expect(twice.findings, once.text).toEqual([]);
+      expect(restorePlaceholders(once.text, vault).text).toBe(text);
+    }
+  });
+
+  it("still redacts what is added around a placeholder", () => {
+    const first = redactText(`key: ${FAKE.awsKeyId}`, vault, "test").text.slice("key: ".length);
+    const composed = `password = "${first}:Zx9kLm2Qw8rT5yU"`;
+    const r = redactText(composed, vault, "test");
+    expect(r.text).not.toContain("Zx9kLm2Qw8rT5yU");
+    // The placeholder of a value that held a placeholder leads back to the real thing.
+    expect(restorePlaceholders(r.text, vault).text).toBe(`password = "${FAKE.awsKeyId}:Zx9kLm2Qw8rT5yU"`);
+  });
+
   it("returns the text unchanged when nothing is found", () => {
     const r = redactText("nothing to see here", vault, "test");
     expect(r.text).toBe("nothing to see here");

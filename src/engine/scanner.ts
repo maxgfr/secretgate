@@ -51,7 +51,21 @@ export class ScanBudgetError extends Error {
 // re-block, and writing a placeholder back would be flagged. Kept in sync with
 // vault/placeholder.ts PLACEHOLDER_RE (duplicated to keep the engine free of a
 // vault dependency).
-const PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
+const PLACEHOLDER = /SECRETGATE_[0-9a-f]{12,16}/g;
+// What a wider finding may hold around a narrower one and still give way to
+// it (see dedupe): less than the shortest value password-assignment itself
+// would flag.
+const MIN_REMAINDER = 6;
+// A placeholder, or one with the stray characters a wider rule captures around
+// a token: `key: ghp_….` is redacted to `key: SECRETGATE_….`, and the generic
+// rule, which took the dot with the token, must not see a new secret in it.
+// Anything longer around the placeholder is material of its own, and is
+// redacted (the restore then resolves the placeholder inside the placeholder).
+function alreadyRedacted(secret: string): boolean {
+  if (!secret.includes("SECRETGATE_")) return false;
+  const rest = secret.replace(PLACEHOLDER, "");
+  return rest.length < secret.length && rest.length < MIN_REMAINDER;
+}
 
 interface CompiledAllowlist {
   condition: "AND" | "OR";
@@ -330,7 +344,7 @@ const BUILTIN_RULES: CompiledRule[] = [
     // (`"password": "Client Secret"` in Airflow's connection-form metadata).
     // The cost is a spaced passphrase, which this rule now leaves to a real
     // password manager — the same trade-off the README already states.
-    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !PLACEHOLDER_ONLY.test(secret),
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !alreadyRedacted(secret),
   },
   // Credentials a coding agent's .env commonly holds and gitleaks ships no rule
   // for (fed one by one to both engines, gitleaks 8.30 missed all four). The
@@ -409,7 +423,7 @@ function isRuleSourceText(secret: string): boolean {
  *  gitleaks hybrid pass: our own placeholders, our own detection patterns, and
  *  obvious placeholder values. */
 export function isNonSecret(secret: string): boolean {
-  return PLACEHOLDER_ONLY.test(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
+  return alreadyRedacted(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
 }
 
 /** What `scan` drops because of the rule and of where the value stands, for a
@@ -514,7 +528,7 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     for (const match of text.matchAll(rule.re)) {
       const { secret, start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
       if (secret.length === 0) continue;
-      if (PLACEHOLDER_ONLY.test(secret)) continue; // our own already-redacted marker
+      if (alreadyRedacted(secret)) continue; // our own marker
       // Every gate below must pass, so the cheap, rule-specific ones (Luhn,
       // IIN, the URL username) run before the ones that search shared tables.
       if (rule.post && !rule.post(secret)) continue;
@@ -567,9 +581,6 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
 //     value, and the vendor rule sees only the key id.
 //   - Neither inside the other: one finding over both spans.
 const specificity = (ruleId: string): number => (ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2);
-// What a wider finding may hold around a narrower one and still give way to
-// it: less than the shortest value password-assignment itself would flag.
-const MIN_REMAINDER = 6;
 // Findings are visited by start (longest first), so the kept spans stay sorted
 // and disjoint: only the last one kept can reach the next finding.
 function dedupe(findings: Finding[], text: string): Finding[] {

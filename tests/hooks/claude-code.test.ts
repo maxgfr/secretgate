@@ -49,6 +49,14 @@ describe("UserPromptSubmit", () => {
     expect(new Vault().secretFor(placeholder)).toBe(FAKE.githubPat);
   });
 
+  it("lets the redacted copy of a blocked prompt through when it is sent again", async () => {
+    // The dot ends the sentence; the generic rule captures it with the token.
+    const blocked = JSON.parse((await handleClaudeCode("user-prompt-submit", promptEvent(`deploy with token: ${FAKE.githubPat}.`))).stdout);
+    const copy = (blocked.reason as string).split("\n").find((l) => l.includes("SECRETGATE_"))!;
+    expect(copy).toMatch(/^deploy with token: SECRETGATE_[0-9a-f]{12}\.$/);
+    expect((await handleClaudeCode("user-prompt-submit", promptEvent(copy))).stdout).toBe("");
+  });
+
   it("honors the [allow-secret] bypass tag", async () => {
     const r = await handleClaudeCode("user-prompt-submit", promptEvent(`[allow-secret] use ${FAKE.githubPat}`));
     expect(r.exit).toBe(0);
@@ -321,6 +329,13 @@ describe("PostToolBatch — results no hook could redact", () => {
       expect(JSON.parse(r.stdout).stopReason, source.type).toContain("mcp__x__env");
     }
     session = "s1";
+  });
+
+  it("does not stop on a result PostToolUse redacted next to punctuation", async () => {
+    const redacted = JSON.parse(
+      (await handleClaudeCode("post-tool-use", postToolEvent("Bash", { command: "cat notes" }, { stdout: `token: ${FAKE.githubPat}.`, stderr: "" }))).stdout,
+    ).hookSpecificOutput.updatedToolOutput.stdout;
+    expect((await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "Bash", tool_response: redacted }))).stdout).toBe("");
   });
 
   it("gives each result its own size budget, and fails closed past it", async () => {
