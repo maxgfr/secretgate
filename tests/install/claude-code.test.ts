@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -89,6 +89,39 @@ describe("installClaudeCode", () => {
     writeFileSync(settingsPath, "{ model: broken,, }");
     expect(() => installClaudeCode({ settingsPath, command })).toThrow(SettingsParseError);
     expect(readFileSync(settingsPath, "utf8")).toBe("{ model: broken,, }");
+  });
+});
+
+// settings.json is the user's file: it can hold API keys in `env` behind 0600,
+// and it is often a link into a dotfiles checkout.
+describe("installClaudeCode — the file stays the user's", () => {
+  const posix = process.platform !== "win32";
+
+  it.runIf(posix)("keeps the permission bits of an existing settings.json", () => {
+    writeFileSync(settingsPath, JSON.stringify({ env: { EXAMPLE: "1" } }));
+    chmodSync(settingsPath, 0o600);
+    installClaudeCode({ settingsPath, command });
+    expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
+    uninstallClaudeCode({ settingsPath });
+    expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
+  });
+
+  it.runIf(posix)("writes through a symlinked settings.json instead of replacing the link", () => {
+    const real = join(dir, "dotfiles-settings.json");
+    writeFileSync(real, JSON.stringify({ env: { EXAMPLE: "1" } }));
+    symlinkSync(real, settingsPath);
+    installClaudeCode({ settingsPath, command });
+    expect(lstatSync(settingsPath).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, "utf8")).hooks.PostToolUse).toHaveLength(1);
+    uninstallClaudeCode({ settingsPath });
+    expect(lstatSync(settingsPath).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, "utf8"))).toEqual({ env: { EXAMPLE: "1" } });
+  });
+
+  it("creates a new settings.json readable like any config file, and leaves no temp file", () => {
+    installClaudeCode({ settingsPath, command });
+    if (posix) expect(statSync(settingsPath).mode & 0o777).toBe(0o644);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
   });
 });
 

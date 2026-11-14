@@ -2,14 +2,14 @@
 
 // src/cli.ts
 import { execFileSync } from "child_process";
-import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync11, readdirSync as readdirSync4, realpathSync as realpathSync4, rmSync as rmSync7, statSync as statSync4 } from "fs";
+import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync11, readdirSync as readdirSync4, realpathSync as realpathSync5, rmSync as rmSync7, statSync as statSync5 } from "fs";
 import { homedir as homedir8, tmpdir as tmpdir3 } from "os";
 import { delimiter as delimiter3, dirname as dirname9, isAbsolute as isAbsolute5, join as join13, relative as relative4, resolve as resolve7 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/config.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync as statSync3 } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync as statSync4 } from "fs";
 import { homedir as homedir4 } from "os";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 
@@ -1424,7 +1424,7 @@ function applyEdits(text, edits) {
 
 // src/fs-atomic.ts
 import { randomBytes } from "crypto";
-import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
+import { closeSync, openSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "fs";
 function writeFileAtomic(path, content, mode = 420) {
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", mode);
@@ -1440,9 +1440,19 @@ function writeFileAtomic(path, content, mode = 420) {
     throw err;
   }
 }
+function rewriteFileAtomic(path, content, mode = 420) {
+  let target = path;
+  let keep = mode;
+  try {
+    target = realpathSync(path);
+    keep = statSync(target).mode & 511;
+  } catch {
+  }
+  writeFileAtomic(target, content, keep);
+}
 
 // src/paths.ts
-import { lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync2, realpathSync, statSync as statSync2 } from "fs";
+import { lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
 import { homedir as homedir3 } from "os";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
 
@@ -2957,7 +2967,7 @@ function secretgateInvocation(argv) {
 
 // src/vault/vault.ts
 import { randomBytes as randomBytes2 } from "crypto";
-import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync, unlinkSync } from "fs";
+import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync as statSync2, unlinkSync } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
 
@@ -2987,7 +2997,7 @@ function withLock(lockPath, fn) {
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
+        if (Date.now() - statSync2(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
       } catch {
       }
       if (Date.now() > deadline) throw new Error("vault is locked by another secretgate process");
@@ -3131,7 +3141,7 @@ function exists(p) {
 }
 function isDirectory(p) {
   try {
-    return statSync2(p).isDirectory();
+    return statSync3(p).isDirectory();
   } catch {
     return false;
   }
@@ -3193,7 +3203,7 @@ function canonical(p) {
   let out;
   for (; ; ) {
     try {
-      out = join3(realpathSync(head), ...[...tail].reverse());
+      out = join3(realpathSync2(head), ...[...tail].reverse());
       break;
     } catch {
       const parent = dirname2(head);
@@ -3466,7 +3476,7 @@ var sha256Bytes = (bytes) => createHash2("sha256").update(bytes).digest("hex");
 function ownedByCurrentUser(file) {
   if (typeof process.getuid !== "function") return true;
   try {
-    return statSync3(file).uid === process.getuid();
+    return statSync4(file).uid === process.getuid();
   } catch {
     return false;
   }
@@ -9628,7 +9638,7 @@ function editJsonFile(path, mutate, opts = {}) {
     }
     copyFileSync(path, backupPath);
   }
-  writeFileAtomic(path, next, 420);
+  rewriteFileAtomic(path, next);
   return { path, changed: true, backupPath };
 }
 
@@ -9771,7 +9781,7 @@ function uninstallClaudeCode({ settingsPath }) {
 
 // src/install/codex.ts
 import { createHash as createHash4 } from "crypto";
-import { copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync2 } from "fs";
+import { copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync3 } from "fs";
 import { homedir as homedir6 } from "os";
 import { join as join10, resolve as resolve6 } from "path";
 
@@ -10065,7 +10075,7 @@ function ourHookTrustEntries(hooksPath) {
 }
 function codexWiringStatus(codexDir) {
   try {
-    const hooksPath = join10(realpathSync2(codexDir), "hooks.json");
+    const hooksPath = join10(realpathSync3(codexDir), "hooks.json");
     const config = readFileSync9(join10(codexDir, "config.toml"), "utf8");
     const entries = ourHookTrustEntries(hooksPath);
     const tables = config.split(/(?=^\s*\[)/m);
@@ -10085,7 +10095,7 @@ function writeTextWithBackup(path, content) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync2(path, `${path}.secretgate-backup-${stamp}`);
   }
-  writeFileAtomic(path, content, 420);
+  rewriteFileAtomic(path, content);
 }
 function withoutStaleTrust(content, hooksPath, ours, keep) {
   const stale = staleHookTrustKeys(content, hooksPath, new Set(ours.map((e) => e.trustedHash)), new Set(keep));
@@ -10093,7 +10103,7 @@ function withoutStaleTrust(content, hooksPath, ours, keep) {
 }
 function installCodex({ codexDir, command }) {
   mkdirSync6(codexDir, { recursive: true });
-  const hooksPath = join10(realpathSync2(codexDir), "hooks.json");
+  const hooksPath = join10(realpathSync3(codexDir), "hooks.json");
   const hooksReport = editJsonFile(hooksPath, (root) => {
     root.hooks ??= {};
     for (const { event, arg, matcher } of EVENTS2) {
@@ -10131,7 +10141,7 @@ function installCodex({ codexDir, command }) {
   };
 }
 function uninstallCodex({ codexDir }) {
-  const hooksPath = existsSync6(codexDir) ? join10(realpathSync2(codexDir), "hooks.json") : resolve6(codexDir, "hooks.json");
+  const hooksPath = existsSync6(codexDir) ? join10(realpathSync3(codexDir), "hooks.json") : resolve6(codexDir, "hooks.json");
   const ours = existsSync6(hooksPath) ? ourHookTrustEntries(hooksPath) : [];
   const trustKeys = ours.map((entry) => entry.key);
   let hooksReport = { path: hooksPath, changed: false };
@@ -10233,14 +10243,14 @@ function uninstallOpencode({ configDir }) {
   if (removeStalePlugin(configDir)) changed = true;
   for (const { path, text } of edits) {
     copyFileSync3(path, `${path}.secretgate-backup-${(/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-")}`);
-    writeFileAtomic(path, text, 420);
+    rewriteFileAtomic(path, text);
     changed = true;
   }
   return { path: target, changed };
 }
 
 // src/self.ts
-import { chmodSync as chmodSync2, copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync3, renameSync as renameSync3, rmSync as rmSync6 } from "fs";
+import { chmodSync as chmodSync2, copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync6 } from "fs";
 import { basename as basename6, delimiter as delimiter2, dirname as dirname8, isAbsolute as isAbsolute4, join as join12 } from "path";
 import { fileURLToPath } from "url";
 function currentContext() {
@@ -10252,7 +10262,7 @@ var STABLE_BIN_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/home/linuxbrew/.
 function stableRuntime(execPath, pathEnv = process.env.PATH ?? "", stableDirs = STABLE_BIN_DIRS) {
   let real;
   try {
-    real = realpathSync3(execPath);
+    real = realpathSync4(execPath);
   } catch {
     return execPath;
   }
@@ -10262,7 +10272,7 @@ function stableRuntime(execPath, pathEnv = process.env.PATH ?? "", stableDirs = 
     for (const name of [basename6(execPath), "node"]) {
       const candidate = join12(dir, name);
       try {
-        if (isAbsolute4(candidate) && realpathSync3(candidate) === real) return candidate;
+        if (isAbsolute4(candidate) && realpathSync4(candidate) === real) return candidate;
       } catch {
       }
     }
@@ -10296,7 +10306,7 @@ function runningInvocation(ctx = currentContext()) {
 }
 function samePath(a, b) {
   try {
-    return realpathSync3(a) === realpathSync3(b);
+    return realpathSync4(a) === realpathSync4(b);
   } catch {
     return false;
   }
@@ -10422,7 +10432,7 @@ function* walkFiles(root) {
   }
 }
 function readTextFile(path) {
-  const stats = statSync4(path);
+  const stats = statSync5(path);
   if (stats.size === 0) return { skipped: "empty" };
   if (stats.size > MAX_FILE_BYTES) return { skipped: "too-large" };
   const buf = readFileSync11(path);
@@ -10510,7 +10520,7 @@ async function cmdScan(args, io) {
     scanText(await readIoStdin(io), void 0, "stdin");
   } else {
     const root = resolve7(target);
-    const stats = statSync4(root, { throwIfNoEntry: false });
+    const stats = statSync5(root, { throwIfNoEntry: false });
     if (!stats) {
       io.stderr(`scan: no such file or directory: ${target}
 `);
@@ -10900,7 +10910,7 @@ function claudeSettingsPath(project) {
 function projectSettingsAliasesGlobal() {
   const canon = (p) => {
     try {
-      return realpathSync4(p);
+      return realpathSync5(p);
     } catch {
       return resolve7(p);
     }
@@ -11401,7 +11411,7 @@ async function cmdStatus(_args, io) {
   const entries = vault.list();
   io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
   try {
-    const mode = statSync4(join13(defaultVaultHome(), "vault.json")).mode & 511;
+    const mode = statSync5(join13(defaultVaultHome(), "vault.json")).mode & 511;
     io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
 `);
   } catch {

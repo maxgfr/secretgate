@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 
 // src/config.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync as statSync3 } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync as statSync4 } from "fs";
 import { homedir as homedir4 } from "os";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 
@@ -907,7 +907,7 @@ function printParseErrorCode(code) {
 
 // src/fs-atomic.ts
 import { randomBytes } from "crypto";
-import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
+import { closeSync, openSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "fs";
 function writeFileAtomic(path, content, mode = 420) {
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", mode);
@@ -925,7 +925,7 @@ function writeFileAtomic(path, content, mode = 420) {
 }
 
 // src/paths.ts
-import { lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync2, realpathSync, statSync as statSync2 } from "fs";
+import { lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
 import { homedir as homedir3 } from "os";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
 
@@ -2440,7 +2440,7 @@ function secretgateInvocation(argv) {
 
 // src/vault/vault.ts
 import { randomBytes as randomBytes2 } from "crypto";
-import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync, unlinkSync } from "fs";
+import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync as statSync2, unlinkSync } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
 
@@ -2470,7 +2470,7 @@ function withLock(lockPath, fn) {
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
+        if (Date.now() - statSync2(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
       } catch {
       }
       if (Date.now() > deadline) throw new Error("vault is locked by another secretgate process");
@@ -2614,7 +2614,7 @@ function exists(p) {
 }
 function isDirectory(p) {
   try {
-    return statSync2(p).isDirectory();
+    return statSync3(p).isDirectory();
   } catch {
     return false;
   }
@@ -2676,7 +2676,7 @@ function canonical(p) {
   let out;
   for (; ; ) {
     try {
-      out = join3(realpathSync(head), ...[...tail].reverse());
+      out = join3(realpathSync2(head), ...[...tail].reverse());
       break;
     } catch {
       const parent = dirname2(head);
@@ -2949,7 +2949,7 @@ var sha256Bytes = (bytes) => createHash2("sha256").update(bytes).digest("hex");
 function ownedByCurrentUser(file) {
   if (typeof process.getuid !== "function") return true;
   try {
-    return statSync3(file).uid === process.getuid();
+    return statSync4(file).uid === process.getuid();
   } catch {
     return false;
   }

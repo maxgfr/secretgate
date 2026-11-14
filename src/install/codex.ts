@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { writeFileAtomic } from "../fs-atomic.js";
+import { rewriteFileAtomic } from "../fs-atomic.js";
 import { isSecretgateHook } from "./hook-marker.js";
 import { canonicalize, type EditReport, editJsonFile } from "./json-merge.js";
 import {
@@ -110,7 +110,7 @@ function writeTextWithBackup(path: string, content: string): void {
     const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync(path, `${path}.secretgate-backup-${stamp}`);
   }
-  writeFileAtomic(path, content, 0o644);
+  rewriteFileAtomic(path, content);
 }
 
 // Our trust entries for hooksPath at keys we no longer occupy (see staleHookTrustKeys).

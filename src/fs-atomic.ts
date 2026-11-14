@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { closeSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
+import { closeSync, openSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 
 // Write with the final permissions from the very first byte — open(mode) then
 // write, never write-then-chmod — and rename into place, so a reader (a hook in
@@ -20,4 +20,22 @@ export function writeFileAtomic(path: string, content: string, mode = 0o644): vo
     rmSync(tmp, { force: true });
     throw err;
   }
+}
+
+// Rewrite a file that belongs to the USER (an agent's settings): it keeps its
+// permission bits — a settings file can hold API keys behind 0600, and a
+// rewrite at 0644 would open it to every account on the machine — and a
+// symlink (a dotfiles checkout) is written through, not replaced by a copy the
+// checkout no longer sees. `mode` is for a file that does not exist yet. The
+// bits can only be narrowed by the umask, never widened.
+export function rewriteFileAtomic(path: string, content: string, mode = 0o644): void {
+  let target = path;
+  let keep = mode;
+  try {
+    target = realpathSync(path);
+    keep = statSync(target).mode & 0o777;
+  } catch {
+    // Nothing there (or a dangling link): a new file, at `path`.
+  }
+  writeFileAtomic(target, content, keep);
 }

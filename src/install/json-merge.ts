@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { writeFileAtomic } from "../fs-atomic.js";
+import { rewriteFileAtomic } from "../fs-atomic.js";
 
 export class SettingsParseError extends Error {
   constructor(
@@ -39,7 +39,8 @@ const stableStringify = (v: unknown): string => JSON.stringify(canonicalize(v));
 // Idempotent, corruption-safe settings editing shared by all installers:
 // parse (abort loudly on corrupt JSON — never overwrite what we can't read),
 // mutate a clone, no-op when nothing changed, timestamped backup of the
-// original, then an atomic tmp+rename write. `latestBackupOnly` keeps just the
+// original, then an atomic tmp+rename write that keeps the file's permission
+// bits and writes through a symlink. `latestBackupOnly` keeps just the
 // newest backup — for files secretgate alone writes, rewritten on every install.
 export function editJsonFile(path: string, mutate: (obj: Record<string, any>) => void, opts: { latestBackupOnly?: boolean } = {}): EditReport {
   let original: string | undefined;
@@ -75,6 +76,6 @@ export function editJsonFile(path: string, mutate: (obj: Record<string, any>) =>
     }
     copyFileSync(path, backupPath);
   }
-  writeFileAtomic(path, next, 0o644);
+  rewriteFileAtomic(path, next);
   return { path, changed: true, backupPath };
 }

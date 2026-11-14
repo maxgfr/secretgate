@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -91,6 +91,30 @@ describe("installCodex", () => {
     expect(guidance).not.toMatch(/codex exec/);
     expect(guidance).toMatch(/block-and-replace/i);
     expect(guidance).not.toMatch(/not possible|not covered/i);
+  });
+});
+
+// config.toml holds provider and MCP server credentials for many users.
+describe.runIf(process.platform !== "win32")("installCodex — config.toml stays the user's", () => {
+  it("keeps the permission bits of config.toml and hooks.json", () => {
+    writeFileSync(join(dir, "config.toml"), 'model = "x"\n');
+    writeFileSync(join(dir, "hooks.json"), "{}");
+    chmodSync(join(dir, "config.toml"), 0o600);
+    chmodSync(join(dir, "hooks.json"), 0o600);
+    installCodex({ codexDir: dir, command });
+    expect(statSync(join(dir, "config.toml")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(dir, "hooks.json")).mode & 0o777).toBe(0o600);
+    uninstallCodex({ codexDir: dir });
+    expect(statSync(join(dir, "config.toml")).mode & 0o777).toBe(0o600);
+  });
+
+  it("writes through a symlinked config.toml instead of replacing the link", () => {
+    const real = join(dir, "dotfiles-config.toml");
+    writeFileSync(real, 'model = "x"\n');
+    symlinkSync(real, join(dir, "config.toml"));
+    installCodex({ codexDir: dir, command });
+    expect(lstatSync(join(dir, "config.toml")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(real, "utf8")).toContain("hooks = true");
   });
 });
 

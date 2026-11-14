@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -99,6 +99,15 @@ describe("uninstallOpencode", () => {
     uninstallOpencode({ configDir: configDir() });
     const cfg = JSON.parse(readFileSync(join(configDir(), "opencode.json"), "utf8"));
     expect(cfg.plugin ?? []).not.toContain("secretgate@0.0.1");
+  });
+
+  it.runIf(process.platform !== "win32")("keeps the permission bits of an opencode.json it edits (provider keys live there)", () => {
+    mkdirSync(configDir(), { recursive: true });
+    const file = join(configDir(), "opencode.json");
+    writeFileSync(file, JSON.stringify({ plugin: ["secretgate@0.0.1"] }));
+    chmodSync(file, 0o600);
+    uninstallOpencode({ configDir: configDir() });
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
   it("does not delete a foreign secretgate.js", () => {
