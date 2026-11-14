@@ -343,6 +343,10 @@ Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
   `init --all` in a throwaway home, and require every hook to run the pinned
   binary and block a secret with no `node` on `PATH`.
 - A **self-scan CI job**: secretgate scans its own repo → 0 findings.
+- A small ML detector, `s6-secrets-pico`, was measured against the rules as
+  a possible second engine and **not adopted**. It beats them on its own
+  synthetic bench, but it flags about 60 % of real files that hold no secret
+  (method, numbers and limits: [docs/model-comparison.md](docs/model-comparison.md)).
 - Verified against **real `claude -p` sessions** by inspecting the session
   transcript: a secret in a tool result never appears in what reached the
   model (only the placeholder does), and restore-on-write puts the real value
