@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { RULES } from "../../src/engine/rules.gen.js";
-import { isNonSecret, ScanBudgetError, scan, sensitiveFileNameRule } from "../../src/engine/scanner.js";
+import { isNonSecret, nameTrustingKeywords, rulePatterns, ScanBudgetError, scan, sensitiveFileNameRule } from "../../src/engine/scanner.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
 const sha256hex = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -350,11 +350,348 @@ describe("scan — wall-clock budget (anti-hang)", () => {
   });
 });
 
+// A false redaction costs almost nothing here (the value is restored
+// locally); a miss is a leak. So a value is dropped only when the text makes
+// it structurally certain that it is public or not a credential: its own name
+// says so, it is its own variable name, or it carries a documented public
+// prefix. What a value merely LOOKS like decides nothing.
+describe("scan — a value is dropped only when the text makes it certain", () => {
+  const none = (texts: string[]) => {
+    for (const text of texts) expect(scan(text), text).toEqual([]);
+  };
+  const some = (texts: string[]) => {
+    for (const text of texts) expect(scan(text).length, text).toBeGreaterThan(0);
+  };
+
+  // These were dropped for a while, on the look of the value alone. Each is a
+  // password or a key somebody may really have.
+  it("flags a value made of dictionary words, partly masked, or ending in EXAMPLE", () => {
+    const upper = FAKE.genericSecret.toUpperCase();
+    some([
+      'DB_PASSWORD="MySuperSecretPassword"',
+      'password = "TopSecretAdminPassword"',
+      "headers: { 'X-TOKEN-SECRET': 'SuperSecretToken' },",
+      'secret = "your-api-key-here"',
+      `postgres://app:${"SuperSecret" + "Password"}@db.internal:5432/app`,
+      'password = "Tr0ub4dor****x9Qz"',
+      `postgres://app:${"hunter****" + "9Xq"}@db.internal/app`,
+      `api_key = "${upper}EXAMPLE"`,
+      'secret = "Q7R2M3XB4WPZ6TK' + 'EXAMPLE"',
+    ]);
+    expect(scan(`token ${"ghp_" + "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC" + "EXAMPLE"}`).map((f) => f.ruleId)).toEqual(["github-pat"]);
+    // What upstream documents stays: AWS's own example key id, and the base placeholders.
+    none([`aws_access_key_id = ${"AKIA" + "IOSFODNN7" + "EXAMPLE"}`, 'password = "changeme"', 'password = "********"']);
+  });
+
+  it("skips a value that only restates the name it is assigned to", () => {
+    none(["var obj1KeysLength = obj1Keys.length;", "const apiKeyHeader = api_key_header;", "export const SESSION_TOKEN_NAME = 'session-token-name';"]);
+    some([`var obj1KeysLength = ${FAKE.genericSecret};`, `const apiKeyHeader = "${FAKE.genericSecret}";`]);
+  });
+
+  // The one name that exempts a value is the one that SAYS it is public. A
+  // "cache key" or a "fingerprint" describes a role; nothing in it says the
+  // value may be shown (an HMAC key for a cache is a `cache_key` too).
+  it("skips what its own name calls a public key", () => {
+    const b64 = "pL1+qb9HTMRZJmuC/bB/ZI" + "9d302BYrrqiVuRyW+DGrU=";
+    none([
+      ` *   Public key ping-sha256: ${b64}`,
+      `public key: ${FAKE.genericSecret}`,
+      `ssh_public_key = "${FAKE.genericSecret}"`,
+      `PUBKEY=${FAKE.genericSecret}`,
+    ]);
+    // The label must be the value's own: a neighbour's does not count.
+    some([`{"public_key": "abc", "private_key": "${FAKE.genericSecret}"}`, `the public key is known, the api key: ${FAKE.genericSecret}`]);
+  });
+
+  it("flags what a name calls a cache key or a fingerprint: neither says public", () => {
+    const hex40 = "9554f04d7259f04124de" + "6b476d5a82ac7e37093b";
+    some([
+      `cache_key = "${FAKE.genericSecret}"`,
+      `      - CACHE_KEY=${hex40}`,
+      `cache_key_hmac = "${FAKE.genericSecret}"`,
+      `cache_key_salt = "${FAKE.genericSecret}"`,
+      `api_cache_key = "${FAKE.genericSecret}"`,
+      `session_cache_key = "${FAKE.genericSecret}"`,
+      `cache_keys = "${FAKE.genericSecret}"`,
+      `mysql cache_key: ${FAKE.genericSecret}`,
+      `key_fingerprint = "${hex40.slice(0, 32)}"`,
+      `- Release GPG key: ${hex40.toUpperCase()}`,
+    ]);
+  });
+
+  // Every word a name-trusting rule fires on names a credential: next to it,
+  // "public key" exempts nothing. The list is the rules' own, so it cannot
+  // fall behind them — `pwd` was missing from a hand-written copy.
+  it("takes the exemption back for every keyword of the rules that trust a name", () => {
+    const keywords = nameTrustingKeywords();
+    for (const k of ["pwd", "password", "passwd", "secret", "token", "key", "api", "auth", "access", "credential", "creds"]) expect(keywords, k).toContain(k);
+    for (const k of keywords) {
+      for (const text of [`public key ${k}: ${FAKE.genericSecret}`, `${k} public key: ${FAKE.genericSecret}`])
+        expect(scan(text).length, text).toBeGreaterThan(0);
+    }
+    some([
+      `cache_key_pwd = "${FAKE.genericSecret}"`,
+      `fingerprint_pwd = "${FAKE.genericSecret}"`,
+      `public_key_pwd = "${FAKE.genericSecret}"`,
+      `public key pwd = "${FAKE.genericSecret}"`,
+      `CACHE_KEY_PWD=${FAKE.genericSecret}`,
+      `cache-key-pwd: ${FAKE.genericSecret}`,
+      `public_key_secret = "${FAKE.genericSecret}"`,
+      `public_keystore_password = "${FAKE.genericSecret}"`,
+    ]);
+  });
+
+  // A word the rules match on without it being a keyword would escape the
+  // list above: each alternative of their name patterns must hold one.
+  it("knows every word the name patterns match as a keyword", () => {
+    const keywords = nameTrustingKeywords();
+    for (const id of ["generic-api-key", "password-assignment"]) {
+      const source = rulePatterns().find((r) => r.id === id)!.re.source;
+      // The group of alternatives that holds "secret": the names the rule fires on.
+      const at = source.indexOf("secret");
+      let open = at;
+      for (let depth = 0; ; open--) {
+        if (source[open] === ")") depth++;
+        else if (source[open] === "(" && depth-- === 0) break;
+      }
+      const alternatives: string[] = [""];
+      for (let i = open + 3, depth = 0; depth >= 0; i++) {
+        const c = source[i]!;
+        if (c === "(") depth++;
+        if (c === ")") depth--;
+        if (c === "|" && depth === 0) alternatives.push("");
+        else if (depth >= 0) alternatives[alternatives.length - 1] += c;
+      }
+      const words = alternatives.map((w) =>
+        w
+          .replace(/\(\?:[^()]*\)\?/g, "")
+          .replace(/\[[^\]]*\]\??/g, "")
+          .replace(/[^a-z]/gi, "")
+          .toLowerCase(),
+      );
+      expect(words.length, id).toBeGreaterThan(5);
+      expect(words, id).toContain("secret");
+      for (const word of words)
+        expect(
+          keywords.some((k) => word.includes(k)),
+          `${id}: ${word}`,
+        ).toBe(true);
+    }
+  });
+
+  it("skips a Stripe publishable key under a name that says public, and nowhere else", () => {
+    const body = FAKE.genericSecret + FAKE.genericSecret;
+    none([`stripe_publishable_key = pk_test_${body}`, `      - NEXT_PUBLIC_STRIPE_KEY=pk_live_${body}`, `\tstripePublishableKey := "pk_live_${body}"`]);
+    expect(scan(`stripe_key = sk_live_${body}`).map((f) => f.ruleId)).toEqual(["stripe-access-token"]);
+    some([
+      // The prefix alone proves nothing: the name has to agree, and to hold no credential word.
+      `api_key = "pk_live_${body}"`,
+      `secret_key = "pk_live_${body}"`,
+      `STRIPE_SECRET_KEY=pk_live_${body}`,
+      `password = "pk_test_${body}"`,
+      `stripe_key = pk_live_${body}`,
+      `public_secret_key = pk_live_${body}`,
+      // The whole value has to be a publishable key, not merely to start like one.
+      `stripe_publishable_key = pk_prod_${body}`,
+      `stripe_publishable_key = "xpk_test_${body}"`,
+      `stripe_publishable_key = pk_live_${body}.${FAKE.genericSecret}`,
+    ]);
+  });
+
+  it("skips a GitHub token no generator would produce: one character eight times in a row", () => {
+    none([
+      `const auth = createTokenAuth("${"ghp_" + "PersonalAccessToken0124567890" + "0000000"}");`,
+      `//   token: '${"ghs_" + "InstallallationOrActionToken" + "00000000"}',`,
+      `createTokenAuth("${"ghu_" + "InstallationUserToServer" + "000000000000"}");`,
+    ]);
+    // Seven in a row can still be drawn; and the rule is GitHub's alone.
+    expect(scan(`TOKEN=${"ghp_" + "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC" + "0000000"}`).map((f) => f.ruleId)).toEqual(["github-pat"]);
+    expect(scan(`TOKEN=${FAKE.githubPat}`).map((f) => f.ruleId)).toEqual(["github-pat"]);
+    some([`password = "Xq9$mK2vLp7wRt4z${"0".repeat(8)}"`]);
+  });
+});
+
+// Text that secretgate redacted must not be flagged again. That exemption is
+// for its OWN placeholder, exactly, give or take punctuation: anything else
+// written around one is material like any other.
+describe("scan — its own placeholders", () => {
+  const placeholder = "SECRETGATE_" + "0123456789ab";
+
+  it("leaves a placeholder alone, bare or next to a separator or two", () => {
+    const other = "SECRETGATE_" + "ba9876543210";
+    for (const text of [
+      `password = "${placeholder}"`,
+      `token: ${placeholder}.`,
+      `key=${placeholder}=`,
+      `secret_key = ${placeholder}__`,
+      `password = "${placeholder}-${other}"`,
+      `password = "${placeholder}.${other}."`,
+      `api_key = "${placeholder}${other}"`,
+    ]) {
+      expect(scan(text), text).toEqual([]);
+    }
+  });
+
+  // The allowance is for the separator a wider rule takes with a token, not
+  // for a password made of symbols: a few separator characters, no more.
+  it("flags symbols around a placeholder beyond a separator or two", () => {
+    const other = "SECRETGATE_" + "ba9876543210";
+    for (const text of [
+      `password = "${placeholder}!@#$%^&*()"`,
+      `password = "${placeholder}!@#$%^&*${other}"`,
+      `secret = "${placeholder}!"`,
+      `password = "${placeholder}....----"`,
+      `password = "~${placeholder}~"`,
+    ]) {
+      expect(
+        scan(text).map((f) => f.ruleId),
+        text,
+      ).toEqual(["password-assignment"]);
+    }
+  });
+
+  it("flags letters or digits written around a placeholder: a forged one hides nothing", () => {
+    for (const text of [
+      `password = "${placeholder}X9q!z"`,
+      `password = "X9q!z${placeholder}"`,
+      `password = "${placeholder}:pass1"`,
+      // Hex right after it: a 12-digit placeholder does not swallow what follows.
+      `password = "${placeholder}beef"`,
+      `password = "${placeholder}cafe!"`,
+      `api_key = "${placeholder}0f9a3c7e1b"`,
+    ]) {
+      const found = scan(text);
+      expect(
+        found.map((f) => f.ruleId),
+        text,
+      ).toEqual(["password-assignment"]);
+      expect(found[0]!.secret, text).toBe(text.slice(text.indexOf('"') + 1, -1));
+    }
+  });
+});
+
+// An AWS access key id comes with a secret access key, and in a credentials
+// CSV (`Access key ID,Secret access key`) nothing names the second: the row
+// is `<key id>,<secret key>`. That pair is detected for what it is. Nothing
+// wider: what follows any other token, or a placeholder, is not a credential
+// for standing there.
+describe("scan — the AWS secret access key next to its key id", () => {
+  const awsSecret = "wJalrXUtnFEMI" + "/K7MDENG/" + "bPxRfiCYzQ9kT4mB2x";
+  const placeholder = "SECRETGATE_" + "0123456789ab";
+  const sha = "3f786850e387550fdab8" + "36ed7e6dc881de23001b";
+  const rules = (text: string) => scan(text, { pragmas: false }).map((f) => f.ruleId);
+
+  it("flags the 40 characters that follow a key id after `,` or `:`", () => {
+    for (const text of [
+      `Access key ID,Secret access key\n${FAKE.awsKeyId},${awsSecret}\n`,
+      `"${FAKE.awsKeyId}","${awsSecret}"`,
+      `${FAKE.awsKeyId}:${awsSecret}`,
+      `user,${FAKE.awsKeyId}, ${awsSecret},eu-west-1`,
+    ]) {
+      const found = scan(text);
+      expect(
+        found.map((f) => f.ruleId),
+        text,
+      ).toEqual(["aws-access-token", "aws-secret-access-key"]);
+      expect(text.slice(found[1]!.start, found[1]!.end)).toBe(awsSecret);
+    }
+  });
+
+  it("flags nothing else that follows a key id", () => {
+    for (const text of [
+      `${FAKE.awsKeyId},${sha}`, // a hex digest
+      `${FAKE.awsKeyId},${awsSecret.slice(0, 39)}`, // not 40 characters
+      `${FAKE.awsKeyId},${awsSecret}A`,
+      `${FAKE.awsKeyId},request_id=req_8f3a2b1c9d4e5f60aaaaaaaaaaaaaaaa`,
+      `${FAKE.awsKeyId}: report-2026-11-14_final.v2.pdf`,
+      `${FAKE.awsKeyId}, BUILD=2026.11.14-r7xQ9z1`,
+      `${FAKE.awsKeyId},550e8400-e29b-41d4-a716-446655440000`,
+      `${FAKE.awsKeyId} ${awsSecret}`, // a space is not a separator
+      `${FAKE.awsKeyId}\n${awsSecret}`,
+      `${FAKE.awsKeyId},${"a".repeat(20)}${"b".repeat(20)}`, // no entropy
+    ]) {
+      expect(rules(text), text).toEqual(["aws-access-token"]);
+    }
+  });
+
+  // These ended sessions: after a placeholder (or any token), each was taken
+  // for the other half of a credential.
+  it("takes nothing for a credential because it follows a placeholder or another token", () => {
+    for (const text of [
+      `${placeholder},${sha}`,
+      `${placeholder}: report-2026-11-14_final.v2.pdf`,
+      `+ export TOKEN=${placeholder}, BUILD=2026.11.14-r7xQ9z1`,
+      `token=${placeholder},request_id=req_8f3a2b1c9d4e5f60`,
+      `${placeholder}: v1.2.3-beta.4+build.5678ab`,
+      `${placeholder},${awsSecret}`,
+      `["${placeholder}","${sha}","${sha.slice(0, 30)}abcdef"]`,
+    ]) {
+      expect(rules(text), text).toEqual([]);
+    }
+    expect(rules(`${FAKE.githubPat},${sha},${sha}`)).toEqual(["github-pat"]);
+    expect(rules(`token=${FAKE.githubPat},request_id=req_8f3a2b1c9d4e5f60,user=42`)).toEqual(["github-pat"]);
+  });
+
+  // The placeholder's text holds the word "secret", a keyword of the generic
+  // rule: `SECRETGATE_….id = value` matched it as a NAME.
+  it("never takes a placeholder's own text for a credential-sounding name", () => {
+    expect(rules(`${placeholder}.id = ${FAKE.genericSecret}`)).toEqual([]);
+    expect(rules(`x${placeholder} retries: ${FAKE.genericSecret}`)).toEqual([]);
+    expect(rules(`${placeholder}: ${FAKE.genericSecret}`)).toEqual([]);
+  });
+
+  it("can be switched off like any rule", () => {
+    expect(scan(`${FAKE.awsKeyId},${awsSecret}`, { allowlist: { rules: ["aws-secret-access-key"] } }).map((f) => f.ruleId)).toEqual(["aws-access-token"]);
+  });
+});
+
 describe("scan — dedupe", () => {
   it("emits a single finding when a specific rule and generic-api-key overlap", () => {
     const findings = scan(`key = ${FAKE.awsKeyId}`);
     expect(findings).toHaveLength(1);
     expect(findings[0]!.ruleId).toBe("aws-access-token");
+  });
+
+  // A quoted value that holds a vendor token AND other secret material: the
+  // vendor rule sees the token, password-assignment sees the whole value. The
+  // narrower finding used to win, so the rest of the value was never redacted.
+  it("keeps the wider finding when a vendor token is only part of a flagged value", () => {
+    const rest = "wJalrXUtnFEMI" + "K7MDENGbPxRfiCY" + "zQ9kT4mB2x";
+    for (const value of [`${FAKE.awsKeyId}:${rest}`, `${rest}:${FAKE.awsKeyId}`, `${rest}:${FAKE.awsKeyId}:${rest}`]) {
+      const text = `api_key = "${value}"`;
+      const findings = scan(text);
+      expect(findings, value).toHaveLength(1);
+      expect(findings[0]!.secret, value).toBe(value);
+      expect(text.slice(findings[0]!.start, findings[0]!.end), value).toBe(value);
+    }
+  });
+
+  it("keeps the wider finding as soon as a letter or a digit stands outside the vendor token", () => {
+    for (const extra of [":1234", ":a1B2c", "-x"]) {
+      const text = `auth_token = "${FAKE.githubPat}${extra}"`;
+      const findings = scan(text);
+      expect(findings, extra).toHaveLength(1);
+      expect(findings[0]!.secret, extra).toBe(`${FAKE.githubPat}${extra}`);
+    }
+  });
+
+  it("still prefers the vendor rule when the wider finding adds nothing but punctuation", () => {
+    // generic-api-key also captures the trailing dot; the token alone is the secret.
+    const findings = scan(`TOKEN=${FAKE.githubPat}.\n`);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.ruleId).toBe("github-pat");
+    expect(findings[0]!.secret).toBe(FAKE.githubPat);
+  });
+
+  it("covers both spans when two findings overlap without one containing the other", () => {
+    // The URL password runs past the quote that ends the assigned value.
+    const [head, tail] = ["kQ9zX2mP7v", "B4wL8nR3tY"];
+    const text = `secret="amqp://svc:${head}"${tail}@mq.internal`;
+    const findings = scan(text);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.secret).toBe(`amqp://svc:${head}"${tail}`);
+    expect(text.slice(findings[0]!.start, findings[0]!.end)).toBe(findings[0]!.secret);
+    expect(findings[0]!.ruleId).toBe("url-credentials");
   });
 });
 

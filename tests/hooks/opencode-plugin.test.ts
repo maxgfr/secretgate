@@ -364,6 +364,22 @@ describe("OpenCode 2 events", () => {
     expect(JSON.stringify(paused.messages)).toContain(FAKE.githubPat);
   });
 
+  // The history is scanned on every turn. A result redacted next to
+  // punctuation (`token: SECRETGATE_….`) was redacted again there, and writing
+  // the second placeholder restored the first one: a dead token on disk.
+  it("leaves a redacted result alone in the history, so a write restores the real value", async () => {
+    const result: any = { content: [{ type: "text", text: `token: ${FAKE.githubPat}.` }], output: {}, metadata: {} };
+    await registered["execute.after"]!({ sessionID: "v2n", tool: "shell", status: "completed", input: { command: "cat notes" }, result });
+    const seen: string = result.content[0].text;
+    expect(seen).toMatch(/^token: SECRETGATE_[0-9a-f]{12}\.$/);
+    const event = contextEvent("v2n", { command: "cat notes" }, seen);
+    await registered.context!(event);
+    expect((event.messages[2]!.content[0] as any).result.value).toBe(seen);
+    const input = { path: "copy.txt", content: seen };
+    await registered["execute.before"]!({ tool: "write", sessionID: "v2n", agent: "build", messageID: "m3", id: "toolu_2", input });
+    expect(input.content).toBe(`token: ${FAKE.githubPat}.`);
+  });
+
   it("redacts @-attached file content in the user's context message (text part or text data URL)", async () => {
     const asText = `Called the Read tool with the following input: {"filePath":"notes.md"}\nTOKEN=${FAKE.githubPat}`;
     const dataUrl = `data:text/plain;base64,${Buffer.from(`TOKEN=${FAKE.slackBotToken}\n`).toString("base64")}`;
@@ -467,7 +483,7 @@ describe("OpenCode 2 events", () => {
 
   // Real OpenCode 2.0.26 shapes for `read` of a PNG.
   it("passes a base64 image read through untouched, in the result and in later context", async () => {
-    const base64 = `iVBORw0K${"A".repeat(2 * 1024 * 1024)}`;
+    const base64 = Buffer.concat([Buffer.from("\x89PNG\r\n\x1a\n", "latin1"), Buffer.alloc(1_600_000, 0x41)]).toString("base64");
     const imageParts = () => [
       { type: "text", text: "Image read successfully" },
       { type: "file", uri: `data:image/png;base64,${base64}`, mime: "image/png", name: "img.png" },

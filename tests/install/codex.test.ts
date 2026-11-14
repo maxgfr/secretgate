@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -91,6 +91,55 @@ describe("installCodex", () => {
     expect(guidance).not.toMatch(/codex exec/);
     expect(guidance).toMatch(/block-and-replace/i);
     expect(guidance).not.toMatch(/not possible|not covered/i);
+  });
+});
+
+// config.toml holds provider and MCP server credentials for many users.
+describe.runIf(process.platform !== "win32")("installCodex — config.toml stays the user's", () => {
+  it("keeps the permission bits of config.toml and hooks.json", () => {
+    writeFileSync(join(dir, "config.toml"), 'model = "x"\n');
+    writeFileSync(join(dir, "hooks.json"), "{}");
+    chmodSync(join(dir, "config.toml"), 0o600);
+    chmodSync(join(dir, "hooks.json"), 0o600);
+    installCodex({ codexDir: dir, command });
+    expect(statSync(join(dir, "config.toml")).mode & 0o777).toBe(0o600);
+    expect(statSync(join(dir, "hooks.json")).mode & 0o777).toBe(0o600);
+    uninstallCodex({ codexDir: dir });
+    expect(statSync(join(dir, "config.toml")).mode & 0o777).toBe(0o600);
+  });
+
+  it("refuses a config.toml linked out of the user's own tree, and changes nothing", () => {
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "secretgate-elsewhere-")));
+    try {
+      const codex = join(dir, "codex");
+      mkdirSync(codex);
+      writeFileSync(join(elsewhere, "other.toml"), 'token = "x"\n');
+      symlinkSync(join(elsewhere, "other.toml"), join(codex, "config.toml"));
+      expect(() => installCodex({ codexDir: codex, command })).toThrow(/outside/);
+      expect(readFileSync(join(elsewhere, "other.toml"), "utf8")).toBe('token = "x"\n');
+      expect(() => uninstallCodex({ codexDir: codex })).toThrow(/outside/);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  it("writes through a symlinked config.toml instead of replacing the link", () => {
+    mkdirSync(join(dir, "dotfiles"));
+    const real = join(dir, "dotfiles", "config.toml");
+    writeFileSync(real, 'model = "x"\n');
+    mkdirSync(join(dir, "codex"));
+    symlinkSync(real, join(dir, "codex", "config.toml"));
+    installCodex({ codexDir: join(dir, "codex"), command });
+    expect(lstatSync(join(dir, "codex", "config.toml")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(real, "utf8")).toContain("hooks = true");
+  });
+
+  it("refuses a config.toml linked to a file of another kind", () => {
+    writeFileSync(join(dir, "notes.toml"), 'title = "x"\n');
+    mkdirSync(join(dir, "codex"));
+    symlinkSync(join(dir, "notes.toml"), join(dir, "codex", "config.toml"));
+    expect(() => installCodex({ codexDir: join(dir, "codex"), command })).toThrow(/not a settings file/);
+    expect(readFileSync(join(dir, "notes.toml"), "utf8")).toBe('title = "x"\n');
   });
 });
 

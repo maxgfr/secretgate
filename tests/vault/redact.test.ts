@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { redactText, restorePlaceholders } from "../../src/redact.js";
+import { scan } from "../../src/engine/scanner.js";
+import { RedactionUnsettledError, redactText, restorePlaceholders } from "../../src/redact.js";
 import { placeholderFor } from "../../src/vault/placeholder.js";
 import { Vault } from "../../src/vault/vault.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
@@ -44,6 +45,142 @@ describe("redactText", () => {
     expect(r.text).not.toContain(FAKE.githubPat);
     expect(r.text.endsWith(" end")).toBe(true);
     expect(new Set(r.text.match(/SECRETGATE_[0-9a-f]{12,16}/g)).size).toBe(2);
+  });
+
+  it("leaves no part of a flagged value behind when a vendor token sits inside it", () => {
+    const rest = "wJalrXUtnFEMI" + "K7MDENGbPxRfiCY" + "zQ9kT4mB2x";
+    const r = redactText(`api_key = "${FAKE.awsKeyId}:${rest}"`, vault, "test");
+    expect(r.text).not.toContain(rest);
+    expect(r.text).not.toContain(FAKE.awsKeyId);
+    expect(restorePlaceholders(r.text, vault).text).toBe(`api_key = "${FAKE.awsKeyId}:${rest}"`);
+  });
+
+  // A wider rule often captures a stray character around a token (the dot that
+  // ends a sentence). Once the token is a placeholder, that rule saw
+  // `SECRETGATE_….` as a new secret: the redacted text was flagged again.
+  it("is stable: redacted text holds nothing to redact", () => {
+    for (const text of [
+      `token: ${FAKE.githubPat}.`,
+      `TOKEN=${FAKE.githubPat}.\n`,
+      `api_key = "x-${FAKE.githubPat}"`,
+      `password = "ab:${FAKE.awsKeyId}"`,
+      `secret = "${FAKE.awsKeyId}!"`,
+      `key=${FAKE.awsKeyId}=`,
+      `auth_token = '${FAKE.slackBotToken}.x'`,
+      `secret_key = ${FAKE.groqKey}__`,
+    ]) {
+      const once = redactText(text, vault, "test");
+      expect(once.findings.length, text).toBeGreaterThan(0);
+      const twice = redactText(once.text, vault, "test");
+      expect(twice.findings, once.text).toEqual([]);
+      expect(restorePlaceholders(once.text, vault).text).toBe(text);
+    }
+  });
+
+  // What the model receives is scanned again by the hook that runs before the
+  // next request. Whatever redactText returns must hold nothing it would flag.
+  it("returns a fixed point: its own output holds no finding", () => {
+    const random = FAKE.genericSecret;
+    for (const text of [
+      `${FAKE.githubPat}: ${random}`,
+      `${FAKE.githubPat}=${random}`,
+      `${FAKE.awsKeyId},${random}`,
+      `id,key\n1,${FAKE.githubPat} ${random}`,
+      `pushed with ${FAKE.githubPat}: build-2026.11.14-r7xQ`,
+      `${FAKE.awsKeyId},${"wJalrXUtnFEMI" + "/K7MDENG/" + "bPxRfiCYzQ9kT4mB2x"},${random}`,
+      `auth_token = "${FAKE.githubPat}:1234"`,
+      `{"a":"${FAKE.githubPat}","b":"${random}"}`,
+      `url: https://svc:${random}@host/x, token: ${FAKE.githubPat}.`,
+    ]) {
+      const once = redactText(text, vault, "test");
+      expect(redactText(once.text, vault, "test").findings, once.text).toEqual([]);
+      expect(restorePlaceholders(once.text, vault).text, text).toBe(text);
+    }
+  });
+
+  // The name in front of a value is read to decide about it. Once the token
+  // before that name is a placeholder, the placeholder's text ("SECRET…") must
+  // not read as part of the name: here it used to cancel an exemption one
+  // value per round, and the rounds ran out with values left.
+  it("settles when names and values follow a token, however many", () => {
+    const value = (i: number) => `Zx9kLm2Qw8rT5yUq${i}Pk3Rt7`;
+    for (const name of ["cache_key", "public_key", "pubkey", "fingerprint", "api_key"]) {
+      const text = `auth=${FAKE.githubPat} ${[1, 2, 3, 4, 5, 6].map((i) => `${name}=${value(i)}`).join(" ")}`;
+      const once = redactText(text, vault, "test");
+      expect(redactText(once.text, vault, "test").findings, once.text).toEqual([]);
+      // The verdict on each value is the one it gets with no token in front.
+      const alone = redactText(`${name}=${value(1)}`, vault, "test").findings.length > 0;
+      expect(once.text.includes(value(6)), name).toBe(!alone);
+    }
+    // The spelling upstream's own allowlist does not cover: the exemption is
+    // secretgate's, and it read the placeholder as a word of the name.
+    const spaced = `${FAKE.githubPat} public key: ${value(1)}\n${FAKE.githubPat} Public key: ${value(2)}`;
+    const once = redactText(spaced, vault, "test");
+    expect(redactText(once.text, vault, "test").findings, once.text).toEqual([]);
+    expect(once.text).toContain(value(2));
+  });
+
+  // Tokens, names, separators and placeholders (real, forged, long) in random
+  // order: whatever redactText returns holds nothing a second scan flags, and
+  // restores to what the input restores to.
+  it("returns a fixed point over generated mixes", () => {
+    const awsSecret = "wJalrXUtnFEMI" + "/K7MDENG/" + "bPxRfiCYzQ9kT4mB2x";
+    const tokens = [FAKE.githubPat, FAKE.awsKeyId, FAKE.slackBotToken, FAKE.genericSecret, awsSecret, FAKE.groqKey, "Zx9kLm2Qw8rT5yU", FAKE.visaPan];
+    const names = [
+      "password",
+      "pwd",
+      "api_key",
+      "token",
+      "secret",
+      "auth",
+      "cache_key",
+      "public_key",
+      "public key",
+      "pubkey",
+      "fingerprint",
+      "stripe_publishable_key",
+      "id",
+      "AWS",
+    ];
+    const separators = [":", "=", ",", " ", " ", '"', "'", "\n", "\r\n", ".", "-", "_", "/", "@", "://", "!", ": ", " = ", "; "];
+    const placeholders = [vault.recordSecret("Pq7Lm2Zx9kRt5Wv8", "test", "mix"), "SECRETGATE_" + "0123456789ab", "SECRETGATE_" + "0123456789abcdef"];
+    const words = ["postgres", "admin", "é", "x", "cafe", "12", "abc", "pk_live_", "Bearer", "3f786850e387550fdab836ed7e6dc881de23001b"];
+    const parts = [...tokens, ...tokens, ...names, ...names, ...separators, ...separators, ...placeholders, ...words];
+    let seed = 20261114;
+    const next = (n: number) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    for (let i = 0; i < 4000; i++) {
+      let text = "";
+      for (let k = 2 + next(9); k > 0; k--) text += parts[next(parts.length)];
+      const once = redactText(text, vault, "mix");
+      const again = scan(once.text, { pragmas: false });
+      expect(
+        again.map((f) => `${f.ruleId}:${f.secret}`),
+        JSON.stringify(text),
+      ).toEqual([]);
+      expect(restorePlaceholders(once.text, vault).text, JSON.stringify(text)).toBe(restorePlaceholders(text, vault).text);
+    }
+  });
+
+  // If the rounds ever run out with something left, the text is not clean and
+  // must not be returned as if it were: the caller fails closed.
+  it("throws rather than return text it could not settle", () => {
+    let n = 0;
+    const neverClean = {
+      recordSecrets: (items: unknown[]) => items.map(() => `ghp_${"aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0dF6h".slice(0, 34)}${String(n++).padStart(2, "0")}`),
+    } as unknown as Vault;
+    expect(() => redactText(`token: ${FAKE.githubPat}`, neverClean, "test")).toThrow(RedactionUnsettledError);
+  });
+
+  it("still redacts what is added around a placeholder", () => {
+    const first = redactText(`key: ${FAKE.awsKeyId}`, vault, "test").text.slice("key: ".length);
+    const composed = `password = "${first}:Zx9kLm2Qw8rT5yU"`;
+    const r = redactText(composed, vault, "test");
+    expect(r.text).not.toContain("Zx9kLm2Qw8rT5yU");
+    // The placeholder of a value that held a placeholder leads back to the real thing.
+    expect(restorePlaceholders(r.text, vault).text).toBe(`password = "${FAKE.awsKeyId}:Zx9kLm2Qw8rT5yU"`);
   });
 
   it("returns the text unchanged when nothing is found", () => {

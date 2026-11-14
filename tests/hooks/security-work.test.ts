@@ -213,6 +213,61 @@ describe("audit · shell constructs that reached a sensitive file", () => {
     expect(await decide("Bash", { command })).toBeUndefined();
   });
 
+  // A fixture directory is readable. Moving the real `.env` there used to be
+  // allowed (the new name is still `.env`, so it "stays sensitive"), and the
+  // file could then be read as a fixture.
+  it.each([
+    "mv .env testdata/.env",
+    "mv .env tests/fixtures/",
+    "ln .env __mocks__/.env",
+    "mv src/server.key tests/fixtures/second.key",
+    "mv .env testdata/.env && cat testdata/.env",
+  ])("denies %j: a fixture directory is not a place to park a real secret", async (command) => {
+    expect(await decide("Bash", { command })).toBe("deny");
+  });
+
+  // The same move, in the other spellings a shell has for it.
+  it.each([
+    "mv -t tests .env",
+    "mv -t testdata/ .env",
+    "mv -vt tests .env",
+    "mv --target-directory tests .env",
+    "ln -t __mocks__ .env",
+    "git mv src/server.key tests/fixtures/second.key",
+    "git mv -k .env tests/.env",
+    "git -C . mv .env tests/",
+    "ditto .env tests/.env",
+    "find . -maxdepth 1 -name .env -exec mv {} tests/ ;",
+    "find src -name '*.key' -exec ln {} tests/fixtures/ ;",
+    "find . -type f -exec mv -t testdata {} ;",
+    "find src -name '*.key' -exec mv {} {}.txt ;",
+    "find . -name .env -execdir mv {} tests/ ;",
+  ])("denies %j", async (command) => {
+    expect(await decide("Bash", { command })).toBe("deny");
+  });
+
+  it.each([
+    "mv tests/fixtures/server.key tests/fixtures/old.key",
+    "mv -t src tests/fixtures/server.key",
+    "git mv tests/fixtures/server.key tests/fixtures/old.key",
+    "git mv src/a.ts src/b.ts",
+    "git mv .env .env.bak",
+    "find . -name '*.log' -exec mv {} testdata/ ;",
+    // A project that merely CONTAINS a .env and a key file: moving or linking
+    // them through find leaves them under names that are still refused,
+    // exactly as `mv src/server.key lib/` does.
+    "mv src/server.key lib/",
+    "find . -path ./node_modules -prune -o -type f -name '*.js' -exec mv {} dist/ ;",
+    "find . \\( -name '*.js' -o -name '*.mjs' \\) -exec mv {} dist/ ;",
+    "find . -not -name '*.env' -type f -exec mv {} dist/ ;",
+    "find src -type f -exec mv {} lib/ ;",
+    "find . -maxdepth 1 -type f -exec mv {} archive/ ;",
+    "find . -type f -exec ln -s {} links/ ;",
+    "find . -name .env -exec mv {} {}.bak ;",
+  ])("still allows %j: no real secret changes place", async (command) => {
+    expect(await decide("Bash", { command })).toBeUndefined();
+  });
+
   it("a recursive read of a tree holding a real key is refused, and says which file", async () => {
     const r = await handleClaudeCode(
       "pre-tool-use",

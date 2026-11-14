@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CC_DENY_RULES, installClaudeCode, uninstallClaudeCode } from "../../src/install/claude-code.js";
-import { SettingsParseError } from "../../src/install/json-merge.js";
+import { CC_DENY_RULES, claudeCodeBatchHookWired, claudeCodeTakesBatchHook, installClaudeCode, uninstallClaudeCode } from "../../src/install/claude-code.js";
+import { SettingsLinkError, SettingsParseError } from "../../src/install/json-merge.js";
 
 let dir: string;
 let settingsPath: string;
@@ -21,7 +21,73 @@ afterEach(() => {
 const read = () => JSON.parse(readFileSync(settingsPath, "utf8"));
 
 describe("installClaudeCode", () => {
-  it("creates settings.json from scratch with 3 hook events + deny rules", () => {
+  it("wires PostToolBatch, the only hook that sees a failed call's output, and removes it on uninstall", () => {
+    installClaudeCode({ settingsPath, command, claudeVersion: "2.1.323 (Claude Code)" });
+    const group = read().hooks.PostToolBatch;
+    expect(group).toHaveLength(1);
+    expect(group[0].matcher).toBeUndefined();
+    expect(group[0].hooks[0].command).toBe(`${command} hook claude-code post-tool-batch`);
+    expect(claudeCodeBatchHookWired(read())).toBe(true);
+    // An install made before this hook existed is reported as incomplete.
+    const older = read();
+    delete older.hooks.PostToolBatch;
+    expect(claudeCodeBatchHookWired(older)).toBe(false);
+    uninstallClaudeCode({ settingsPath });
+    expect(read().hooks).toBeUndefined();
+  });
+
+  // Claude Code before 2.1.101 ignores the WHOLE settings file when it names a
+  // hook event it does not know (seen on 2.0.0: with PostToolBatch in the
+  // file, no hook ran and a pasted token went to the model). The event is
+  // written only for a Claude Code known to tolerate it.
+  it("leaves PostToolBatch out for a Claude Code that would drop the whole file, or an unknown one", () => {
+    for (const claudeVersion of [undefined, "", "2.0.0 (Claude Code)", "2.1.100", "1.0.128", "not a version"]) {
+      installClaudeCode({ settingsPath, command, claudeVersion });
+      expect(Object.keys(read().hooks).sort(), String(claudeVersion)).toEqual(["PostToolUse", "PreToolUse", "UserPromptSubmit"]);
+      rmSync(settingsPath);
+    }
+    for (const claudeVersion of ["2.1.101", "2.1.263 (Claude Code)", "2.2.0", "3.0.1"]) {
+      installClaudeCode({ settingsPath, command, claudeVersion });
+      expect(Object.keys(read().hooks), claudeVersion).toContain("PostToolBatch");
+      rmSync(settingsPath);
+    }
+    expect(claudeCodeTakesBatchHook("2.1.100")).toBe(false);
+    expect(claudeCodeTakesBatchHook("2.1.101")).toBe(true);
+  });
+
+  // `claude --version` prints "2.1.323 (Claude Code)". Anything else is not
+  // read for a number that happens to be in it: a wrapper that prints another
+  // program's version first must not pass for a recent Claude Code.
+  it("reads a version only in the shape Claude Code prints it; anything else is unknown", () => {
+    for (const v of ["2.1.101 (Claude Code)", "2.1.101", " 2.2.0 (Claude Code)\n", "10.0.0", "2.1.1010 (Claude Code)"])
+      expect(claudeCodeTakesBatchHook(v), v).toBe(true);
+    for (const v of [
+      "node v22.11.0\n2.1.323 (Claude Code)",
+      "v22.11.0\n2.0.5 (Claude Code)",
+      "Claude Code v2.10.0",
+      "v2.1.323",
+      "2.1.323 (Some Wrapper)",
+      "2.1.101-beta.1",
+      "02.001.0101",
+      "1.2.3.4 2.1.200",
+      "2.1.323 2.1.323",
+      "2.1",
+      "3",
+    ])
+      expect(claudeCodeTakesBatchHook(v), v).toBe(false);
+  });
+
+  it("removes PostToolBatch again when the install is re-run under an older Claude Code", () => {
+    writeFileSync(settingsPath, JSON.stringify({ hooks: { PostToolBatch: [{ hooks: [{ type: "command", command: "/my/audit.sh" }] }] } }));
+    installClaudeCode({ settingsPath, command, claudeVersion: "2.1.323" });
+    expect(read().hooks.PostToolBatch).toHaveLength(2);
+    installClaudeCode({ settingsPath, command, claudeVersion: "2.0.0" });
+    // The user's own entry is theirs to keep; ours is gone.
+    expect(read().hooks.PostToolBatch).toEqual([{ hooks: [{ type: "command", command: "/my/audit.sh" }] }]);
+    expect(claudeCodeBatchHookWired(read())).toBe(false);
+  });
+
+  it("creates settings.json from scratch with its hook events + deny rules", () => {
     const r = installClaudeCode({ settingsPath, command });
     expect(r.changed).toBe(true);
     const s = read();
@@ -74,6 +140,121 @@ describe("installClaudeCode", () => {
     writeFileSync(settingsPath, "{ model: broken,, }");
     expect(() => installClaudeCode({ settingsPath, command })).toThrow(SettingsParseError);
     expect(readFileSync(settingsPath, "utf8")).toBe("{ model: broken,, }");
+  });
+});
+
+// settings.json is the user's file: it can hold API keys in `env` behind 0600,
+// and it is often a link into a dotfiles checkout.
+describe("installClaudeCode — the file stays the user's", () => {
+  const posix = process.platform !== "win32";
+
+  it.runIf(posix)("keeps the permission bits of an existing settings.json", () => {
+    writeFileSync(settingsPath, JSON.stringify({ env: { EXAMPLE: "1" } }));
+    chmodSync(settingsPath, 0o600);
+    installClaudeCode({ settingsPath, command });
+    expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
+    uninstallClaudeCode({ settingsPath });
+    expect(statSync(settingsPath).mode & 0o777).toBe(0o600);
+  });
+
+  it.runIf(posix)("writes through a symlinked settings.json instead of replacing the link", () => {
+    mkdirSync(join(dir, "dotfiles", "claude"), { recursive: true });
+    const real = join(dir, "dotfiles", "claude", "settings.json");
+    writeFileSync(real, JSON.stringify({ env: { EXAMPLE: "1" } }));
+    symlinkSync(real, settingsPath);
+    installClaudeCode({ settingsPath, command });
+    expect(lstatSync(settingsPath).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, "utf8")).hooks.PostToolUse).toHaveLength(1);
+    uninstallClaudeCode({ settingsPath });
+    expect(lstatSync(settingsPath).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(real, "utf8"))).toEqual({ env: { EXAMPLE: "1" } });
+  });
+
+  it("creates a new settings.json readable like any config file, and leaves no temp file", () => {
+    installClaudeCode({ settingsPath, command });
+    if (posix) expect(statSync(settingsPath).mode & 0o777).toBe(0o644);
+    expect(readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+});
+
+// A repository can commit `.claude/settings.json` as a symlink. Writing
+// through it is right for a link the file's owner made inside its own tree,
+// and wrong for one that leads out of it: `init --project` would edit a file
+// of another tool, somewhere in the user's home.
+describe.runIf(process.platform !== "win32")("installClaudeCode — a link that leaves the project is refused", () => {
+  let victim: string;
+  let repo: string;
+  let project: string;
+  const victimText = '{"apiToken":"from-other-tool"}\n';
+
+  beforeEach(() => {
+    mkdirSync(join(dir, "home", "other-tool"), { recursive: true });
+    victim = join(dir, "home", "other-tool", "config.json");
+    writeFileSync(victim, victimText, { mode: 0o600 });
+    repo = join(dir, "repo");
+    project = join(repo, ".claude");
+    mkdirSync(project, { recursive: true });
+  });
+  const untouched = () => {
+    expect(readFileSync(victim, "utf8")).toBe(victimText);
+    expect(readdirSync(join(dir, "home", "other-tool"))).toEqual(["config.json"]);
+  };
+
+  it("settings.json linked outside the project: nothing is written, copied or backed up", () => {
+    symlinkSync(victim, join(project, "settings.json"));
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command })).toThrow(SettingsLinkError);
+    expect(() => uninstallClaudeCode({ settingsPath: join(project, "settings.json") })).toThrow(/outside/);
+    untouched();
+    // Not even a backup: it would copy the other tool's file into the repository.
+    expect(readdirSync(project)).toEqual(["settings.json"]);
+    expect(lstatSync(join(project, "settings.json")).isSymbolicLink()).toBe(true);
+  });
+
+  it("the ownership record linked outside the project: refused before settings.json changes", () => {
+    writeFileSync(join(project, "settings.json"), "{}");
+    symlinkSync(victim, join(project, "settings.json.secretgate-ownership.json"));
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command })).toThrow(SettingsLinkError);
+    expect(() => uninstallClaudeCode({ settingsPath: join(project, "settings.json") })).toThrow(SettingsLinkError);
+    untouched();
+    expect(readFileSync(join(project, "settings.json"), "utf8")).toBe("{}");
+  });
+
+  it("a `.claude` directory linked outside the project", () => {
+    rmSync(project, { recursive: true });
+    symlinkSync(join(dir, "home", "other-tool"), project);
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command })).toThrow(SettingsLinkError);
+    untouched();
+  });
+
+  it("a link that stays inside the project is written through, and `root` can name the tree", () => {
+    mkdirSync(join(repo, "shared"));
+    writeFileSync(join(repo, "shared", "settings.json"), "{}");
+    symlinkSync(join(repo, "shared", "settings.json"), join(project, "settings.json"));
+    installClaudeCode({ settingsPath: join(project, "settings.json"), command });
+    expect(JSON.parse(readFileSync(join(repo, "shared", "settings.json"), "utf8")).hooks.PostToolUse).toHaveLength(1);
+    // The same link is out of bounds for a narrower tree.
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command, root: project })).toThrow(SettingsLinkError);
+  });
+
+  // Inside the project is not enough: `settings.json -> ../package.json`
+  // stays in the tree, and the hooks would be written into package.json.
+  // A link is followed only to a file that can be a settings file: one of
+  // the same name, or one inside a directory named like the agent's own.
+  it("a link to another kind of file inside the project is refused", () => {
+    const pkg = '{"name":"x","version":"1.0.0"}\n';
+    writeFileSync(join(repo, "package.json"), pkg);
+    symlinkSync("../package.json", join(project, "settings.json"));
+    expect(() => installClaudeCode({ settingsPath: join(project, "settings.json"), command })).toThrow(SettingsLinkError);
+    expect(() => uninstallClaudeCode({ settingsPath: join(project, "settings.json") })).toThrow(SettingsLinkError);
+    expect(readFileSync(join(repo, "package.json"), "utf8")).toBe(pkg);
+    expect(readdirSync(repo).sort()).toEqual([".claude", "package.json"]);
+    // …while a differently named file in a directory of the agent's kind is a settings file.
+    rmSync(join(project, "settings.json"));
+    mkdirSync(join(repo, "config", ".claude"), { recursive: true });
+    writeFileSync(join(repo, "config", ".claude", "team.json"), "{}");
+    symlinkSync(join(repo, "config", ".claude", "team.json"), join(project, "settings.json"));
+    installClaudeCode({ settingsPath: join(project, "settings.json"), command });
+    expect(JSON.parse(readFileSync(join(repo, "config", ".claude", "team.json"), "utf8")).hooks.PostToolUse).toHaveLength(1);
   });
 });
 

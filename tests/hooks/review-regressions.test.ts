@@ -1,10 +1,12 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { addPause, disableState, sessionForCwd } from "../../src/disable.js";
 import { handleClaudeCode } from "../../src/hooks/claude-code.js";
 import { handleCodex } from "../../src/hooks/codex.js";
+import { Vault } from "../../src/vault/vault.js";
+import { FAKE } from "../fixtures/fake-tokens.js";
 import { openCodeHooks } from "../fixtures/opencode-context.js";
 
 // One test per defect found in the branch review, so none comes back.
@@ -397,5 +399,56 @@ describe("GLM review · an @-mentioned sensitive file blocks the prompt", () => 
     await hooks.prompt!({ sessionID: "o9", prompt });
     expect(prompt.files).toHaveLength(0);
     expect(prompt.text).toMatch(/looks sensitive/);
+  });
+});
+
+// redactText promises text that scans clean. If its rounds ever run out with
+// a finding left, it throws: every host must then withhold, as for any text
+// it could not scan — never hand the half-redacted text on.
+describe("second review · redaction that does not settle fails closed on every host", () => {
+  let n = 0;
+  beforeEach(() => {
+    scope(undefined);
+    // A vault whose "placeholders" are tokens: each round leaves a new finding.
+    vi.spyOn(Vault.prototype, "recordSecrets").mockImplementation((items) =>
+      items.map(() => `ghp_${"aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0dF6h".slice(0, 32)}${String(n++).padStart(4, "0")}`),
+    );
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  const stdout = `token: ${FAKE.githubPat}`;
+  const post = (session_id: string) =>
+    JSON.stringify({
+      session_id,
+      cwd: proj,
+      tool_name: "Bash",
+      tool_input: { command: "x" },
+      tool_response: { stdout, stderr: "", interrupted: false, isImage: false },
+    });
+
+  it("Claude Code: the output is withheld, the prompt is blocked", async () => {
+    const out = (await handleClaudeCode("post-tool-use", post("u1"))).stdout;
+    expect(out).not.toContain("ghp_");
+    expect(JSON.parse(out).hookSpecificOutput.updatedToolOutput.stdout).toContain("secretgate withheld this tool output");
+    const prompt = JSON.parse((await handleClaudeCode("user-prompt-submit", JSON.stringify({ session_id: "u2", cwd: proj, prompt: stdout }))).stdout);
+    expect(prompt.decision).toBe("block");
+    expect(JSON.stringify(prompt)).not.toContain("ghp_");
+  });
+
+  it("Codex: the result is blocked and replaced by the notice", async () => {
+    const out = JSON.parse((await handleCodex("post-tool-use", post("u3"))).stdout);
+    expect(out.decision).toBe("block");
+    expect(out.reason).toContain("withheld");
+    expect(out.reason).not.toContain("ghp_");
+  });
+
+  it("OpenCode: the result is withheld, the prompt is refused", async () => {
+    const hooks = await openCodeHooks(proj);
+    const result: any = { content: [{ type: "text", text: stdout }], output: {}, metadata: {} };
+    await hooks["execute.after"]!({ sessionID: "u4", tool: "shell", status: "completed", input: { command: "x" }, result });
+    expect(JSON.stringify(result)).not.toContain("ghp_");
+    expect(result.content[0].text).toContain("secretgate withheld this tool output");
+    await expect(hooks.prompt!({ sessionID: "u5", prompt: { text: stdout, files: [] } })).rejects.toThrow(/could not be scanned safely/);
   });
 });

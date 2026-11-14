@@ -1,9 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { run } from "../src/cli.js";
 import { disableState, recordSession } from "../src/disable.js";
+import { Vault } from "../src/vault/vault.js";
 import { FAKE } from "./fixtures/fake-tokens.js";
 
 let home: string;
@@ -37,6 +38,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.SECRETGATE_HOME;
   delete process.env.SECRETGATE_DISABLE;
+  delete process.env.SECRETGATE_CLAUDE_CODE_VERSION;
   for (const k of hostEnvKeys) {
     if (hostEnv[k] === undefined) delete process.env[k];
     else process.env[k] = hostEnv[k];
@@ -406,6 +408,23 @@ describe("secretgate disable + enable", () => {
   });
 });
 
+describe("secretgate pipe — fails closed", () => {
+  it("writes nothing when the text cannot be redacted to a clean result", async () => {
+    let n = 0;
+    const spy = vi
+      .spyOn(Vault.prototype, "recordSecrets")
+      .mockImplementation((items) => items.map(() => `ghp_${"aB3dE6gH9jK2mN5pQ8sT1vW4yZ7bC0dF6h".slice(0, 32)}${String(n++).padStart(4, "0")}`));
+    try {
+      const out = capture(`token: ${FAKE.githubPat}\n`);
+      expect(await run(["pipe"], out.io)).toBe(2);
+      expect(out.text()).toBe("");
+      expect(out.errText()).toContain("could not be redacted safely");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe("secretgate status", () => {
   const origHome = process.env.HOME;
   const origCwd = process.cwd();
@@ -451,6 +470,113 @@ describe("secretgate status", () => {
     const { io, text } = capture();
     expect(await run(["status"], io)).toBe(0);
     expect(text()).toMatch(/hooks start .*gone\/node, which is NOT FOUND/);
+  });
+
+  it("flags an install that predates the failed-call check, until `install` adds it", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    process.env.SECRETGATE_CLAUDE_CODE_VERSION = "2.1.323 (Claude Code)";
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const hook = (event: string) => ({ hooks: [{ type: "command", command: `secretgate hook claude-code ${event}` }] });
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({ hooks: { UserPromptSubmit: [hook("user-prompt-submit")], PreToolUse: [hook("pre-tool-use")], PostToolUse: [hook("post-tool-use")] } }),
+    );
+    const before = capture();
+    await run(["status"], before.io);
+    expect(before.text()).toContain("no PostToolBatch hook");
+    await run(["install", "--claude-code"], capture().io);
+    const after = capture();
+    await run(["status"], after.io);
+    expect(after.text()).toContain("wired (4 hooks");
+    expect(after.text()).not.toContain("no PostToolBatch hook");
+  });
+
+  // Claude Code before 2.1.101 ignores the whole settings file when it names a
+  // hook event it does not know: every hook would be off.
+  it("does not write PostToolBatch for an older or unknown Claude Code, and says so", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    for (const [version, why] of [
+      ["2.0.0 (Claude Code)", "2.0.0"],
+      ["unknown", "could not be found"],
+    ] as const) {
+      process.env.SECRETGATE_CLAUDE_CODE_VERSION = version;
+      const install = capture();
+      await run(["install", "--claude-code"], install.io);
+      expect(install.text(), version).toContain("failed-call check NOT installed");
+      expect(install.text(), version).toContain(why);
+      expect(Object.keys(JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).hooks)).not.toContain("PostToolBatch");
+      const status = capture();
+      await run(["status"], status.io);
+      expect(status.text(), version).toContain("wired (3 hooks");
+      expect(status.text(), version).toContain("no PostToolBatch hook");
+    }
+  });
+
+  // `npm exec` / `pnpm exec` put the project's node_modules/.bin first on
+  // PATH. A `claude` a repository ships there must not be the one asked for
+  // its version: it could run anything, or pass for a recent Claude Code.
+  it.runIf(process.platform !== "win32")("asks the version of a `claude` the project cannot plant", async () => {
+    process.env.HOME = home;
+    const savedPath = process.env.PATH;
+    const project = realpathSync(work);
+    const program = (dir: string, version: string, mark: string) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "claude"), `#!/bin/sh\ntouch "${join(home, mark)}"\necho "${version} (Claude Code)"\n`);
+      chmodSync(join(dir, "claude"), 0o755);
+    };
+    program(join(project, "node_modules", ".bin"), "9.9.9", "ran-project-bin");
+    program(join(project, "tools"), "9.9.8", "ran-project-tools");
+    const system = join(home, "system-bin");
+    program(system, "2.0.0", "ran-system");
+    process.chdir(project);
+    try {
+      process.env.PATH = [join(project, "node_modules", ".bin"), "tools", ".", join(project, "tools"), system, savedPath].join(":");
+      const install = capture();
+      await run(["install", "--claude-code"], install.io);
+      expect(install.text()).toContain("failed-call check NOT installed");
+      expect(install.text()).toContain("Claude Code 2.0.0");
+      expect(existsSync(join(home, "ran-system"))).toBe(true);
+      expect(existsSync(join(home, "ran-project-bin"))).toBe(false);
+      expect(existsSync(join(home, "ran-project-tools"))).toBe(false);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("trusts the user's own bin directory when run from the home directory", async () => {
+    process.env.HOME = home;
+    const savedPath = process.env.PATH;
+    mkdirSync(join(home, ".local", "bin"), { recursive: true });
+    writeFileSync(join(home, ".local", "bin", "claude"), '#!/bin/sh\necho "2.1.323 (Claude Code)"\n');
+    chmodSync(join(home, ".local", "bin", "claude"), 0o755);
+    process.chdir(home);
+    try {
+      process.env.PATH = [join(home, ".local", "bin"), "/usr/bin", "/bin"].join(":");
+      const install = capture();
+      await run(["install", "--claude-code"], install.io);
+      expect(install.text()).not.toContain("failed-call check NOT installed");
+      expect(Object.keys(JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).hooks)).toContain("PostToolBatch");
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it("warns loudly when the settings name PostToolBatch and this Claude Code would drop the whole file", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    process.env.SECRETGATE_CLAUDE_CODE_VERSION = "2.1.323";
+    await run(["install", "--claude-code"], capture().io);
+    process.env.SECRETGATE_CLAUDE_CODE_VERSION = "2.0.0 (Claude Code)";
+    const status = capture();
+    await run(["status"], status.io);
+    expect(status.text()).toMatch(/!! .*2\.0\.0.*ignores the WHOLE settings file/);
+    // `install` under that version takes the entry out again.
+    await run(["install", "--claude-code"], capture().io);
+    const fixed = capture();
+    await run(["status"], fixed.io);
+    expect(fixed.text()).not.toContain("ignores the WHOLE settings file");
   });
 
   it("names the env var when that is what is off", async () => {

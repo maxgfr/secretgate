@@ -48,10 +48,35 @@ export class ScanBudgetError extends Error {
 
 // secretgate's own placeholders are ALREADY-redacted text — they must never be
 // re-detected as secrets, or the loop breaks: a resent redacted prompt would
-// re-block, and writing a placeholder back would be flagged. Kept in sync with
-// vault/placeholder.ts PLACEHOLDER_RE (duplicated to keep the engine free of a
-// vault dependency).
-const PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
+// re-block, and writing a placeholder back would be flagged.
+//
+// The shape is exact: the 12 hexadecimal digits a placeholder has (16 only
+// after a collision of two of them, which the vault resolves; such a one is
+// treated as ordinary text here and redacted again, which the restore
+// undoes), and no hexadecimal digit right after — a placeholder must not
+// swallow the first characters of a value written behind it.
+const PLACEHOLDER = /SECRETGATE_[0-9a-f]{12}(?![0-9a-f])/g;
+// What a wider rule takes with a token without it being part of any secret:
+// a separator or two (the dot that ends a sentence, a quote, `=`, `__`). The
+// allowance is short and closed: a letter, a digit, any other symbol, or a
+// longer run is material — a password can be made of punctuation.
+const SEPARATORS_ONLY = /^[\s"'`.,;:=_\-()[\]{}<>|/\\]{0,3}$/;
+const hasMaterial = (text: string): boolean => !SEPARATORS_ONLY.test(text);
+// A placeholder, alone or with the separators a wider rule captures around a
+// token: `key: ghp_….` is redacted to `key: SECRETGATE_….`, and the generic
+// rule, which took the dot with the token, must not see a new secret in it.
+// Anything more around the placeholder is material of its own: the value is
+// redacted whole (a forged `SECRETGATE_…` in front of a real password hides
+// nothing), and the restore resolves the placeholder inside.
+/** `text` with each placeholder replaced by filler of the same length: what
+ *  may be read as CONTEXT (see scan). */
+const blanked = (text: string): string => (text.includes("SECRETGATE_") ? text.replace(PLACEHOLDER, (p) => "_".repeat(p.length)) : text);
+
+function alreadyRedacted(secret: string): boolean {
+  if (!secret.includes("SECRETGATE_")) return false;
+  const rest = secret.replace(PLACEHOLDER, "");
+  return rest.length < secret.length && !hasMaterial(rest);
+}
 
 interface CompiledAllowlist {
   condition: "AND" | "OR";
@@ -192,6 +217,87 @@ function looksLikeFilesystemPath(raw: string): boolean {
   return /^[A-Za-z0-9._\-\\/: ]+$/.test(v);
 }
 
+// ---------------------------------------------------------------- context
+// A false redaction costs little (the value is restored locally) and a miss is
+// a leak, so a finding is dropped only when the text makes it CERTAIN that the
+// value is public or not a credential. What the value looks like (dictionary
+// words, a masked middle, an EXAMPLE suffix) is never enough: somebody's real
+// password looks like that too.
+//
+// The two rules that trust a NAME (`generic-api-key` and `password-assignment`
+// flag whatever follows a credential-sounding word) read the name the value
+// is assigned to: the words right before the operator, on the same line. Only
+// that name counts — a neighbouring `"public_key": …` says nothing about the
+// `"private_key"` next to it.
+const NAME_TRUSTING_RULES = new Set(["generic-api-key", "password-assignment"]);
+
+function assignedName(text: string, lineStart: number, valueStart: number): string[] {
+  const before = text.slice(Math.max(lineStart, valueStart - 160), valueStart);
+  const head = before.replace(/[\s"'`=:>,|?]+$/, "");
+  const phrase = /[\w.\- \t]*$/.exec(head)![0];
+  return phrase.split(/[ \t]+/).filter((w) => w !== "");
+}
+
+const alnum = (v: string): string => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+// Every word one of those rules fires on names a credential. The list is the
+// rules' own keywords, read from them: a second, hand-written list falls
+// behind (it once lacked `pwd`, and `cache_key_pwd` went unflagged).
+let nameKeywords: string[] | undefined;
+export function nameTrustingKeywords(): string[] {
+  nameKeywords ??= [...new Set(COMPILED.filter((r) => NAME_TRUSTING_RULES.has(r.id)).flatMap((r) => r.keywords))];
+  return nameKeywords;
+}
+const namesACredential = (text: string): boolean => {
+  const low = text.toLowerCase();
+  return nameTrustingKeywords().some((k) => low.includes(k));
+};
+
+// The one name that exempts a value is the one that SAYS the value is public:
+// a public key (upstream already allowlists `public_key`; this reads the same
+// statement in "Public key …:" and in upper case). A "cache key" or a
+// "fingerprint" says what a value is for, not that it may be shown — an HMAC
+// key for a cache is a `cache_key` too. And any credential keyword elsewhere
+// in the name takes the exemption back: `public_key_pwd`, `api public key`.
+const PUBLIC_NAME = /pub(?:lic)?[ _.-]?key(s?)(?![a-z])/i;
+
+function namedPublic(name: string[]): boolean {
+  // The last few words: "Public key ping-sha256".
+  const label = name.slice(-3).join(" ");
+  const m = PUBLIC_NAME.exec(label);
+  return m !== null && !namesACredential(`${label.slice(0, m.index)} ${label.slice(m.index + m[0].length)}`);
+}
+
+// A Stripe publishable key is made to be shipped to browsers. The prefix alone
+// does not prove it (another vendor's secret may start the same way): the
+// whole value has to have that shape, and its name has to say public or
+// publishable while naming no other credential (`secret_key = "pk_live_…"`
+// and `api_key = "pk_live_…"` are flagged).
+function publishableByName(value: string, name: string[]): boolean {
+  if (!/^pk_(?:test|live)_[A-Za-z0-9]+$/.test(value)) return false;
+  const label = name.slice(-3).join(" ");
+  const says = /publi(?:c|shable)/i.exec(label);
+  if (says === null) return false;
+  const rest = `${label.slice(0, says.index)} ${label.slice(says.index + says[0].length)}`.replace(/key/i, "");
+  return !namesACredential(rest);
+}
+
+function notASecretInContext(secret: string, name: string[]): boolean {
+  const value = unquote(secret);
+  // The "value" is the name again: a `…KeysLength` variable that is assigned
+  // the `.length` of the keys. (Spelled out, that line would trip gitleaks'
+  // generic rule when it scans this file.)
+  const last = name[name.length - 1];
+  if (last !== undefined && alnum(last).length >= 6 && alnum(last) === alnum(value)) return true;
+  return publishableByName(value, name) || namedPublic(name);
+}
+
+// GitHub tokens are random base62 followed by a checksum. Thirty-odd random
+// characters repeat one of them eight times in a row about once in 10^11
+// tokens; documentation examples (`ghp_…00000000`) do it by design.
+const GITHUB_TOKEN_RULES = new Set(["github-pat", "github-fine-grained-pat", "github-oauth", "github-app-token", "github-refresh-token"]);
+const EIGHT_IN_A_ROW = /(.)\1{7}/;
+
 const BUILTIN_RULES: CompiledRule[] = [
   {
     id: "credit-card-number",
@@ -257,7 +363,7 @@ const BUILTIN_RULES: CompiledRule[] = [
     // (`"password": "Client Secret"` in Airflow's connection-form metadata).
     // The cost is a spaced passphrase, which this rule now leaves to a real
     // password manager — the same trade-off the README already states.
-    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !PLACEHOLDER_ONLY.test(secret),
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !alreadyRedacted(secret),
   },
   // Credentials a coding agent's .env commonly holds and gitleaks ships no rule
   // for (fed one by one to both engines, gitleaks 8.30 missed all four). The
@@ -307,6 +413,13 @@ const COMPILED: CompiledRule[] = [
   ...BUILTIN_RULES,
 ];
 
+/** Every rule's pattern, for development tools that need what a match looked
+ *  like (scripts/rule-candidates.mjs reads the capture groups). The product
+ *  does not call it. */
+export function rulePatterns(): Array<{ id: string; re: RegExp; secretGroup?: number }> {
+  return COMPILED.map((r) => ({ id: r.id, re: new RegExp(r.re.source, r.re.flags), secretGroup: r.secretGroup }));
+}
+
 // The rule database describes secrets, so some regex sources embed literal
 // secret-shaped constants (e.g. the Bedrock key's base64 prefix) — scanning
 // secretgate's own rule files or shipped bundles would flag its detection
@@ -329,7 +442,15 @@ function isRuleSourceText(secret: string): boolean {
  *  gitleaks hybrid pass: our own placeholders, our own detection patterns, and
  *  obvious placeholder values. */
 export function isNonSecret(secret: string): boolean {
-  return PLACEHOLDER_ONLY.test(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
+  return alreadyRedacted(secret) || isRuleSourceText(secret) || looksLikePlaceholder(secret);
+}
+
+/** What `scan` drops because of the rule and of where the value stands, for a
+ *  finding another engine made at `start` in `text`. */
+export function isNonSecretInContext(text: string, start: number, secret: string, ruleId: string): boolean {
+  if (GITHUB_TOKEN_RULES.has(ruleId) && EIGHT_IN_A_ROW.test(secret)) return true;
+  if (!NAME_TRUSTING_RULES.has(ruleId)) return false;
+  return notASecretInContext(secret, assignedName(blanked(text), text.lastIndexOf("\n", start - 1) + 1, start));
 }
 
 const PATH_RULES_COMPILED = PATH_RULES.map((r) => ({ id: r.id, re: new RegExp(r.path.source, r.path.flags.replaceAll(/[gy]/g, "")) }));
@@ -406,7 +527,15 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
   }
 
-  const lower = text.toLowerCase();
+  // Everything AROUND a value is read from a copy in which each placeholder is
+  // blanked: the rules' patterns and keywords, the name a value is assigned
+  // to, the match and the line an allowlist looks at. A placeholder's text
+  // holds the word "secret"; read as context, it turned into a
+  // credential-sounding name for whatever followed, and a text got one
+  // verdict before redaction and another after. Offsets are the same in both
+  // copies, and the VALUE is always taken from the text itself.
+  const subject = blanked(text);
+  const lower = subject.toLowerCase();
   const starts = lineStarts(text);
   const pragmaLines = cfg.pragmas === false ? new Set<number>() : pragmaAllowedLines(text);
   const findings: Finding[] = [];
@@ -423,14 +552,18 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
 
     rule.re.lastIndex = 0;
-    for (const match of text.matchAll(rule.re)) {
-      const { secret, start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
+    for (const match of subject.matchAll(rule.re)) {
+      const { start, end } = pickSecret(match as RegExpExecArray, rule.secretGroup);
+      const secret = text.slice(start, end);
+      const fullMatch = text.slice(match.index, match.index + match[0].length);
+      // The match as a gate may read it: blanked context around the real value.
+      const matchContext = subject === text ? fullMatch : subject.slice(match.index, start) + secret + subject.slice(end, match.index + match[0].length);
       if (secret.length === 0) continue;
-      if (PLACEHOLDER_ONLY.test(secret)) continue; // our own already-redacted marker
+      if (alreadyRedacted(secret)) continue; // our own marker
       // Every gate below must pass, so the cheap, rule-specific ones (Luhn,
       // IIN, the URL username) run before the ones that search shared tables.
       if (rule.post && !rule.post(secret)) continue;
-      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
+      if (rule.postMatch && !rule.postMatch(secret, matchContext)) continue;
       if (isRuleSourceText(secret)) continue; // our own detection patterns
       // PLACEHOLDER_WORDS encodes "this string is not a real secret", so it
       // holds no matter which rule matched. It used to be consulted only by
@@ -439,17 +572,18 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
       // flagged by hashicorp-tf-password — the single most canonical placeholder
       // in existence, redacted out of the user's own file.
       if (looksLikePlaceholder(secret)) continue;
+      if (GITHUB_TOKEN_RULES.has(rule.id) && EIGHT_IN_A_ROW.test(secret)) continue;
 
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== undefined && entropy <= rule.entropy) continue;
 
       const line = lineAt(starts, start);
       if (pragmaLines.has(line)) continue;
+      if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(subject, starts[line]!, start))) continue;
 
-      const fullMatch = match[0];
       let allowed = false;
       for (const a of rule.allowlists) {
-        const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText(text, starts, line) : secret;
+        const target = a.regexTarget === "match" ? matchContext : a.regexTarget === "line" ? lineText(subject, starts, line) : secret;
         if (allowlistMatches(a, secret, target, cfg.sourcePath)) {
           allowed = true;
           break;
@@ -464,16 +598,65 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     }
   }
 
-  return dedupe(findings);
+  const kept = dedupe(findings, text);
+  if (isDisabledRule(AWS_SECRET_RULE, cfg.allowlist)) return kept;
+  return withAwsSecretKeys(kept, text, starts, pragmaLines, cfg);
 }
 
-// When two findings' secret spans overlap, keep the more specific one:
-// a named vendor rule beats password-assignment, which beats generic-api-key,
-// then the longer secret wins.
+// ---------------------------------------------------------------- the AWS pair
+// An AWS access key id comes with a secret access key, and where the two are
+// written as a pair nothing names the second: a credentials CSV row is `<key
+// id>,<secret key>`, an S3 URL or a tool's config `<key id>:<secret key>`.
+// The key id is the evidence. After an `aws-access-token` finding, a `,` or a
+// `:`, exactly the 40 base64 characters of a secret access key are one.
+//
+// Deliberately no wider than that. A general "what follows a credential is a
+// credential" rule took commit ids, file names, build numbers and
+// `name=value` pairs for secrets, and in the output of a failed call each of
+// them ended the session. A placeholder is no evidence either: the pair is
+// found in the pass that finds the key id, or not at all.
+const AWS_SECRET_RULE = "aws-secret-access-key";
+const AWS_KEY_ID_RULE = "aws-access-token";
+const AWS_SECRET_AFTER_ID = /["'`]?[ \t]{0,3}[:,][ \t]{0,3}["'`]?([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])/y;
+const AWS_SECRET_ENTROPY = 3.5;
+
+function withAwsSecretKeys(findings: Finding[], text: string, starts: number[], pragmaLines: Set<number>, cfg: ScanConfig): Finding[] {
+  const paired: Finding[] = [];
+  for (const id of findings) {
+    if (id.ruleId !== AWS_KEY_ID_RULE) continue;
+    AWS_SECRET_AFTER_ID.lastIndex = id.end;
+    const m = AWS_SECRET_AFTER_ID.exec(text);
+    if (!m) continue;
+    const secret = m[1]!;
+    const start = m.index + m[0].length - secret.length;
+    const end = start + secret.length;
+    if (findings.some((f) => f.start < end && start < f.end)) continue;
+    // A hex digest fits the alphabet; a secret key drawn from 64 characters does not stay within 16.
+    if (/^[0-9A-Fa-f]+$/.test(secret)) continue;
+    const entropy = shannonEntropy(secret);
+    if (entropy <= AWS_SECRET_ENTROPY) continue;
+    const line = lineAt(starts, start);
+    if (pragmaLines.has(line) || isAllowedValue(secret, cfg.allowlist)) continue;
+    paired.push({ ruleId: AWS_SECRET_RULE, match: text.slice(id.start, end), secret, start, end, entropy, line });
+  }
+  return paired.length === 0 ? findings : [...findings, ...paired].sort((a, b) => a.start - b.start);
+}
+
+// When two findings' secret spans overlap, one finding is kept and it must
+// cover everything either rule flagged: what a dropped finding saw and the
+// kept one does not would reach the model unredacted.
+//   - One span inside the other: the more specific rule names the secret (a
+//     vendor rule beats password-assignment, which beats generic-api-key, then
+//     the longer secret wins) — unless the wider one holds a letter or a digit
+//     or any symbol outside it beyond a separator or two. `api_key = "<key
+//     id>:<secret key>"` is one flagged value, and the vendor rule sees only
+//     the key id. The dot the generic rule takes with a token does not make
+//     a wider secret.
+//   - Neither inside the other: one finding over both spans.
 const specificity = (ruleId: string): number => (ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2);
-// Findings are visited by start, so the kept spans stay sorted and disjoint:
-// only the last one kept can reach the next finding.
-function dedupe(findings: Finding[]): Finding[] {
+// Findings are visited by start (longest first), so the kept spans stay sorted
+// and disjoint: only the last one kept can reach the next finding.
+function dedupe(findings: Finding[], text: string): Finding[] {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
   const kept: Finding[] = [];
   for (const f of sorted) {
@@ -482,10 +665,16 @@ function dedupe(findings: Finding[]): Finding[] {
       kept.push(f);
       continue;
     }
-    const fRank = specificity(f.ruleId);
-    const oRank = specificity(other.ruleId);
-    const preferF = fRank > oRank || (fRank === oRank && f.end - f.start > other.end - other.start);
-    if (preferF) kept[kept.length - 1] = f;
+    const preferF = specificity(f.ruleId) > specificity(other.ruleId);
+    if (f.end <= other.end) {
+      // `f` lies inside `other`.
+      const around = text.slice(other.start, f.start) + text.slice(f.end, other.end);
+      if (preferF && !hasMaterial(around)) kept[kept.length - 1] = f;
+      continue;
+    }
+    const named = preferF ? f : other;
+    const secret = text.slice(other.start, f.end);
+    kept[kept.length - 1] = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
   }
   return kept;
 }

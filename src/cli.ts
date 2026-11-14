@@ -21,13 +21,23 @@ import { isAllowedValue, isDisabledRule, pathMatchesGlob, sha256, type UserAllow
 import { shannonEntropy } from "./engine/entropy.js";
 import { gitleaksPath, scanWithGitleaks } from "./engine/gitleaks-bin.js";
 import type { Finding } from "./engine/scanner.js";
-import { isNonSecret, scan, sensitiveFileNameRule } from "./engine/scanner.js";
+import { isNonSecret, isNonSecretInContext, scan, sensitiveFileNameRule } from "./engine/scanner.js";
 import { failClosed, type HookResult, handleClaudeCode } from "./hooks/claude-code.js";
 import { handleCodex } from "./hooks/codex.js";
 import { AllowlistFileError, writeAllow } from "./install/allow-store.js";
-import { claudeCodeMatcherCurrent, installClaudeCode, retiredRulesToRemove, uninstallClaudeCode } from "./install/claude-code.js";
+import {
+  BATCH_HOOK_MIN_VERSION,
+  claudeCodeBatchHookWired,
+  claudeCodeMatcherCurrent,
+  claudeCodeTakesBatchHook,
+  claudeCodeVersionOf,
+  installClaudeCode,
+  retiredRulesToRemove,
+  uninstallClaudeCode,
+} from "./install/claude-code.js";
 import { CODEX_HOOK_COUNT, codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
-import { SettingsParseError } from "./install/json-merge.js";
+import { SettingsLinkError, SettingsParseError } from "./install/json-merge.js";
+import { covers, repositoryRoot } from "./paths.js";
 import { isSecretgateHook } from "./install/hook-marker.js";
 import { installOpencode, opencodeConfigDir, opencodePluginFile, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
@@ -167,12 +177,14 @@ async function gitleaksExtra(bin: string, text: string, found: Finding[], allowl
   let lineStarts: number[] | undefined;
   for (const g of await scanWithGitleaks(text, { bin })) {
     if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
-    known.add(g.secret);
     // gitleaks says which line; the first occurrence is only a fallback (a
     // repeated secret would otherwise always point at its first line).
     lineStarts ??= [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
     const reported = g.startLine !== undefined && g.startLine <= lineStarts.length ? text.indexOf(g.secret, lineStarts[g.startLine - 1]) : -1;
     const start = reported !== -1 ? reported : Math.max(0, text.indexOf(g.secret));
+    // What the JS engine drops where the value stands, gitleaks must not bring back.
+    if (isNonSecretInContext(text, start, g.secret, g.ruleId)) continue;
+    known.add(g.secret);
     const line = g.startLine !== undefined && reported !== -1 ? g.startLine - 1 : text.slice(0, start).split("\n").length - 1;
     extra.push({
       ruleId: `gitleaks:${g.ruleId}`,
@@ -327,7 +339,14 @@ async function cmdPipe(_args: string[], io: Io): Promise<number> {
   const text = await readIoStdin(io);
   const cfg = loadConfig(process.cwd());
   const vault = new Vault();
-  const r = redactText(text, vault, "pipe", { allowlist: cfg.allowlist });
+  let r: ReturnType<typeof redactText>;
+  try {
+    r = redactText(text, vault, "pipe", { allowlist: cfg.allowlist });
+  } catch {
+    // Nothing is written: a partly redacted stream would pass for a clean one.
+    io.stderr("pipe: this input could not be redacted safely — nothing was written\n");
+    return 2;
+  }
   io.stdout(r.text);
   return 0;
 }
@@ -723,6 +742,52 @@ interface InstallOutcome {
 // Install each requested agent INDEPENDENTLY: one agent failing (e.g. its
 // plugin bundle is missing, or its config is corrupt) must not abort the others
 // or the self-test. Errors are collected and reported, never thrown out.
+// The `claude` whose version decides what is written. `npm exec` and `pnpm
+// exec` put the project's `node_modules/.bin` first on PATH, and a repository
+// can ship a `claude` there (or anywhere in its tree): run for its version, it
+// would execute the repository's code, and could pass for a recent Claude
+// Code. So PATH is walked here, and an entry is trusted only when it is an
+// absolute directory, is not a `node_modules/.bin`, and lies outside the
+// project (the repository around the current directory, or that directory;
+// run from the home directory, there is no project to exclude — the user's
+// own `~/.local/bin` is theirs). Nothing found: the version is unknown.
+function trustedClaude(): string | undefined {
+  const names = process.platform === "win32" ? ["claude.exe"] : ["claude"];
+  const project = repositoryRoot(process.cwd()) ?? process.cwd();
+  const inProject = (dir: string): boolean => !covers(project, homedir()) && covers(project, dir);
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!isAbsolute(dir) || /[\\/]node_modules[\\/]\.bin[\\/]?$/.test(dir) || inProject(dir)) continue;
+    for (const name of names) {
+      const file = join(dir, name);
+      if (statSync(file, { throwIfNoEntry: false })?.isFile()) return file;
+    }
+  }
+  return undefined;
+}
+
+// The Claude Code on this machine, as `claude --version` prints it ("2.1.323
+// (Claude Code)"), or undefined when it cannot be run. SECRETGATE_CLAUDE_CODE_VERSION
+// names it instead: for a `claude` that is not on this shell's PATH.
+function claudeCodeVersion(): string | undefined {
+  const named = process.env.SECRETGATE_CLAUDE_CODE_VERSION?.trim();
+  if (named) return named;
+  const claude = trustedClaude();
+  if (claude === undefined) return undefined;
+  try {
+    return execFileSync(claude, ["--version"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Why the failed-call check is not in a settings file, in the words of `init` and `status`.
+function batchHookAbsence(version: string | undefined): string {
+  const known = claudeCodeVersionOf(version);
+  return known
+    ? `Claude Code ${known.join(".")} ignores a whole settings file that names a hook event it does not know (fixed in ${BATCH_HOOK_MIN_VERSION}): upgrade Claude Code, then re-run \`secretgate init\``
+    : `Claude Code's version could not be found (\`claude --version\`), and before ${BATCH_HOOK_MIN_VERSION} it ignores a whole settings file that names a hook event it does not know: re-run \`secretgate init\` where \`claude\` runs, or set SECRETGATE_CLAUDE_CODE_VERSION`;
+}
+
 function installForAgents(flags: AgentFlags, io: Io): InstallOutcome {
   const outcome: InstallOutcome = { installed: { claudeCode: false, codex: false, opencode: false }, errors: [] };
   const attempt = (name: string, fn: () => void): boolean => {
@@ -744,8 +809,11 @@ function installForAgents(flags: AgentFlags, io: Io): InstallOutcome {
         io.stdout("claude-code: note — the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
       mkdirSync(dirname(settingsPath), { recursive: true });
-      const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
+      const claudeVersion = claudeCodeVersion();
+      const r = installClaudeCode({ settingsPath, command: installedCliCommand(), claudeVersion });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})\n`);
+      if (!claudeCodeTakesBatchHook(claudeVersion))
+        io.stdout(`claude-code: failed-call check NOT installed — the output of a failed tool call is not checked. ${batchHookAbsence(claudeVersion)}.\n`);
       if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}\n`);
       io.stdout("claude-code: restart your Claude Code session so the hooks load.\n");
       io.stdout("claude-code: note — @file mentions bypass tool hooks; permissions.deny rules cover the common sensitive files.\n");
@@ -800,7 +868,7 @@ function spawnHook(agent: "claude-code" | "codex", event: string, payload: unkno
 // End-to-end self-test: spawn the EXACT wired program with a synthetic event and
 // confirm it (1) blocks a secret-bearing prompt and (2) redacts a secret in
 // tool output. Runs against a throwaway vault so the real one stays clean.
-function verifyClaudeCodeWiring(io: Io): boolean {
+function verifyClaudeCodeWiring(io: Io, batchWired: boolean): boolean {
   // high-entropy fake token, built by concatenation (never a literal in-repo)
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
   const tmpHome = mkdtempSync(join(tmpdir(), "secretgate-verify-"));
@@ -836,6 +904,23 @@ function verifyClaudeCodeWiring(io: Io): boolean {
     } else {
       io.stdout("  ✗ tool-output redaction FAILED — a secret would reach the model\n");
       ok = false;
+    }
+    // A failed call never reaches PostToolUse: its output can only be stopped.
+    // Checked only where that hook is wired (see installForAgents).
+    if (batchWired) {
+      const batch = runHook("post-tool-batch", {
+        hook_event_name: "PostToolBatch",
+        cwd: tmpHome,
+        tool_calls: [{ tool_name: "Bash", tool_input: { command: "env" }, tool_response: `Exit code 1\nTOKEN=${fake}` }],
+      });
+      if (batch.continue === false && !JSON.stringify(batch).includes(fake)) {
+        io.stdout("  ✓ a secret printed by a FAILED command stops the turn before it is sent\n");
+      } else {
+        io.stdout("  ✗ failed-command check FAILED — the output of a failed tool call would reach the model\n");
+        ok = false;
+      }
+    } else {
+      io.stdout("  – the output of a FAILED command is NOT checked: that hook is not installed for this Claude Code (see above)\n");
     }
     const cleanRaw = spawnHook(
       "claude-code",
@@ -1029,7 +1114,7 @@ async function cmdInit(args: string[], io: Io): Promise<number> {
   io.stdout("\n== verify installed adapters (local checks, no model request) ==\n");
   let ok = true;
   // Verify only what actually installed.
-  if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
+  if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io, claudeCodeBatchHookWired(readJsonSafe(claudeSettingsPath(flags.project)))) && ok;
   if (outcome.installed.codex) ok = verifyCodexWiring(io) && ok;
   if (outcome.installed.opencode) ok = verifyOpencodeBundle(io) && ok;
   if (!outcome.installed.claudeCode && !outcome.installed.codex && !outcome.installed.opencode) {
@@ -1067,7 +1152,7 @@ async function cmdUninstall(args: string[], io: Io): Promise<number> {
       io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "unwired" : "nothing to remove"} (${codexHome()})\n`);
     }
   } catch (err) {
-    if (err instanceof SettingsParseError) {
+    if (err instanceof SettingsParseError || err instanceof SettingsLinkError) {
       io.stderr(`${err.message}\n`);
       return 2;
     }
@@ -1171,6 +1256,7 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
   const codexCommands = hookCommands(codexHooks, "codex");
   reportPinned([...ccScopes.flatMap(([, path]) => hookCommands(readJsonSafe(path), "claude-code")), ...codexCommands], io);
 
+  const ccVersion = ccScopes.some(([, path]) => hookCommands(readJsonSafe(path), "claude-code").length > 0) ? claudeCodeVersion() : undefined;
   for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
     const ccCommands = hookCommands(settings, "claude-code");
@@ -1182,6 +1268,16 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
     reportMissingPrograms(ccCommands, `claude-code ${label}  `, io);
     if (wired > 0 && !claudeCodeMatcherCurrent(settings))
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) — run \`secretgate init\` to update\n`);
+    if (wired > 0 && !claudeCodeBatchHookWired(settings))
+      io.stdout(
+        `claude-code ${label}  no PostToolBatch hook (the output of a FAILED tool call is not checked) — ${claudeCodeTakesBatchHook(ccVersion) ? "run `secretgate init` to add it" : batchHookAbsence(ccVersion)}\n`,
+      );
+    // The other way round is worse: the entry is there, and this Claude Code drops the file for it.
+    const ccKnown = claudeCodeVersionOf(ccVersion);
+    if (wired > 0 && claudeCodeBatchHookWired(settings) && ccKnown && !claudeCodeTakesBatchHook(ccVersion))
+      io.stdout(
+        `claude-code ${label}  !! this file names the PostToolBatch hook, and Claude Code ${ccKnown.join(".")} ignores the WHOLE settings file for it: NO hook runs — run \`secretgate init\` (it takes the entry out) or upgrade Claude Code to ${BATCH_HOOK_MIN_VERSION} or later\n`,
+      );
     const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
     const retired = retiredRulesToRemove(denyRules, Array.isArray(owned) ? owned.filter((r): r is string => typeof r === "string") : []);
     if (retired.length > 0)

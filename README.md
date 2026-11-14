@@ -66,8 +66,9 @@ anything per-use.
   entropy thresholds + upstream stopword allowlists + secretgate built-ins for
   Luhn/IIN-gated credit cards, **URL-embedded credentials** (`postgres://user:pass@…`,
   basic-auth URLs), **quoted passwords with punctuation** that gitleaks' generic
-  rule misses, and Groq, Replicate and xAI keys and Discord webhook URLs, which
-  gitleaks has no rule for. Zero runtime dependencies, single bundled `.mjs`, ~50ms per scan.
+  rule misses, the AWS secret access key written next to its key id (a
+  credentials CSV row, `<key id>:<secret key>`), and Groq, Replicate and xAI
+  keys and Discord webhook URLs, which gitleaks has no rule for. Zero runtime dependencies, single bundled `.mjs`, ~50ms per scan.
   If the real `gitleaks` binary is installed, `secretgate scan` runs it as a
   second engine and reports what it adds (`--no-gitleaks`, or `"hybrid": "off"`
   in `~/.secretgate/config.json`, to skip it). Hooks always use the JS engine only.
@@ -86,7 +87,7 @@ anything per-use.
   **not** denied: fake keys there are what a security fix has to read, and their
   content is still redacted on the way to the model. In the shell, only
   commands that print, copy, upload or source a file count as reading it:
-  `node --env-file=.env`, `docker compose --env-file .env`, `mv .env x`,
+  `node --env-file=.env`, `docker compose --env-file .env`, `mv .env .env.bak`,
   `openssl genrsa -out server.key` are fine; `cat`, `cp`, `curl -d @.env`,
   `source .env`, `< .env` are not.
 - **Project scope** (optional): a `.secretgate.json` can keep the agent inside
@@ -102,7 +103,7 @@ anything per-use.
 |---|---|---|---|
 | Secret pasted in a prompt | ✅ blocked + redacted copy | ✅ blocked + redacted copy | ✅ redacted in place |
 | Agent reads a sensitive file | ✅ hook deny + `permissions.deny` | ✅ hook deny | ✅ hook deny (`.env` also needs approval in OpenCode itself) |
-| Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`) | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
+| Secret in tool/bash/MCP output | ✅ redacted — PostToolUse fires on **every** tool (`*`); a **failed** call's output cannot be rewritten, so the turn is stopped before it is sent | ✅ successful supported tools: raw result blocked, redacted result substituted | ✅ redacted (incl. grep/glob) |
 | Placeholder written to a file | ✅ real value restored (built-in file tools; never through MCP tools, which may write remotely) | ✅ real value restored (`apply_patch`) | ✅ real value restored (built-in file tools) |
 | Oversized / un-scannable output | ✅ **withheld** (fail-closed), never passed raw | ✅ **withheld** via block-and-replace | ✅ withheld on scan failure |
 | Agent leaves the project [scope](#scope) | ✅ Read/Edit/Write/LS/Glob/Grep/Bash/MCP denied, search results filtered, `@path` blocked | ✅ shell/`apply_patch` denied | ✅ tools denied, glob/grep/list filtered, attachments removed |
@@ -111,7 +112,11 @@ anything per-use.
 **Scan failures are explicit.** Supported output envelopes are replaced with a
 withholding notice. If Claude Code cannot accept a safe replacement, Secretgate
 stops the turn and blocks later prompts for that session ID; start a fresh
-session. Malformed events without a session ID cannot be marked for this
+session. The same happens when a **failed** tool call printed a secret (a
+command that exits non-zero, an MCP error result): Claude Code runs
+`PostToolUse` for successful calls only and lets no hook rewrite a failed one,
+so a `PostToolBatch` hook reads every result as the model is about to receive
+it and stops the turn if a secret is still there. Malformed events without a session ID cannot be marked for this
 resume protection. Host process kills/timeouts remain a fail-open limitation. A
 per-scan wall-clock budget stops a maliciously slow payload from stalling a hook
 past the agent's timeout (which would otherwise fail open).
@@ -121,11 +126,13 @@ past the agent's timeout (which would otherwise fail open).
 | Gap | Why | Mitigation |
 |---|---|---|
 | Claude Code `@file` mentions | inlined without firing tool hooks | the prompt hook checks every `@path` in the prompt: a sensitive file (`@.env`, `@server.pem`, `@credentials.json`; test fixtures exempt) blocks the prompt, and with a scope so does an out-of-scope one. `permissions.deny` rules add a native layer for real secret locations (`.env`, `.env.local`, `.envrc`, `~/.ssh`, `~/.aws`, `.netrc`, `.npmrc`, `.git-credentials`, the vault…); project-wide `*.pem`/`*.key` rules are not installed, since they cannot exempt fixtures (`init` removes the ones older versions added) |
-| Shell commands are analysed, not sandboxed | what a program computes at run time (`$(…)` output, variables, `python -c`, a script's own `open()`) is invisible to any static check | quotes, `$'…'`, heredocs, brace lists and sequences, globs, `x/../y`, wrappers (`sudo -u`, `env -C`, `timeout`…), `bash -c '…' a0 a1`, scripts fed to a shell on stdin, `git -C`, and every `cd` (a `cd` that may fail keeps both directories) are resolved; a word that cannot be resolved is still checked by name (`$DIR/.env` is a `.env`); `ln`/`mv` of a sensitive file to an ordinary name is refused; recursive readers (`grep -r`, `rg`, `tar c`, `find -exec cat`) are checked against the files really below them (`rg` skipping hidden and `.gitignore`d ones, as it does), and refused past 20,000 entries; `"bash": "strict"` refuses what cannot be checked; for a hard guarantee add the agent's OS sandbox (Claude Code sandbox, Codex permission profiles) |
+| Shell commands are analysed, not sandboxed | what a program computes at run time (`$(…)` output, variables, `python -c`, a script's own `open()`) is invisible to any static check | quotes, `$'…'`, heredocs, brace lists and sequences, globs, `x/../y`, wrappers (`sudo -u`, `env -C`, `timeout`…), `bash -c '…' a0 a1`, scripts fed to a shell on stdin, `git -C`, and every `cd` (a `cd` that may fail keeps both directories) are resolved; a word that cannot be resolved is still checked by name (`$DIR/.env` is a `.env`); `ln`/`mv` of a sensitive file to an ordinary name, or into a fixture directory, is refused (also as `mv -t`, `git mv`, `ditto`, `find -exec mv`), but a rename done by a program or fed through a pipe is not seen as one (`python -c "os.rename(…)"`, `node -e`, `perl -e`, `… | xargs mv`); recursive readers (`grep -r`, `rg`, `tar c`, `find -exec cat`) are checked against the files really below them (`rg` skipping hidden and `.gitignore`d ones, as it does), and refused past 20,000 entries; `"bash": "strict"` refuses what cannot be checked; for a hard guarantee add the agent's OS sandbox (Claude Code sandbox, Codex permission profiles) |
 | An agent running as you | it can reach anything your user can, given enough indirection | switching secretgate off from the agent needs your approval (Claude Code) or is refused (Codex, OpenCode); the OS sandbox is the hard boundary |
+| Claude Code failed tool calls | the output of a failed call cannot be redacted, only withheld by stopping (seen on Claude Code 2.1.263 and 2.1.323) | the turn stops before the request and the session is closed, because its transcript holds the raw output: start a fresh one. A false positive stops the turn too — `secretgate allow` the value, or pause with `/secretgate off` before running such a command. The hook behind it (`PostToolBatch`) is installed only for Claude Code 2.1.101 or later: an older one ignores a whole settings file that names a hook event it does not know (seen on 2.0.0 and 2.1.100, where no hook ran at all). `init` asks the `claude` on your PATH for its version and leaves the hook out otherwise (a `claude` inside the project or in a `node_modules/.bin` is never run, and output that is not `x.y.z (Claude Code)` counts as unknown); `status` says so, and warns if the entry and an older Claude Code ever meet |
 | Codex failed/unsupported tool output | `PostToolUse` only fires for successful supported tools; native output rewrite remains unsupported | Bash/apply_patch and successful MCP/local-function results are block-and-replace protected; an MCP result marked as an error can still bypass the post hook |
 | Codex local telemetry/logs | block-and-replace changes the model-visible result, not Codex's local logging copy | the raw result stays local; protect access to Codex logs and telemetry configuration |
 | Low-entropy secrets (`password: hunter2`) | indistinguishable from prose without huge false positives | catches strong/quoted passwords; use a real password manager |
+| Values the text itself declares public | a value whose own name says "public key" and names no credential (`public_key_pwd` is still flagged); a "value" that is its own variable name; a whole Stripe `pk_live_`/`pk_test_` key under a name that says public or publishable; a GitHub token with one character eight times in a row | dropped only where the text makes it certain. What a value merely looks like (dictionary words, a masked middle, an `EXAMPLE` suffix) or is used for (a cache key, a fingerprint) never exempts it: a false redaction is restored locally, a miss is a leak ([measurement](docs/model-comparison.md)) |
 | Passphrases with spaces (`password = "correct horse battery"`) | a spaced value after a `password` key is a UI label or a sentence far more often than a credential — 155 of 649 such matches on a 42k-file corpus were labels like `"password": "Client Secret"` | gitleaks' own generic rule stops at `[\w.=-]` for the same reason; use a real password manager |
 | Restore → off-machine exfil | a prompt-injected agent could write a placeholder to a file (restored to the real value) then `git push` / upload it | Bash restore is **off** by default; the secret never reaches the model, only a file the agent already had write access to |
 | Images / clipboard / screenshots | no hook surface | — |
@@ -151,8 +158,10 @@ Narrowest fix first:
    history and of `ps`
 3. `secretgate allow --path 'tests/fixtures/**'`
 4. `secretgate allow --rule <rule-id>` (last resort)
-5. one-off prompt bypass: include `[allow-secret]` in the prompt (it exempts
-   what you typed, never content attached to the prompt)
+5. one-off prompt bypass: include `[allow-secret]` in the prompt. On OpenCode
+   it exempts what you typed, never a file attached to the prompt. Claude Code
+   and Codex inline `@file` mentions themselves: there the tag also lets a
+   sensitive `@file` through, as the block message says
 6. whole firewall off for one run: type `/secretgate off` (see below)
 
 Projects can commit shared entries in `.secretgate.json`:
@@ -325,7 +334,9 @@ secretgate hook       <agent> <event>        (internal hook entrypoint)
 ```
 
 Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
-`SECRETGATE_DISABLE=1` (firewall off for this process).
+`SECRETGATE_DISABLE=1` (firewall off for this process),
+`SECRETGATE_CLAUDE_CODE_VERSION` (the Claude Code version `init` and `status`
+should assume when `claude --version` cannot be run from their shell).
 
 ## How it's validated
 
@@ -343,6 +354,14 @@ Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
   `init --all` in a throwaway home, and require every hook to run the pinned
   binary and block a secret with no `node` on `PATH`.
 - A **self-scan CI job**: secretgate scans its own repo → 0 findings.
+- A small ML detector, `s6-secrets-pico`, was measured against the rules as
+  a possible second engine and **not adopted**. It beats them on its own
+  synthetic bench, but it flags about 60 % of real files that hold no secret
+  (method, numbers and limits: [docs/model-comparison.md](docs/model-comparison.md)).
+  The same page records the rules' own false positives on 8,823 real files:
+  40, then 21 once the rules drop what the text itself makes certain is public.
+  The rest is left flagged on purpose: a false redaction is restored locally,
+  a miss is a leak.
 - Verified against **real `claude -p` sessions** by inspecting the session
   transcript: a secret in a tool result never appears in what reached the
   model (only the placeholder does), and restore-on-write puts the real value
@@ -364,7 +383,13 @@ keeping output redaction; the agent's own permissions can still deny access.
 OpenCode also scans tool history before model conversion, including restored
 write arguments and errors. Disabling protection intentionally skips this scan.
 
-Install/uninstall preserve existing rules and foreign hooks. Claude ownership
+Install/uninstall preserve existing rules and foreign hooks, and keep a
+settings file's permissions. A settings file that is a symlink is written
+through when it resolves inside its own tree (the project for `--project`, your
+home directory otherwise: a dotfiles checkout) to a file of the same name, or
+to one in a `.claude`/`.codex`/`opencode` directory. Any other link is refused
+with nothing changed: a repository can commit `.claude/settings.json` as a
+link to any file of yours, or to its own `package.json`. Claude ownership
 is recorded beside settings; legacy rules without an ownership record are
 retained on uninstall. `status` checks Codex trust definitions as well as wiring.
 
@@ -376,6 +401,7 @@ pnpm test                 # vitest
 pnpm run rules:sync       # refresh rules/gitleaks.toml from upstream + regenerate
 pnpm run check:build      # reproducible-bundle + fresh-rules gate
 SECRETGATE_DIFFERENTIAL=1 pnpm exec vitest run tests/engine/differential.test.ts  # needs gitleaks
+node scripts/rule-candidates.mjs src --out /tmp/candidates.jsonl   # every rule finding with its context, values masked (dev tool)
 pnpm run build && pnpm run build:binaries --native   # needs Bun; dist/secretgate-<platform>-<arch>
 pnpm run smoke:binary dist/secretgate-macos-arm64    # init + hooks through the binary, no node on PATH
 ```

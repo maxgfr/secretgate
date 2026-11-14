@@ -2,8 +2,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { applyEdits, modify, type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
-import { writeFileAtomic } from "../fs-atomic.js";
-import { type EditReport, SettingsParseError } from "./json-merge.js";
+import { rewriteFileAtomic, writeFileAtomic } from "../fs-atomic.js";
+import { assertWithin, type EditReport, SettingsParseError } from "./json-merge.js";
 
 // OpenCode install = copy the self-contained plugin bundle to
 // <config>/plugins/secretgate.js. secretgate is distributed as a skill, not an
@@ -84,6 +84,8 @@ export function uninstallOpencode({ configDir }: { configDir: string }): EditRep
   for (const name of ["opencode.json", "opencode.jsonc"]) {
     const path = join(configDir, name);
     if (!existsSync(path)) continue;
+    // The user's own file: a link may lead into the home directory, no further.
+    assertWithin(path, [homedir(), dirname(configDir)]);
     const text = withoutNpmPin(path);
     if (text !== undefined) edits.push({ path, text });
   }
@@ -95,7 +97,7 @@ export function uninstallOpencode({ configDir }: { configDir: string }): EditRep
   if (removeStalePlugin(configDir)) changed = true;
   for (const { path, text } of edits) {
     copyFileSync(path, `${path}.secretgate-backup-${new Date().toISOString().replaceAll(/[:.]/g, "-")}`);
-    writeFileAtomic(path, text, 0o644);
+    rewriteFileAtomic(path, text);
     changed = true;
   }
   return { path: target, changed };

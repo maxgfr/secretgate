@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { writeFileAtomic } from "../fs-atomic.js";
+import { dirname, join, resolve } from "node:path";
+import { rewriteFileAtomic } from "../fs-atomic.js";
 import { isSecretgateHook } from "./hook-marker.js";
-import { canonicalize, type EditReport, editJsonFile } from "./json-merge.js";
+import { assertWithin, canonicalize, type EditReport, editJsonFile } from "./json-merge.js";
 import {
   disableHooksFeature,
   enableHooksFeature,
@@ -105,12 +105,22 @@ export function codexWiringStatus(codexDir: string): { trusted: number; expected
   }
 }
 
+// Codex's files are the user's own, never a project's: a link may lead
+// anywhere in the user's home (a dotfiles checkout), or stay next to the
+// Codex directory when that one lives elsewhere (CODEX_HOME).
+function codexTree(codexDir: string): string[] {
+  const within = [homedir(), dirname(resolve(codexDir))];
+  assertWithin(join(codexDir, "hooks.json"), within);
+  assertWithin(join(codexDir, "config.toml"), within);
+  return within;
+}
+
 function writeTextWithBackup(path: string, content: string): void {
   if (existsSync(path)) {
     const stamp = new Date().toISOString().replaceAll(/[:.]/g, "-");
     copyFileSync(path, `${path}.secretgate-backup-${stamp}`);
   }
-  writeFileAtomic(path, content, 0o644);
+  rewriteFileAtomic(path, content);
 }
 
 // Our trust entries for hooksPath at keys we no longer occupy (see staleHookTrustKeys).
@@ -127,18 +137,23 @@ export interface CodexInstallReport {
 
 export function installCodex({ codexDir, command }: { codexDir: string; command: string }): CodexInstallReport {
   mkdirSync(codexDir, { recursive: true });
+  const within = codexTree(codexDir);
   const hooksPath = join(realpathSync(codexDir), "hooks.json");
-  const hooksReport = editJsonFile(hooksPath, (root) => {
-    root.hooks ??= {};
-    for (const { event, arg, matcher } of EVENTS) {
-      const kept = withoutOurGroups(root.hooks[event]);
-      const group: HookGroup = {
-        hooks: [{ type: "command", command: `${command} hook codex ${arg}`, timeout: 30, statusMessage: "secretgate" }],
-      };
-      if (matcher) group.matcher = matcher;
-      root.hooks[event] = [...kept, group];
-    }
-  });
+  const hooksReport = editJsonFile(
+    hooksPath,
+    (root) => {
+      root.hooks ??= {};
+      for (const { event, arg, matcher } of EVENTS) {
+        const kept = withoutOurGroups(root.hooks[event]);
+        const group: HookGroup = {
+          hooks: [{ type: "command", command: `${command} hook codex ${arg}`, timeout: 30, statusMessage: "secretgate" }],
+        };
+        if (matcher) group.matcher = matcher;
+        root.hooks[event] = [...kept, group];
+      }
+    },
+    { within },
+  );
 
   const configPath = join(codexDir, "config.toml");
   const current = existsSync(configPath) ? readFileSync(configPath, "utf8") : "";
@@ -168,21 +183,26 @@ export function installCodex({ codexDir, command }: { codexDir: string; command:
 }
 
 export function uninstallCodex({ codexDir }: { codexDir: string }): { hooks: EditReport; configChanged: boolean } {
+  const within = codexTree(codexDir);
   const hooksPath = existsSync(codexDir) ? join(realpathSync(codexDir), "hooks.json") : resolve(codexDir, "hooks.json");
   const ours = existsSync(hooksPath) ? ourHookTrustEntries(hooksPath) : [];
   const trustKeys = ours.map((entry) => entry.key);
   let hooksReport: EditReport = { path: hooksPath, changed: false };
   if (existsSync(hooksPath)) {
-    hooksReport = editJsonFile(hooksPath, (root) => {
-      if (root.hooks && typeof root.hooks === "object") {
-        for (const { event } of EVENTS) {
-          const kept = withoutOurGroups(root.hooks[event]);
-          if (kept.length > 0) root.hooks[event] = kept;
-          else delete root.hooks[event];
+    hooksReport = editJsonFile(
+      hooksPath,
+      (root) => {
+        if (root.hooks && typeof root.hooks === "object") {
+          for (const { event } of EVENTS) {
+            const kept = withoutOurGroups(root.hooks[event]);
+            if (kept.length > 0) root.hooks[event] = kept;
+            else delete root.hooks[event];
+          }
+          if (Object.keys(root.hooks).length === 0) delete root.hooks;
         }
-        if (Object.keys(root.hooks).length === 0) delete root.hooks;
-      }
-    });
+      },
+      { within },
+    );
   }
   const configPath = join(codexDir, "config.toml");
   let configChanged = false;

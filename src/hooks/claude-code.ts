@@ -7,7 +7,7 @@ import { sensitivePathMatch } from "../paths.js";
 import { filterSearchOutput, promptMentions, promptScopeViolation } from "../scope.js";
 import { Vault } from "../vault/vault.js";
 import { preToolPolicy } from "./policy.js";
-import { eventRedactor, isBinaryField, SCAN_CAP } from "./scan-budget.js";
+import { eventRedactor, isAttachmentPayload, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS } from "./scan-budget.js";
 import { isStoppedSession, stopSession } from "./stopped-session.js";
 import { extractToolCall } from "./tool-call.js";
 import { mapStrings } from "./walk.js";
@@ -25,10 +25,6 @@ const PASS: HookResult = { stdout: "", exit: 0 };
 // decision) is the abstain that works everywhere; the documented "defer" decision
 // value is rejected by Claude Code <= 2.1.212.
 export const DEFER: HookResult = { stdout: "{}", exit: 0 };
-// Wall-clock budget per hook scan. Well under a typical agent hook timeout so a
-// crafted payload can't stall the hook into a fail-open timeout; on exceed the
-// scan throws and we fail closed.
-const SCAN_DEADLINE_MS = 5000;
 
 // Handle scan failures using each host's contract: block prompts, deny calls,
 // replace supported output envelopes, or stop when no safe rewrite is known.
@@ -47,21 +43,7 @@ function withholdOutput(reason: string, input?: Record<string, any>, blockFallba
   if (replacement === undefined && blockFallback) replacement = notice;
   // Unknown/malformed envelopes cannot safely be replaced with a string:
   // Claude silently ignores schema-invalid replacements. Stop this turn.
-  if (replacement === undefined) {
-    try {
-      stopSession(input?.session_id);
-    } catch {
-      // Unwritable state dir: still stop THIS turn. Throwing here would crash
-      // the hook with empty stdout, which the host treats as a pass.
-    }
-    return {
-      stdout: JSON.stringify({
-        continue: false,
-        stopReason: `secretgate: ${reason}. Processing stopped; start a fresh session before retrying with smaller output.`,
-      }),
-      exit: 0,
-    };
-  }
+  if (replacement === undefined) return stopTurn(reason, input?.session_id, "start a fresh session before retrying with smaller output");
   return {
     stdout: JSON.stringify({
       systemMessage: `secretgate: ${reason} — tool output withheld`,
@@ -69,6 +51,19 @@ function withholdOutput(reason: string, input?: Record<string, any>, blockFallba
     }),
     exit: 0,
   };
+}
+
+// Stop the turn before the next model request, and close the session: what
+// could not be withheld stays in its transcript, and a later prompt would send
+// it along.
+function stopTurn(reason: string, session: unknown, advice: string): HookResult {
+  try {
+    stopSession(session);
+  } catch {
+    // Unwritable state dir: still stop THIS turn. Throwing here would crash
+    // the hook with empty stdout, which the host treats as a pass.
+  }
+  return { stdout: JSON.stringify({ continue: false, stopReason: `secretgate: ${reason}. Processing stopped; ${advice}.` }), exit: 0 };
 }
 
 // Best-effort parse used to resolve the disable state before the guarded block.
@@ -88,6 +83,8 @@ export function failClosed(event: string, input?: Record<string, any>, blockFall
   const reason = "secretgate could not scan this safely (invalid input, scan budget or local storage error)";
   if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
   if (event === "pre-tool-use") return deny(reason);
+  // A batch carries several results and no envelope to replace: stop the turn.
+  if (event === "post-tool-batch") return withholdOutput(reason, { session_id: input?.session_id });
   return withholdOutput(reason, input, blockFallback);
 }
 
@@ -133,6 +130,7 @@ function disabledResult(event: string, input: Record<string, any> | undefined, s
     const filtered = scopeFilter(input, cfg);
     return filtered.changed ? updatedOutput(filtered.value) : PASS;
   }
+  if (event === "post-tool-batch") return PASS;
   return { stdout: "", exit: 2 };
 }
 
@@ -176,7 +174,10 @@ function handleEnabled(event: string, rawStdin: string, parsed: Record<string, a
   // Re-parse only on the failure path; the catch never exposes parser text.
   const input = parsed ?? (JSON.parse(rawStdin) as Record<string, any>);
   if (input === null || typeof input !== "object") throw new Error("event is not an object");
-  if ((event !== "post-tool-use" && rawStdin.length > SCAN_CAP) || input.__secretgate_unscannable) throw new Error("input exceeds scan budget");
+  // Tool results have their own budget (one per result): only prompts and tool
+  // input are bounded by the size of the event itself.
+  const carriesResults = event === "post-tool-use" || event === "post-tool-batch";
+  if ((!carriesResults && rawStdin.length > SCAN_CAP) || input.__secretgate_unscannable) throw new Error("input exceeds scan budget");
   // One config read per event (it walks up to the project root).
   const cfg = loadConfig(str(input.cwd));
   switch (event) {
@@ -186,6 +187,8 @@ function handleEnabled(event: string, rawStdin: string, parsed: Record<string, a
       return preToolUse(input, cfg);
     case "post-tool-use":
       return postToolUse(input, cfg);
+    case "post-tool-batch":
+      return postToolBatch(input, cfg);
     default:
       return { stdout: "", exit: 2 };
   }
@@ -321,7 +324,60 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookRes
   const toolName = String(input.tool_name ?? "");
   const filtered = scopeFilter(input, cfg);
   const vault = new Vault();
-  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), isBinaryField);
+  // Read hands an image or a PDF over as `{type, file: {base64}}`: an
+  // attachment for the model, not text. Scanned as text, the base64 of a
+  // 1.5 MB PDF ran past the budget, and reading it stopped the session.
+  // Only that envelope, only for Read, and only a payload that is one.
+  const response = input.tool_response;
+  const attachment = toolName === "Read" && (response?.type === "image" || response?.type === "pdf") ? response.file : undefined;
+  const mediaType = response?.type === "pdf" ? "application/pdf" : attachment?.type;
+  const skip = (key: string, v: unknown, parent: object): boolean =>
+    isBinaryField(key, v, parent) || (attachment !== undefined && parent === attachment && key === "base64" && isAttachmentPayload(v, mediaType));
+  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), skip);
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
+}
+
+// The last gate before the next model request. PostToolBatch receives every
+// result of the batch as the model will read it: what PostToolUse redacted
+// arrives here redacted, and scanned by the same engine it holds no finding
+// (redactText returns a fixed point). A secret found here is one no hook
+// replaced: PostToolUse fires only for a call that succeeded, so the output of
+// a failed one (a shell command exiting non-zero, an MCP error result) reaches
+// the model as the tool printed it — or the host did not apply a replacement.
+// It cannot be replaced here either; the turn can be stopped, and that is
+// what happens.
+function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
+  const calls: unknown[] = Array.isArray(input.tool_calls) ? input.tool_calls : [];
+  const deadline = performance.now() + SCAN_DEADLINE_MS;
+  const tools = new Set<string>();
+  const rules = new Set<string>();
+  for (const call of calls) {
+    if (call === null || typeof call !== "object" || !("tool_response" in call)) continue;
+    const findings = resultScanner(cfg.allowlist, deadline);
+    // An image or a PDF arrives as a content block of the result, `{type:
+    // "image" | "document", source: {type: "base64", media_type, data}}`.
+    // Only such a block, at the top of the result, holds an attachment.
+    const blocks: unknown[] = Array.isArray(call.tool_response) ? call.tool_response : [];
+    const sources = new Set<unknown>();
+    for (const b of blocks as Array<{ type?: unknown; source?: { type?: unknown } } | null>)
+      if ((b?.type === "image" || b?.type === "document") && b.source?.type === "base64") sources.add(b.source);
+    mapStrings(
+      call.tool_response,
+      (s) => {
+        for (const f of findings(s)) {
+          rules.add(f.ruleId);
+          tools.add(String((call as { tool_name?: unknown }).tool_name ?? "a tool"));
+        }
+        return s;
+      },
+      (key, v, parent) => isBinaryField(key, v, parent) || (key === "data" && sources.has(parent) && isAttachmentPayload(v, parent.media_type)),
+    );
+  }
+  if (rules.size === 0) return PASS;
+  return stopTurn(
+    `the result of ${[...tools].join(", ")} still holds a secret (${[...rules].join(", ")}) on its way to the model. A hook can rewrite the output of a successful call only: this is the output of a call that failed (a command that exits non-zero, a tool error), or one whose redacted output Claude Code did not apply`,
+    input.session_id,
+    "that result stays in this session's transcript, so start a fresh session (if the value is not a secret, `secretgate allow` it first)",
+  );
 }

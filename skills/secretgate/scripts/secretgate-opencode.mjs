@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 
 // src/config.ts
 import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync as statSync3 } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync as statSync4 } from "fs";
 import { homedir as homedir4 } from "os";
 import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 
@@ -907,7 +907,7 @@ function printParseErrorCode(code) {
 
 // src/fs-atomic.ts
 import { randomBytes } from "crypto";
-import { closeSync, openSync, renameSync, rmSync, writeSync } from "fs";
+import { closeSync, openSync, realpathSync, renameSync, rmSync, statSync, writeSync } from "fs";
 function writeFileAtomic(path, content, mode = 420) {
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", mode);
@@ -925,7 +925,7 @@ function writeFileAtomic(path, content, mode = 420) {
 }
 
 // src/paths.ts
-import { lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync2, realpathSync, statSync as statSync2 } from "fs";
+import { lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
 import { homedir as homedir3 } from "os";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
 
@@ -1076,6 +1076,12 @@ import { readdirSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, resolve } from "path";
 var DYN = "\0";
+function aliasOf(spec, file) {
+  const dest = spec.dest.replaceAll("{}", spec.perFileDir ? `./${basename(file)}` : file);
+  const abs = spec.perFileDir ? resolve(dirname(file), dest) : dest;
+  if (spec.dest.includes("{}")) return abs;
+  return spec.dest.endsWith("/") || isDirectory(abs) ? join(abs, basename(file)) : abs;
+}
 var SEP_CHARS = /* @__PURE__ */ new Set([";", "&", "|", "(", ")", "\n"]);
 function matchParen(s, start) {
   let depth = 1;
@@ -1735,6 +1741,7 @@ var COMMAND_SPECS = {
   },
   find: {}
 };
+for (const cmd of ["cp", "mv", "ln", "install"]) COMMAND_SPECS[cmd] = { valued: ["-t", "--target-directory"] };
 COMMAND_SPECS.egrep = COMMAND_SPECS.grep;
 COMMAND_SPECS.fgrep = COMMAND_SPECS.grep;
 COMMAND_SPECS.gawk = COMMAND_SPECS.awk;
@@ -2090,7 +2097,7 @@ function analyzeCommand(sc, cwds, ctx, depth) {
     return void 0;
   }
   if (cmd === "cp" || cmd === "mv" || cmd === "ln" || cmd === "install") {
-    analyzeAlias(cmd, targets, flags, cwds, ctx, push);
+    analyzeAlias(cmd, targets, flags, cwds, ctx, push, optionValues(parsed, "-t", "--target-directory")[0]);
     return void 0;
   }
   if (cmd === "sed") {
@@ -2163,6 +2170,7 @@ function analyzeFind(words, k, cwds, ctx, depth, push) {
   const names = [];
   let complex = false;
   let readsContent = false;
+  const moves = [];
   for (; j < words.length; j++) {
     const t = words[j].text;
     if (t === "-name" || t === "-iname") names.push(words[++j]?.text ?? "");
@@ -2175,12 +2183,29 @@ function analyzeFind(words, k, cwds, ctx, depth, push) {
       j++;
       if (argv.length === 0) continue;
       const exec = basename(argv[0].text);
-      if (/^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq)$/.test(exec))
+      if (/^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq|ditto|install|rsync|scp|dd)$/.test(
+        exec
+      ))
         readsContent = true;
+      else if (exec === "mv" || exec === "ln") {
+        const all = words.slice(start, j);
+        const parsed = parseArgs(all, 1, COMMAND_SPECS[exec]);
+        const dest = optionValues(parsed, "-t", "--target-directory")[0] ?? parsed.pos[parsed.pos.length - 1];
+        const into = optionValues(parsed, "-t", "--target-directory").length > 0;
+        if (dest !== void 0 && dest.text !== "{}") {
+          const perFileDir = t === "-execdir" || t === "-okdir";
+          const text = into && !dest.text.endsWith("/") ? `${dest.text}/` : dest.text;
+          const base = cwds.find((c) => c !== void 0);
+          if (perFileDir || text.startsWith("{}")) moves.push({ dest: text, perFileDir });
+          else if (base !== void 0) moves.push({ dest: resolve(base, expandHome(text)) + (text.endsWith("/") ? "/" : ""), perFileDir });
+          else readsContent = true;
+        }
+      }
       analyzeCommand({ words: argv, redirects: [], stdinLiteral: false }, cwds, ctx, depth + 1);
     }
   }
-  const walk = readsContent ? { hidden: true, ignore: false, include: complex ? [] : names, exclude: [], excludeDir: [] } : void 0;
+  const aliasTo = !readsContent && moves.length === 1 ? moves[0] : void 0;
+  const walk = readsContent || moves.length > 0 ? { hidden: true, ignore: false, include: complex ? [] : names, exclude: [], excludeDir: [], ...aliasTo ? { aliasTo } : {} } : void 0;
   if (roots.length === 0) {
     for (const cwd of cwds) {
       if (cwd !== void 0) out.refs.push({ path: cwd, kind: "search", raw: ".", command: "find", explicit: true, ...walk ? { walk } : {} });
@@ -2189,17 +2214,17 @@ function analyzeFind(words, k, cwds, ctx, depth, push) {
   }
   for (const w of roots) push(w, "search", { force: true, walk });
 }
-function analyzeAlias(cmd, targets, flags, cwds, ctx, push) {
-  if (targets.length < 2) {
+function analyzeAlias(cmd, targets, flags, cwds, ctx, push, into) {
+  if (into === void 0 && targets.length < 2) {
     for (const w of targets) push(w, "read");
     return;
   }
-  const destWord = targets[targets.length - 1];
-  const sources = targets.slice(0, -1);
+  const destWord = into ?? targets[targets.length - 1];
+  const sources = into ? targets : targets.slice(0, -1);
   const symbolic = cmd === "ln" && hasFlag(flags, ["s"], ["--symbolic"]);
   for (const cwd of cwds) {
     const dest = resolveWord(destWord, cwd, ctx.out).find((r) => r.type === "path")?.path;
-    const intoDir = dest !== void 0 && (sources.length > 1 || isDirectory(dest));
+    const intoDir = dest !== void 0 && (into !== void 0 || sources.length > 1 || destWord.text.endsWith("/") || isDirectory(dest));
     for (const w of sources) {
       const base = symbolic && dest !== void 0 && !isAbsolute(expandHome(w.text)) ? intoDir ? dest : dirname(dest) : cwd;
       for (const r of resolveWord(w, base, ctx.out)) {
@@ -2345,6 +2370,10 @@ function analyzeGit(words, k, cwds, ctx) {
     const relToCwd = /^\.\.?\//.test(m[1]);
     push({ ...w, text: m[1] }, "read", relToCwd ? here : roots, true);
   }
+  if (sub === "mv") {
+    analyzeAlias("mv", pos, flags, here, ctx, (w, kind) => push(w, kind, here));
+    return;
+  }
   if (!GIT_CONTENT.has(sub)) {
     for (const w of pos) push(w, "list", here);
     return;
@@ -2440,7 +2469,7 @@ function secretgateInvocation(argv) {
 
 // src/vault/vault.ts
 import { randomBytes as randomBytes2 } from "crypto";
-import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync, unlinkSync } from "fs";
+import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync as statSync2, unlinkSync } from "fs";
 import { homedir as homedir2 } from "os";
 import { join as join2 } from "path";
 
@@ -2470,7 +2499,7 @@ function withLock(lockPath, fn) {
     } catch (err) {
       if (err.code !== "EEXIST") throw err;
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
+        if (Date.now() - statSync2(lockPath).mtimeMs > LOCK_STALE_MS) unlinkSync(lockPath);
       } catch {
       }
       if (Date.now() > deadline) throw new Error("vault is locked by another secretgate process");
@@ -2614,7 +2643,7 @@ function exists(p) {
 }
 function isDirectory(p) {
   try {
-    return statSync2(p).isDirectory();
+    return statSync3(p).isDirectory();
   } catch {
     return false;
   }
@@ -2676,7 +2705,7 @@ function canonical(p) {
   let out;
   for (; ; ) {
     try {
-      out = join3(realpathSync(head), ...[...tail].reverse());
+      out = join3(realpathSync2(head), ...[...tail].reverse());
       break;
     } catch {
       const parent = dirname2(head);
@@ -2709,7 +2738,7 @@ function covers(dir, p) {
   const b = fold(canonical(p));
   return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
 }
-function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
+function sensitivePathMatch(path, allowlist, cwd = process.cwd(), opts = {}) {
   const normalized = expandHome(path.replaceAll("\\", "/"));
   const absolute2 = resolve2(cwd, normalized).replaceAll("\\", "/");
   const real = canonical(absolute2).replaceAll("\\", "/");
@@ -2719,7 +2748,7 @@ function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
   const vaultHome = defaultVaultHome();
   if (covers(join3(vaultHome, "vault.json"), real) || covers(join3(vaultHome, "salt"), real)) return "secretgate vault";
   const inside = relative(canonical(cwd), real).replaceAll("\\", "/");
-  if (exists(real) && !inside.startsWith("../") && inside !== ".." && !isAbsolute2(inside) && inside.split("/").slice(0, -1).some((seg) => FIXTURE_DIRS.has(seg.toLowerCase())))
+  if ((opts.asIfPresent || exists(real)) && !inside.startsWith("../") && inside !== ".." && !isAbsolute2(inside) && inside.split("/").slice(0, -1).some((seg) => FIXTURE_DIRS.has(seg.toLowerCase())))
     return void 0;
   for (const p of spellings) {
     if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(p, g, true))) continue;
@@ -2775,6 +2804,7 @@ var CONTENT_COMMANDS = /* @__PURE__ */ new Set([
   "split",
   "look",
   "cp",
+  "ditto",
   "install",
   "dd",
   "rsync",
@@ -2818,14 +2848,17 @@ var ALIASING = /* @__PURE__ */ new Set(["ln", "mv"]);
 function isContentCommand(command) {
   return CONTENT_COMMANDS.has(command) || PYTHON.test(command) || isGitContentCommand(command);
 }
+var staysSensitive = (name, allowlist, cwd) => sensitivePathMatch(name, allowlist, cwd, { asIfPresent: true }) !== void 0;
 function sensitiveShellRead(analysis, allowlist, cwd) {
   for (const ref of analysis.refs) {
     if (ref.kind === "write" || ref.kind === "list" || ref.kind === "exec") continue;
     if (ref.fromOption && INTERPRETER_CONTENT.test(ref.command)) continue;
     if (ALIASING.has(ref.command)) {
-      if (ref.aliasTo !== void 0 && sensitivePathMatch(ref.aliasTo, allowlist, cwd)) continue;
+      if (ref.aliasTo !== void 0 && sensitivePathMatch(ref.aliasTo, allowlist, cwd, { asIfPresent: true })) continue;
     } else if (!ref.redirect && !ref.walk && !isContentCommand(ref.command)) continue;
-    if (sensitivePathMatch(ref.path, allowlist, cwd)) return { raw: ref.raw };
+    const moved = ref.walk?.aliasTo;
+    if (sensitivePathMatch(ref.path, allowlist, cwd) && !(moved && !isDirectory(ref.path) && staysSensitive(aliasOf(moved, ref.path), allowlist, cwd)))
+      return { raw: ref.raw };
     if (ref.walk && isDirectory(ref.path)) {
       const below = sensitiveFileBelow(ref.path, ref.walk, allowlist, cwd);
       if (below === "overflow") return { raw: ref.raw, tooMany: true };
@@ -2919,11 +2952,13 @@ function sensitiveFileBelow(dir, spec, allowlist, cwd) {
     if (spec.exclude.some((g) => pathMatchesGlob(e.name, g))) return void 0;
     if (!e.isSymbolicLink() && !SENSITIVE_GLOBS.some((g) => pathMatchesGlob(abs, g, true))) return void 0;
     if (sensitivePathMatch(abs, allowlist, cwd)) {
+      if (spec.aliasTo && staysSensitive(aliasOf(spec.aliasTo, abs), allowlist, cwd)) return void 0;
       hit = abs;
       return "stop";
     }
     return void 0;
   });
+  if (result === "overflow" && spec.aliasTo && staysSensitive(aliasOf(spec.aliasTo, join3(canonical(dir), ".env")), allowlist, cwd)) return void 0;
   return result === "overflow" ? "overflow" : hit;
 }
 
@@ -2949,7 +2984,7 @@ var sha256Bytes = (bytes) => createHash2("sha256").update(bytes).digest("hex");
 function ownedByCurrentUser(file) {
   if (typeof process.getuid !== "function") return true;
   try {
-    return statSync3(file).uid === process.getuid();
+    return statSync4(file).uid === process.getuid();
   } catch {
     return false;
   }
@@ -8024,7 +8059,15 @@ var ScanBudgetError = class extends Error {
     this.name = "ScanBudgetError";
   }
 };
-var PLACEHOLDER_ONLY = /^SECRETGATE_[0-9a-f]{12,16}$/;
+var PLACEHOLDER = /SECRETGATE_[0-9a-f]{12}(?![0-9a-f])/g;
+var SEPARATORS_ONLY = /^[\s"'`.,;:=_\-()[\]{}<>|/\\]{0,3}$/;
+var hasMaterial = (text) => !SEPARATORS_ONLY.test(text);
+var blanked = (text) => text.includes("SECRETGATE_") ? text.replace(PLACEHOLDER, (p) => "_".repeat(p.length)) : text;
+function alreadyRedacted(secret) {
+  if (!secret.includes("SECRETGATE_")) return false;
+  const rest = secret.replace(PLACEHOLDER, "");
+  return rest.length < secret.length && !hasMaterial(rest);
+}
 function compileAllowlist(a) {
   return {
     condition: a.condition === "AND" ? "AND" : "OR",
@@ -8095,6 +8138,45 @@ function looksLikeFilesystemPath(raw) {
   if (separators < 2) return false;
   return /^[A-Za-z0-9._\-\\/: ]+$/.test(v);
 }
+var NAME_TRUSTING_RULES = /* @__PURE__ */ new Set(["generic-api-key", "password-assignment"]);
+function assignedName(text, lineStart, valueStart) {
+  const before = text.slice(Math.max(lineStart, valueStart - 160), valueStart);
+  const head = before.replace(/[\s"'`=:>,|?]+$/, "");
+  const phrase = /[\w.\- \t]*$/.exec(head)[0];
+  return phrase.split(/[ \t]+/).filter((w) => w !== "");
+}
+var alnum = (v) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+var nameKeywords;
+function nameTrustingKeywords() {
+  nameKeywords ??= [...new Set(COMPILED.filter((r) => NAME_TRUSTING_RULES.has(r.id)).flatMap((r) => r.keywords))];
+  return nameKeywords;
+}
+var namesACredential = (text) => {
+  const low = text.toLowerCase();
+  return nameTrustingKeywords().some((k) => low.includes(k));
+};
+var PUBLIC_NAME = /pub(?:lic)?[ _.-]?key(s?)(?![a-z])/i;
+function namedPublic(name) {
+  const label = name.slice(-3).join(" ");
+  const m = PUBLIC_NAME.exec(label);
+  return m !== null && !namesACredential(`${label.slice(0, m.index)} ${label.slice(m.index + m[0].length)}`);
+}
+function publishableByName(value, name) {
+  if (!/^pk_(?:test|live)_[A-Za-z0-9]+$/.test(value)) return false;
+  const label = name.slice(-3).join(" ");
+  const says = /publi(?:c|shable)/i.exec(label);
+  if (says === null) return false;
+  const rest = `${label.slice(0, says.index)} ${label.slice(says.index + says[0].length)}`.replace(/key/i, "");
+  return !namesACredential(rest);
+}
+function notASecretInContext(secret, name) {
+  const value = unquote(secret);
+  const last = name[name.length - 1];
+  if (last !== void 0 && alnum(last).length >= 6 && alnum(last) === alnum(value)) return true;
+  return publishableByName(value, name) || namedPublic(name);
+}
+var GITHUB_TOKEN_RULES = /* @__PURE__ */ new Set(["github-pat", "github-fine-grained-pat", "github-oauth", "github-app-token", "github-refresh-token"]);
+var EIGHT_IN_A_ROW = /(.)\1{7}/;
 var BUILTIN_RULES = [
   {
     id: "credit-card-number",
@@ -8160,7 +8242,7 @@ var BUILTIN_RULES = [
     // (`"password": "Client Secret"` in Airflow's connection-form metadata).
     // The cost is a spaced passphrase, which this rule now leaves to a real
     // password manager — the same trade-off the README already states.
-    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !PLACEHOLDER_ONLY.test(secret)
+    post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder(secret) && !looksLikeFilesystemPath(secret) && !alreadyRedacted(secret)
   },
   // Credentials a coding agent's .env commonly holds and gitleaks ships no rule
   // for (fed one by one to both engines, gitleaks 8.30 missed all four). The
@@ -8271,7 +8353,8 @@ function scan(text, cfg = {}) {
     if (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath))) return [];
     if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
   }
-  const lower = text.toLowerCase();
+  const subject = blanked(text);
+  const lower = subject.toLowerCase();
   const starts = lineStarts(text);
   const pragmaLines = cfg.pragmas === false ? /* @__PURE__ */ new Set() : pragmaAllowedLines(text);
   const findings = [];
@@ -8282,22 +8365,26 @@ function scan(text, cfg = {}) {
     if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
     if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
     rule.re.lastIndex = 0;
-    for (const match of text.matchAll(rule.re)) {
-      const { secret, start, end } = pickSecret(match, rule.secretGroup);
+    for (const match of subject.matchAll(rule.re)) {
+      const { start, end } = pickSecret(match, rule.secretGroup);
+      const secret = text.slice(start, end);
+      const fullMatch = text.slice(match.index, match.index + match[0].length);
+      const matchContext = subject === text ? fullMatch : subject.slice(match.index, start) + secret + subject.slice(end, match.index + match[0].length);
       if (secret.length === 0) continue;
-      if (PLACEHOLDER_ONLY.test(secret)) continue;
+      if (alreadyRedacted(secret)) continue;
       if (rule.post && !rule.post(secret)) continue;
-      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
+      if (rule.postMatch && !rule.postMatch(secret, matchContext)) continue;
       if (isRuleSourceText(secret)) continue;
       if (looksLikePlaceholder(secret)) continue;
+      if (GITHUB_TOKEN_RULES.has(rule.id) && EIGHT_IN_A_ROW.test(secret)) continue;
       const entropy = shannonEntropy(secret);
       if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
       const line = lineAt(starts, start);
       if (pragmaLines.has(line)) continue;
-      const fullMatch = match[0];
+      if (NAME_TRUSTING_RULES.has(rule.id) && notASecretInContext(secret, assignedName(subject, starts[line], start))) continue;
       let allowed = false;
       for (const a of rule.allowlists) {
-        const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText(text, starts, line) : secret;
+        const target = a.regexTarget === "match" ? matchContext : a.regexTarget === "line" ? lineText(subject, starts, line) : secret;
         if (allowlistMatches(a, secret, target, cfg.sourcePath)) {
           allowed = true;
           break;
@@ -8310,10 +8397,36 @@ function scan(text, cfg = {}) {
       findings.push({ ruleId: rule.id, match: fullMatch, secret, start, end, entropy, line });
     }
   }
-  return dedupe(findings);
+  const kept = dedupe(findings, text);
+  if (isDisabledRule(AWS_SECRET_RULE, cfg.allowlist)) return kept;
+  return withAwsSecretKeys(kept, text, starts, pragmaLines, cfg);
+}
+var AWS_SECRET_RULE = "aws-secret-access-key";
+var AWS_KEY_ID_RULE = "aws-access-token";
+var AWS_SECRET_AFTER_ID = /["'`]?[ \t]{0,3}[:,][ \t]{0,3}["'`]?([A-Za-z0-9/+]{40})(?![A-Za-z0-9/+=])/y;
+var AWS_SECRET_ENTROPY = 3.5;
+function withAwsSecretKeys(findings, text, starts, pragmaLines, cfg) {
+  const paired = [];
+  for (const id of findings) {
+    if (id.ruleId !== AWS_KEY_ID_RULE) continue;
+    AWS_SECRET_AFTER_ID.lastIndex = id.end;
+    const m = AWS_SECRET_AFTER_ID.exec(text);
+    if (!m) continue;
+    const secret = m[1];
+    const start = m.index + m[0].length - secret.length;
+    const end = start + secret.length;
+    if (findings.some((f) => f.start < end && start < f.end)) continue;
+    if (/^[0-9A-Fa-f]+$/.test(secret)) continue;
+    const entropy = shannonEntropy(secret);
+    if (entropy <= AWS_SECRET_ENTROPY) continue;
+    const line = lineAt(starts, start);
+    if (pragmaLines.has(line) || isAllowedValue(secret, cfg.allowlist)) continue;
+    paired.push({ ruleId: AWS_SECRET_RULE, match: text.slice(id.start, end), secret, start, end, entropy, line });
+  }
+  return paired.length === 0 ? findings : [...findings, ...paired].sort((a, b) => a.start - b.start);
 }
 var specificity = (ruleId) => ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2;
-function dedupe(findings) {
+function dedupe(findings, text) {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
   const kept = [];
   for (const f of sorted) {
@@ -8322,44 +8435,73 @@ function dedupe(findings) {
       kept.push(f);
       continue;
     }
-    const fRank = specificity(f.ruleId);
-    const oRank = specificity(other.ruleId);
-    const preferF = fRank > oRank || fRank === oRank && f.end - f.start > other.end - other.start;
-    if (preferF) kept[kept.length - 1] = f;
+    const preferF = specificity(f.ruleId) > specificity(other.ruleId);
+    if (f.end <= other.end) {
+      const around = text.slice(other.start, f.start) + text.slice(f.end, other.end);
+      if (preferF && !hasMaterial(around)) kept[kept.length - 1] = f;
+      continue;
+    }
+    const named = preferF ? f : other;
+    const secret = text.slice(other.start, f.end);
+    kept[kept.length - 1] = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
   }
   return kept;
 }
 
 // src/redact.ts
+var MAX_ROUNDS = 3;
+var RedactionUnsettledError = class extends Error {
+  constructor() {
+    super(`redaction did not settle in ${MAX_ROUNDS} rounds`);
+    this.name = "RedactionUnsettledError";
+  }
+};
 function redactText(text, vault, source, cfg = {}) {
-  const findings = scan(text, { ...cfg, pragmas: cfg.pragmas ?? false });
+  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : void 0;
+  const scanNow = (t) => scan(t, { ...cfg, pragmas: cfg.pragmas ?? false, ...deadline !== void 0 ? { deadlineMs: deadline - performance.now() } : {} });
+  const findings = scanNow(text);
   if (findings.length === 0) return { text, findings, replaced: [] };
-  const ordered = [...findings].sort((a, b) => a.start - b.start);
-  const placeholders = vault.recordSecrets(ordered.map((f) => ({ secret: f.secret, ruleId: f.ruleId, source })));
-  const pieces = [];
-  let at = 0;
-  ordered.forEach((f, i) => {
-    pieces.push(text.slice(at, f.start), placeholders[i]);
-    at = f.end;
-  });
-  pieces.push(text.slice(at));
-  return { text: pieces.join(""), findings, replaced: ordered.map((f, i) => ({ placeholder: placeholders[i], ruleId: f.ruleId })) };
+  const replaced = [];
+  let current = text;
+  let found = findings;
+  for (let round = 0; found.length > 0 && round < MAX_ROUNDS; round++) {
+    const ordered = [...found].sort((a, b) => a.start - b.start);
+    const placeholders = vault.recordSecrets(ordered.map((f) => ({ secret: f.secret, ruleId: f.ruleId, source })));
+    const pieces = [];
+    let at = 0;
+    ordered.forEach((f, i) => {
+      pieces.push(current.slice(at, f.start), placeholders[i]);
+      at = f.end;
+      replaced.push({ placeholder: placeholders[i], ruleId: f.ruleId });
+    });
+    pieces.push(current.slice(at));
+    current = pieces.join("");
+    found = scanNow(current);
+  }
+  if (found.length > 0) throw new RedactionUnsettledError();
+  return { text: current, findings, replaced };
 }
+var MAX_NESTING = 4;
 function restorePlaceholders(text, vault) {
   if (!text.includes(PLACEHOLDER_PREFIX)) return { text, restored: 0 };
   const lookup = vault.lookup();
   let restored = 0;
-  const out = text.replace(PLACEHOLDER_RE, (match) => {
-    const hex = match.slice(PLACEHOLDER_PREFIX.length);
-    for (const len of PLACEHOLDER_LENGTHS) {
-      if (hex.length < len) continue;
-      const secret = lookup(PLACEHOLDER_PREFIX + hex.slice(0, len));
-      if (secret === void 0) continue;
-      restored++;
-      return secret + hex.slice(len);
-    }
-    return match;
-  });
+  let out = text;
+  for (let depth = 0; depth < MAX_NESTING; depth++) {
+    const before = restored;
+    out = out.replace(PLACEHOLDER_RE, (match) => {
+      const hex = match.slice(PLACEHOLDER_PREFIX.length);
+      for (const len of PLACEHOLDER_LENGTHS) {
+        if (hex.length < len) continue;
+        const secret = lookup(PLACEHOLDER_PREFIX + hex.slice(0, len));
+        if (secret === void 0) continue;
+        restored++;
+        return secret + hex.slice(len);
+      }
+      return match;
+    });
+    if (restored === before || !out.includes(PLACEHOLDER_PREFIX)) break;
+  }
   return { text: out, restored };
 }
 
@@ -8367,8 +8509,70 @@ function restorePlaceholders(text, vault) {
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
 function isBinaryField(key, value, parent) {
-  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
-  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
+  const media = ["image", "audio"].includes(parent.type ?? "");
+  if ((key === "data" || key === "base64") && media) return isAttachmentPayload(value, parent.mimeType ?? parent.mime);
+  if ((key === "url" || key === "uri") && typeof value === "string") {
+    const m = /^data:((?:image|audio)\/[^;,]*)(?:;[^;,]*)*;base64,/.exec(value);
+    return m !== null && isAttachmentPayload(value.slice(m[0].length), m[1]);
+  }
+  if (key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime))
+    return isAttachmentPayload(value, parent.mime);
+  return false;
+}
+var ascii = (text) => [...text].map((c) => c.charCodeAt(0));
+var SIGNATURES = [
+  [[0, [137, ...ascii("PNG\r\n"), 26, 10]]],
+  [[0, [255, 216, 255]]],
+  // JPEG
+  [[0, ascii("GIF87a")]],
+  [[0, ascii("GIF89a")]],
+  [
+    [0, ascii("RIFF")],
+    [8, ascii("WEBP")]
+  ],
+  [
+    [0, ascii("RIFF")],
+    [8, ascii("WAVE")]
+  ],
+  [
+    [0, ascii("FORM")],
+    [8, ascii("AIF")]
+  ],
+  [[0, [73, 73, 42, 0]]],
+  // TIFF
+  [[0, [77, 77, 0, 42]]],
+  [[4, ascii("ftyp")]],
+  // HEIC, AVIF, MP4, M4A
+  [[0, [0, 0, 1, 0]]],
+  // ICO
+  [[0, ascii("8BPS")]],
+  [[0, ascii("OggS")]],
+  [[0, ascii("fLaC")]],
+  [[0, ascii("ID3")]],
+  [[0, ascii("MThd")]],
+  [[0, [26, 69, 223, 163]]]
+  // WebM, Matroska
+];
+var SIGNATURES_BY_TYPE = [
+  [/^image\/(?:x-)?(?:ms-)?bmp$/, ascii("BM")],
+  [/^image\/jxl$/, [255, 10]],
+  [/^audio\/(?:mpeg|mp3|aac|aacp)$/, [255, 224], 224]
+  // frame sync: 11 set bits
+];
+function hasSignature(head, declared) {
+  const at = (offset, bytes) => bytes.every((b, i2) => head[offset + i2] === b);
+  if (SIGNATURES.some((parts) => parts.every(([offset, bytes]) => at(offset, bytes)))) return true;
+  for (const [type, bytes, mask] of SIGNATURES_BY_TYPE) {
+    if (!type.test(declared)) continue;
+    if (mask === void 0 ? at(0, bytes) : head[0] === bytes[0] && ((head[1] ?? 0) & mask) === bytes[1]) return true;
+  }
+  let i = at(0, [239, 187, 191]) ? 3 : 0;
+  while (i < 1024 && [0, 9, 10, 12, 13, 32].includes(head[i] ?? -1)) i++;
+  return at(i, ascii("%PDF-"));
+}
+function isAttachmentPayload(value, declared) {
+  if (typeof value !== "string" || value.length < 8 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
+  return hasSignature(Buffer.from(value.slice(0, 1400), "base64"), typeof declared === "string" ? declared.toLowerCase() : "");
 }
 function eventRedactor(vault, source, allowlist) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
