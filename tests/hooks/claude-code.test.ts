@@ -198,6 +198,20 @@ describe("PostToolUse — output redaction", () => {
     expect(other.stdout).toContain("SECRETGATE_");
   });
 
+  // A Read event names its file, and the engine has path allowlists (upstream
+  // exempts all of node_modules, lockfiles, vendor trees; the user's own path
+  // globs). They are for `scan`. Output on its way to the model is scanned
+  // whatever path the call names: a path is the easiest thing to arrange.
+  it("redacts a read whatever its path: node_modules, a lockfile, a path the user allowed", async () => {
+    writeFileSync(join(home, "allowlist.json"), JSON.stringify({ paths: ["fixtures/**"] }));
+    for (const file_path of ["/proj/node_modules/pkg/config.js", "/proj/package-lock.json", "/proj/vendor/github.com/x/y.go", "/proj/fixtures/a.txt"]) {
+      const response = { type: "text", file: { filePath: file_path, content: `token = ${FAKE.githubPat}`, numLines: 1, startLine: 1, totalLines: 1 } };
+      const r = await handleClaudeCode("post-tool-use", postToolEvent("Read", { file_path }, response));
+      expect(r.stdout, file_path).toContain("SECRETGATE_");
+      expect(r.stdout, file_path).not.toContain(FAKE.githubPat);
+    }
+  });
+
   it("redacts secrets in tool_response strings via updatedToolOutput", async () => {
     const response = { type: "text", file: { filePath: "/proj/.env.ci", content: `GITHUB_TOKEN=${FAKE.githubPat}\nDEBUG=1\n` } };
     const r = await handleClaudeCode("post-tool-use", postToolEvent("Read", { file_path: "/proj/.env.ci" }, response));

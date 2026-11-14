@@ -26,6 +26,11 @@ export function isBinaryField(key: string, value: unknown, parent: { type?: stri
 }
 
 // One budget for the entire event, including nested MCP strings.
+// No source path is handed to the engine, although a Read names its file: a
+// path only ever switches scanning OFF (upstream exempts node_modules,
+// lockfiles and vendor trees whole; path-scoped rules stop running elsewhere),
+// and a path is what a repository or an agent arranges most easily. Those
+// allowlists are for `scan`, where the repository describes its own files.
 export function eventRedactor(vault: Vault, source: string, allowlist: UserAllowlist): (text: string) => string {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
   let remaining = SCAN_CAP;
