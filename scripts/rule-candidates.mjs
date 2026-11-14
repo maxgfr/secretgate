@@ -1,13 +1,104 @@
 #!/usr/bin/env node
-// Candidate export: one JSON line per rule finding, with what the scanner knows
-// at match time. Dev-only (not in the bundle): it builds the data a later
+// Candidate export: one JSON line per rule candidate, with what the scanner
+// knows at match time. Dev-only (not in the bundle): it builds the data a later
 // model needs to judge a rule candidate in its context and answer P(real
 // secret). The rule side is secretgate's own scanner, imported from the
 // TypeScript sources through Node's type stripping (Node >= 22.18).
 //
-//   node scripts/rule-candidates.mjs <dir|file>... [--out FILE] [--generic]
-//     [--context 160] [--all-text] [--max-bytes 2097152] [--raw]
+//   node scripts/rule-candidates.mjs <dir|file>... [--files-from LIST] [--base DIR]
+//     [--out FILE] [--candidates [--dropped FILE] [--max-line 1000]] [--generic]
+//     [--context 160] [--all-text] [--max-bytes 2097152] [--stats FILE] [--raw]
 //
+// Three modes: the engine's findings as they are (default), the same plus a
+// loose first take on high-recall candidates (--generic), and the candidate
+// generator `sg-cand-1` (--candidates). Nothing here touches the network.
+//
+// ---------------------------------------------------------------- --candidates
+// The generator `sg-cand-1`: the engine with the filters a verifier is meant
+// to replace turned off, plus one keyword rule. It runs the engine's own
+// matching loop (`traceMatches` in src/engine/scanner.ts), with the file's
+// path as source path.
+//
+//   Rules     every gitleaks-derived rule and every built-in rule, and
+//             `generic-keyword` (below).
+//   Stays on  the keyword prefilter; the global path allowlist (a file under
+//             it gives no candidate) and the path-scoped rules; the built-in
+//             rules' own gates (Luhn and IIN for card numbers, the URL
+//             username test, no whitespace and no file path in a quoted
+//             password); the engine's own material (its SECRETGATE_
+//             placeholders, the text of its rules); `dedupe`.
+//   Off       the entropy gates; `looksLikePlaceholder`, also where a
+//             built-in rule's gate calls it; the per-rule allowlists and
+//             stopwords; the global allowlist regexes and stopwords; the
+//             filters on what a value says of itself (a name that calls it
+//             public, a value that repeats its name, a publishable key, a
+//             GitHub token with one character eight times in a row); inline
+//             pragmas. Each is recorded in `filters` instead.
+//
+//   generic-keyword, case-insensitive, on one line:
+//     1. a name (letters, digits, `_`, `.`, `$`, `-`) that contains one of
+//        password, passwd, pwd, pass, secret, token, key, api, auth,
+//        credential, cred, nonce, salt;
+//     2. an optional quote (", ' or a backtick);
+//     3. a separator, with optional spaces and tabs around it:
+//        `:`, `=`, `:=`, `=>`, `==`, `!=`;
+//     4. an optional quote;
+//     5. a value of 4 to 256 characters: up to the same quote when one opened
+//        it, else up to the first whitespace, `;`, `,` or the end of the line.
+//   In `dedupe` it ranks below every other rule: where another rule's value
+//   overlaps its own, the other rule names the candidate (and the span is
+//   the engine's: the narrower value when at most 5 characters stand around
+//   it, else the wider one; one span over both when neither holds the other).
+//
+// Each line of the export is one candidate:
+//   generator  "sg-cand-1"
+//   file       the file's path as listed or walked (below --base when given)
+//   ext        its extension, lower-case, with the dot ("" when none)
+//   rule       rule id
+//   line       1-based line of the value's first character (lines end at "\n")
+//   start,end  columns of the value in its line: 0-based, end exclusive, in
+//              UTF-16 code units (JavaScript string indices)
+//   cpStart,cpEnd  the same columns in Unicode code points (Python indices)
+//   endLine    1-based line of the value's last character; `end` and `cpEnd`
+//              are columns of that line (it is `line` unless the value spans
+//              lines, as a private key does)
+//   offset     offset of the value in the file's text; length: its length
+//              (both in UTF-16 code units)
+//   value      the value
+//   name       the key or variable name: for generic-keyword the name it
+//              matched, else the word before the operator; null when none
+//   lineText   the value's first line, without its line ending. A line longer
+//              than --max-line is cut to a window around the value, and
+//              lineFrom is the column where the window starts (0 otherwise)
+//   prevLine   the line before `line`, nextLine the line after `endLine`,
+//              each cut to its first --max-line characters; null at the
+//              file's ends
+//   entropy    Shannon entropy of the REAL value, bits per character, as the
+//              engine computes it
+//   filters    which of the filters that are off the default engine would
+//              have dropped this match for:
+//                entropy      at or under its rule's entropy threshold
+//                placeholder  `looksLikePlaceholder`
+//                allowlist    a per-rule allowlist regex or path, or a global
+//                             allowlist regex
+//                stopword     a per-rule or a global stopword
+//                context      what the value says of itself (see "Off")
+//                pragma       an allow pragma on or above the line
+//              They are those of the match that names the candidate.
+//              generic-keyword has no threshold, allowlist or stopword of its
+//              own: only placeholder, the global lists, context and pragma
+//              can be set on it.
+//   reported   whether the default engine (`scan`, same text, same path)
+//              reports a finding that overlaps the value
+//   masked     whether value, lineText, prevLine and nextLine are masked
+//
+// --dropped FILE writes one line per match a kept gate dropped: file, rule,
+// gate, line, start, end, endLine, offset, length. Never the value.
+// --stats FILE writes the run's counts: files, lines, candidates by rule.
+// --files-from LIST reads the files to scan from LIST, one path per line;
+// --base DIR is where the paths (listed or given) are read from.
+//
+// ---------------------------------------------------------------- default and --generic
 // Each line:
 //   file      path as given on the command line, joined with the path below it
 //   mode      "rule" (a finding of the engine) or "generic" (see --generic)
@@ -25,25 +116,27 @@
 //             characters on each side, cut at the file's ends
 //   masked    whether the values in `context` are masked
 //
-// MASKED BY DEFAULT. Every character of every candidate value (the line's own
-// and any other that falls in its context window) is replaced by another one
-// of the same class: a lower-case letter by a lower-case letter, a digit by a
-// digit; punctuation stays. Length and shape survive, the value does not. The
-// mapping is keyed by a random key drawn for the run and never written, so the
-// same value masks the same way within one export and cannot be recomputed
-// afterwards. A candidate's value is masked at every place the walked files
-// repeat it (values of 8 characters and more across files, any length within
-// its own file), which takes a first pass over all of them. Values no rule and
-// no generic pattern proposes are NOT masked: an export is as clean as the
-// candidates are complete. --raw writes real values; it has to be asked for.
-//
 // --generic adds high-recall candidates the rules do not propose: any value
 // assigned to a name that sounds like a credential (password, secret, token,
 // key, auth…), whatever its entropy, quoting or stopwords, and the value of an
 // Authorization-style header. Scanned like tool output: no source path, no
-// pragmas. Nothing here touches the network; it writes --out (or stdout).
+// pragmas. It is NOT the rule of sg-cand-1.
+//
+// ---------------------------------------------------------------- masking
+// MASKED BY DEFAULT, in every mode. Every character of every candidate value
+// (the line's own and any other that falls in its context or its lines) is
+// replaced by another one of the same class: a lower-case letter by a
+// lower-case letter, a digit by a digit; punctuation stays. Length and shape
+// survive, the value does not. The mapping is keyed by a random key drawn for
+// the run and never written, so the same value masks the same way within one
+// export and cannot be recomputed afterwards. A candidate's value is masked at
+// every place the walked files repeat it (values of 8 characters and more
+// across files, of 4 and more within its own file), which takes a first pass
+// over all of them. Values no rule and no generic pattern proposes are NOT
+// masked: an export is as clean as the candidates are complete. --raw writes
+// real values; it has to be asked for, and its file is not to be committed.
 import { createHmac, randomBytes } from "node:crypto";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readdirSync, readFileSync, statSync, writeFileSync, writeSync } from "node:fs";
 import * as nodeModule from "node:module";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -250,6 +343,44 @@ function matchBehind(text, finding, pattern) {
 }
 
 /**
+ * `(from, to) => string`: the text between two offsets with every span of
+ * `spans` masked, and every `known` value besides. With `raw`, the text itself.
+ */
+function maskedView(text, spans, { raw, known, key }) {
+  if (raw) return (from, to) => text.slice(from, to);
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
+  return (from, to) => {
+    let out = "";
+    let at = from;
+    for (const s of sorted) {
+      if (s.end <= at || s.start >= to) continue;
+      const a = Math.max(s.start, at);
+      const b = Math.min(s.end, to);
+      // Mask the whole value, then keep the part inside the window: a value cut
+      // by the window's edge masks the same way as the full one elsewhere.
+      out += maskKnown(text.slice(at, a), known, key) + maskValue(text.slice(s.start, s.end), key).slice(a - s.start, b - s.start);
+      at = b;
+    }
+    return out + maskKnown(text.slice(at, to), known, key);
+  };
+}
+
+// Every other place `text` repeats one of the values of `spans` (4 characters
+// and more): a line that assigns a value often repeats it (an echo, a test's
+// expectation), and only one of those is a finding.
+function withRepeats(text, spans) {
+  const out = [...spans];
+  for (const value of new Set(spans.map((s) => text.slice(s.start, s.end)))) {
+    if (value.length < 4) continue;
+    for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + value.length)) {
+      const again = { start: at, end: at + value.length };
+      if (!out.some((s) => overlaps(s, again))) out.push(again);
+    }
+  }
+  return out;
+}
+
+/**
  * The candidates of one text. `engine` is `{scan, rulePatterns}` from
  * src/engine/scanner.ts. Options: `generic` (also emit generic candidates),
  * `context` (characters kept on each side), `raw` (no masking), `maskKey`,
@@ -264,34 +395,10 @@ export function candidatesOf(text, engine, opts = {}) {
   // Generic candidates are always computed: even when they are not emitted,
   // their values are masked wherever they fall inside a context window.
   const generic = genericCandidates(text).filter((g) => !findings.some((f) => overlaps(f, g)));
-  // A value is masked wherever it stands: a line that assigns it often repeats
-  // it (an echo, a test's expectation), and only one of those is a finding.
-  const spans = [...findings, ...generic].map((s) => ({ start: s.start, end: s.end }));
-  if (!opts.raw) {
-    for (const value of new Set(spans.map((s) => text.slice(s.start, s.end)))) {
-      if (value.length < 4) continue;
-      for (let at = text.indexOf(value); at !== -1; at = text.indexOf(value, at + value.length)) {
-        const again = { start: at, end: at + value.length };
-        if (!spans.some((s) => overlaps(s, again))) spans.push(again);
-      }
-    }
-  }
-  spans.sort((a, b) => a.start - b.start);
-  const show = (from, to) => {
-    if (opts.raw) return text.slice(from, to);
-    let out = "";
-    let at = from;
-    for (const s of spans) {
-      if (s.end <= at || s.start >= to) continue;
-      const a = Math.max(s.start, at);
-      const b = Math.min(s.end, to);
-      // Mask the whole value, then keep the part inside the window: a value cut
-      // by the window's edge masks the same way as the full one elsewhere.
-      out += maskKnown(text.slice(at, a), opts.known, key) + maskValue(text.slice(s.start, s.end), key).slice(a - s.start, b - s.start);
-      at = b;
-    }
-    return out + maskKnown(text.slice(at, to), opts.known, key);
-  };
+  // A value is masked wherever it stands, not only where it is a finding.
+  const found = [...findings, ...generic].map((s) => ({ start: s.start, end: s.end }));
+  const spans = opts.raw ? found : withRepeats(text, found);
+  const show = maskedView(text, spans, { raw: opts.raw, known: opts.known, key });
   const lineOf = (offset) => {
     let line = 1;
     for (let i = text.indexOf("\n"); i !== -1 && i < offset; i = text.indexOf("\n", i + 1)) line++;
@@ -326,6 +433,191 @@ export function candidatesOf(text, engine, opts = {}) {
   return out.sort((a, b) => a.start - b.start);
 }
 
+// ---------------------------------------------------------------- sg-cand-1 (--candidates)
+
+export const GENERATOR = "sg-cand-1";
+
+// The one rule the mode adds. A name is a run of letters, digits, `_`, `.`,
+// `$` and `-`; it only has to CONTAIN a keyword. Spaces and tabs may stand on
+// both sides of the separator, on the same line. A quoted value runs to the
+// same quote; a bare one cannot begin with a quote and runs to the first
+// whitespace, `;` or `,` (or the end of the line). Either has 4 to 256
+// characters: a longer or shorter one is not a candidate, whatever its start.
+const KEYWORDS = ["password", "passwd", "pwd", "pass", "secret", "token", "key", "api", "auth", "credential", "cred", "nonce", "salt"];
+const NAME_CHAR = String.raw`[\w.$-]`;
+const SEPARATOR = "(?::=|=>|==|!=|:|=)";
+const VALUE = [
+  String.raw`"([^"\r\n]{4,256})"`,
+  String.raw`'([^'\r\n]{4,256})'`,
+  String.raw`\x60([^\x60\r\n]{4,256})\x60`,
+  String.raw`(?!["'\x60])([^\s;,]{4,256})(?![^\s;,])`,
+].join("|");
+export const GENERIC_KEYWORD = Object.freeze({
+  id: "generic-keyword",
+  keywords: KEYWORDS,
+  // Judged like the engine's two rules that trust a name, for the `context` flag.
+  nameTrusting: true,
+  re: new RegExp(String.raw`(?<!${NAME_CHAR})${NAME_CHAR}*?(?:${KEYWORDS.join("|")})${NAME_CHAR}*["'\x60]?[ \t]*${SEPARATOR}[ \t]*(?:${VALUE})`, "i"),
+});
+
+// Gates that still drop a match in candidate mode: the built-in rules' own
+// checks (Luhn and IIN, the URL username, no whitespace and no file path in a
+// quoted password) and what is the engine's own material (its placeholders,
+// the text of its rules).
+const KEPT_GATES = new Set(["redacted", "post", "post-match", "rule-source", "user-value"]);
+// Gates that are off, and the flag each one sets on the candidate.
+const FLAG_OF_GATE = {
+  entropy: "entropy",
+  placeholder: "placeholder",
+  "rule-allowlist": "allowlist",
+  "global-regex": "allowlist",
+  "rule-stopword": "stopword",
+  "global-stopword": "stopword",
+  "name-context": "context",
+  "repeated-character": "context",
+  pragma: "pragma",
+};
+// Ranks `dedupe` knows: generic-api-key 0, password-assignment 1, any other id 2.
+const LOWEST_RANK_ID = "generic-api-key";
+const TOP_RANK_ID = "sg-cand-1:engine-rule";
+
+function lineStartsOf(text) {
+  const starts = [0];
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) starts.push(i + 1);
+  return starts;
+}
+
+function lineIndexAt(starts, offset) {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (starts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+// How many Unicode code points `text` holds between two offsets.
+function codePoints(text, from, to) {
+  let n = to - from;
+  for (let i = from; i < to - 1; i++) {
+    const c = text.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const d = text.charCodeAt(i + 1);
+      if (d >= 0xdc00 && d <= 0xdfff) {
+        n--;
+        i++;
+      }
+    }
+  }
+  return n;
+}
+
+/**
+ * The sg-cand-1 candidates of one text, as records (see the top of this file).
+ * `engine` is `{scan, traceMatches, dedupeFindings}` from src/engine/scanner.ts.
+ * Options: `sourcePath` (the file's path: recorded, and given to the engine
+ * for its path allowlist and path-scoped rules), `raw`, `maskKey`, `known`
+ * (as in `candidatesOf`), `maxLine` (characters kept of each line, 1000), and
+ * `dropped`: an array that receives `{rule, gate, line, start, end, offset,
+ * length}` for every match a kept gate dropped.
+ */
+export function candidateRecords(text, engine, opts = {}) {
+  const maxLine = opts.maxLine ?? 1000;
+  const key = opts.maskKey ?? newMaskKey();
+  const cfg = opts.sourcePath ? { sourcePath: opts.sourcePath } : {};
+  const starts = lineStartsOf(text);
+  const lineEnd = (i) => {
+    const end = i + 1 < starts.length ? starts[i + 1] - 1 : text.length;
+    return end > starts[i] && text[end - 1] === "\r" ? end - 1 : end;
+  };
+
+  const live = [];
+  const dropped = [];
+  for (const m of engine.traceMatches(text, cfg, [GENERIC_KEYWORD])) {
+    const gate = m.gates.find((g) => KEPT_GATES.has(g));
+    if (gate === undefined) live.push(m);
+    else dropped.push({ ...m, gate });
+  }
+  // `dedupe` over the engine's own rules, as `scan` does; then once more with
+  // generic-keyword ranked below every one of them: it keeps a value only
+  // where no other rule names it, or where it holds 6 characters and more
+  // around the other rule's value.
+  const own = engine.dedupeFindings(
+    live.filter((m) => m.ruleId !== GENERIC_KEYWORD.id),
+    text,
+  );
+  const keyword = live.filter((m) => m.ruleId === GENERIC_KEYWORD.id).map((m) => ({ ...m, name: /^[\w.$-]+/.exec(m.match)?.[0] }));
+  const kept = engine
+    .dedupeFindings([...own.map((m) => ({ ...m, rule: m.ruleId, ruleId: TOP_RANK_ID })), ...keyword.map((m) => ({ ...m, rule: m.ruleId, ruleId: LOWEST_RANK_ID }))], text)
+    .sort((a, b) => a.start - b.start);
+
+  // What the default engine reports in the same text, with the same path.
+  const reported = engine.scan(text, cfg);
+
+  let spans = [];
+  if (!opts.raw) {
+    // Every value any rule matched is masked, kept as a candidate or not:
+    // the union of their spans, then every other place that repeats one.
+    for (const m of [...kept, ...live, ...dropped, ...reported].sort((a, b) => a.start - b.start)) {
+      const last = spans[spans.length - 1];
+      if (last !== undefined && m.start < last.end) last.end = Math.max(last.end, m.end);
+      else spans.push({ start: m.start, end: m.end });
+    }
+    spans = withRepeats(text, spans);
+  }
+  const show = maskedView(text, spans, { raw: opts.raw, known: opts.known, key });
+  const cut = (i) => (i < 0 || i >= starts.length ? null : show(starts[i], Math.min(lineEnd(i), starts[i] + maxLine)));
+  const place = (m) => {
+    const line = lineIndexAt(starts, m.start);
+    const endLine = lineIndexAt(starts, Math.max(m.start, m.end - 1));
+    return { line, endLine, start: m.start - starts[line], end: m.end - starts[endLine] };
+  };
+
+  if (opts.dropped) {
+    for (const m of dropped) {
+      const at = place(m);
+      opts.dropped.push({ rule: m.ruleId, gate: m.gate, line: at.line + 1, start: at.start, end: at.end, endLine: at.endLine + 1, offset: m.start, length: m.end - m.start });
+    }
+  }
+
+  return kept.map((m) => {
+    const at = place(m);
+    const filters = { entropy: false, placeholder: false, allowlist: false, stopword: false, context: false, pragma: false };
+    for (const g of m.gates) if (FLAG_OF_GATE[g]) filters[FLAG_OF_GATE[g]] = true;
+    // A long line is cut to a window of `maxLine` characters around the value.
+    const lineLength = lineEnd(at.line) - starts[at.line];
+    const inLine = Math.min(m.end - m.start, lineLength - at.start);
+    const lineFrom = lineLength <= maxLine ? 0 : Math.max(0, Math.min(at.start - Math.floor((maxLine - Math.min(inLine, maxLine)) / 2), lineLength - maxLine));
+    const from = starts[at.line] + lineFrom;
+    return {
+      generator: GENERATOR,
+      file: opts.sourcePath ?? null,
+      ext: opts.sourcePath ? extname(opts.sourcePath).toLowerCase() : "",
+      rule: m.rule,
+      line: at.line + 1,
+      start: at.start,
+      end: at.end,
+      cpStart: codePoints(text, starts[at.line], m.start),
+      cpEnd: codePoints(text, starts[at.endLine], m.end),
+      endLine: at.endLine + 1,
+      offset: m.start,
+      length: m.end - m.start,
+      value: show(m.start, m.end),
+      name: m.name ?? assignedName(text, m.start) ?? null,
+      lineText: show(from, Math.min(lineEnd(at.line), from + maxLine)),
+      lineFrom,
+      prevLine: cut(at.line - 1),
+      nextLine: cut(at.endLine + 1),
+      entropy: Number(m.entropy.toFixed(4)),
+      filters,
+      reported: reported.some((f) => overlaps(f, m)),
+      masked: !opts.raw,
+    };
+  });
+}
+
 // ---------------------------------------------------------------- files
 
 // The walk of scripts/model-compare.mjs's census, so counts compare.
@@ -346,12 +638,19 @@ export function* walkFiles(root, opts = {}) {
   }
 }
 
-/** A file's text, or undefined when it is empty, too large or binary. */
-export function readText(file, maxBytes = 2 * 1024 * 1024) {
-  const st = statSync(file);
-  if (st.size === 0 || st.size > maxBytes) return undefined;
+/** A file's text, or undefined when it is missing, empty, too large or binary;
+ *  `skipped` counts which (`{missing, empty, large, binary}`). */
+export function readText(file, maxBytes = 2 * 1024 * 1024, skipped = undefined) {
+  const skip = (why) => {
+    if (skipped) skipped[why] = (skipped[why] ?? 0) + 1;
+    return undefined;
+  };
+  const st = statSync(file, { throwIfNoEntry: false });
+  if (st === undefined || !st.isFile()) return skip("missing");
+  if (st.size === 0) return skip("empty");
+  if (st.size > maxBytes) return skip("large");
   const buf = readFileSync(file);
-  if (buf.subarray(0, 8192).includes(0)) return undefined;
+  if (buf.subarray(0, 8192).includes(0)) return skip("binary");
   return buf.toString("utf8");
 }
 
@@ -371,33 +670,86 @@ async function loadEngine() {
     },
   });
   const root = resolve(fileURLToPath(import.meta.url), "../..");
-  const { scan, rulePatterns } = await import(pathToFileURL(join(root, "src/engine/scanner.ts")).href);
-  return { scan, rulePatterns };
+  const { scan, rulePatterns, traceMatches, dedupeFindings, isGloballyAllowedPath } = await import(pathToFileURL(join(root, "src/engine/scanner.ts")).href);
+  return { scan, rulePatterns, traceMatches, dedupeFindings, isGloballyAllowedPath };
 }
 
+const countLines = (text) => {
+  let n = text.endsWith("\n") ? 0 : 1;
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) n++;
+  return n;
+};
+
+const USAGE =
+  "usage: rule-candidates.mjs <dir|file>... [--files-from LIST] [--base DIR] [--out FILE] [--candidates [--dropped FILE] [--max-line N]] [--generic] [--context 0..4000] [--all-text] [--max-bytes N] [--stats FILE] [--raw]";
+
 async function main(argv) {
-  const opt = { roots: [], context: 160, maxBytes: 2 * 1024 * 1024 };
+  const opt = { roots: [], context: 160, maxBytes: 2 * 1024 * 1024, maxLine: 1000 };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--out") opt.out = argv[++i];
     else if (a === "--generic") opt.generic = true;
+    else if (a === "--candidates") opt.candidates = true;
     else if (a === "--raw") opt.raw = true;
     else if (a === "--all-text") opt.allText = true;
     else if (a === "--context") opt.context = Number(argv[++i]);
     else if (a === "--max-bytes") opt.maxBytes = Number(argv[++i]);
+    else if (a === "--max-line") opt.maxLine = Number(argv[++i]);
+    else if (a === "--files-from") opt.filesFrom = argv[++i];
+    else if (a === "--base") opt.base = argv[++i];
+    else if (a === "--dropped") opt.dropped = argv[++i];
+    else if (a === "--stats") opt.stats = argv[++i];
     else if (a.startsWith("--")) {
       console.error(`rule-candidates: unknown option ${a}`);
       return 2;
     } else opt.roots.push(a);
   }
-  if (opt.roots.length === 0 || !Number.isInteger(opt.context) || opt.context < 0 || opt.context > 4000) {
-    console.error("usage: rule-candidates.mjs <dir|file>... [--out FILE] [--generic] [--context 0..4000] [--all-text] [--max-bytes N] [--raw]");
+  const bad =
+    (opt.roots.length === 0 && !opt.filesFrom) ||
+    !Number.isInteger(opt.context) ||
+    opt.context < 0 ||
+    opt.context > 4000 ||
+    !Number.isInteger(opt.maxLine) ||
+    opt.maxLine < 1 ||
+    !(opt.maxBytes > 0) ||
+    (opt.candidates && opt.generic) ||
+    (opt.dropped && !opt.candidates);
+  if (bad) {
+    console.error(USAGE);
     return 2;
   }
   if (opt.raw) console.error("rule-candidates: --raw: the output holds REAL values. Treat the file as a secret.");
+  const began = performance.now();
   const engine = await loadEngine();
   const maskKey = newMaskKey();
-  const files = opt.roots.flatMap((root) => [...walkFiles(root, opt)]);
+  // Paths given on the command line are read from where the command runs;
+  // --base moves that place for the inputs only, so that the paths written to
+  // the records (and given to the engine) are the ones below the base.
+  const here = process.cwd();
+  const outputs = Object.fromEntries(["out", "dropped", "stats"].map((k) => [k, opt[k] === undefined ? undefined : resolve(here, opt[k])]));
+  const listed = opt.filesFrom
+    ? readFileSync(resolve(here, opt.filesFrom), "utf8")
+        .split("\n")
+        .filter((l) => l !== "")
+    : [];
+  if (opt.base) process.chdir(resolve(here, opt.base));
+  const files = [...opt.roots.flatMap((root) => [...walkFiles(root, opt)]), ...listed];
+
+  const stats = { files: files.length, read: 0, skipped: { missing: 0, empty: 0, large: 0, binary: 0 }, pathAllowlisted: 0, bytes: 0, lines: 0 };
+  const read = (file, count) => {
+    const text = readText(file, opt.maxBytes, count ? stats.skipped : undefined);
+    if (text !== undefined && count) {
+      stats.read++;
+      stats.bytes += Buffer.byteLength(text);
+      stats.lines += countLines(text);
+      if (opt.candidates && engine.isGloballyAllowedPath(file)) stats.pathAllowlisted++;
+    }
+    return text;
+  };
+  const of = opt.candidates
+    ? (file, text, o) => candidateRecords(text, engine, { ...o, sourcePath: file, maxLine: opt.maxLine })
+    : (file, text, o) => candidatesOf(text, engine, { generic: opt.generic, context: opt.context, ...o }).map((c) => ({ file, ...c }));
+
   // A value found in one file is masked in every file: a first pass collects
   // them all (a secret is often repeated where no rule has the context to
   // flag it: a test's expectation, a note).
@@ -405,32 +757,66 @@ async function main(argv) {
   if (!opt.raw) {
     const values = [];
     for (const file of files) {
-      const text = readText(file, opt.maxBytes);
-      if (text !== undefined) for (const c of candidatesOf(text, engine, { generic: true, context: 0, raw: true })) values.push(c.context.value);
+      const text = read(file, false);
+      if (text === undefined) continue;
+      if (opt.candidates) for (const c of candidateRecords(text, engine, { sourcePath: file, raw: true })) values.push(c.value);
+      else for (const c of candidatesOf(text, engine, { generic: true, context: 0, raw: true })) values.push(c.context.value);
     }
     known = valueIndex(values);
   }
-  const lines = [];
-  const stats = { files: 0, filesWithCandidates: 0, byMode: {}, byRule: {} };
+
+  // Records are written as they come: an export of many files does not fit in
+  // one string.
+  const sink = (path) => {
+    if (path === undefined) return undefined;
+    const fd = openSync(path, "w", 0o600);
+    return { write: (line) => writeSync(fd, line), close: () => closeSync(fd) };
+  };
+  const out = sink(outputs.out) ?? { write: (line) => process.stdout.write(line), close: () => {} };
+  const droppedOut = sink(outputs.dropped);
+  let total = 0;
+  let filesWithCandidates = 0;
+  const byMode = {};
+  const byRule = {};
+  const byGate = {};
   for (const file of files) {
-    const text = readText(file, opt.maxBytes);
+    const text = read(file, true);
     if (text === undefined) continue;
-    stats.files++;
-    const found = candidatesOf(text, engine, { ...opt, maskKey, known });
-    if (found.length > 0) stats.filesWithCandidates++;
+    const dropped = [];
+    const found = of(file, text, { raw: opt.raw, maskKey, known, dropped });
+    if (found.length > 0) filesWithCandidates++;
     for (const c of found) {
-      stats.byMode[c.mode] = (stats.byMode[c.mode] ?? 0) + 1;
-      stats.byRule[c.rule] = (stats.byRule[c.rule] ?? 0) + 1;
-      lines.push(JSON.stringify({ file, ...c }));
+      total++;
+      if (c.mode !== undefined) byMode[c.mode] = (byMode[c.mode] ?? 0) + 1;
+      byRule[c.rule] = (byRule[c.rule] ?? 0) + 1;
+      out.write(`${JSON.stringify(c)}\n`);
+    }
+    for (const d of dropped) {
+      byGate[d.gate] = (byGate[d.gate] ?? 0) + 1;
+      droppedOut?.write(`${JSON.stringify({ file, ...d })}\n`);
     }
   }
-  const body = lines.length > 0 ? `${lines.join("\n")}\n` : "";
-  if (opt.out) writeFileSync(opt.out, body, { mode: 0o600 });
-  else process.stdout.write(body);
+  out.close();
+  droppedOut?.close();
+  const summary = {
+    ...(opt.candidates ? { generator: GENERATOR } : {}),
+    ...stats,
+    filesWithCandidates,
+    candidates: total,
+    byRule,
+    ...(opt.candidates ? { droppedByKeptGate: byGate } : { byMode }),
+    masked: !opt.raw,
+    seconds: Number(((performance.now() - began) / 1000).toFixed(1)),
+  };
+  if (outputs.stats) writeFileSync(outputs.stats, `${JSON.stringify(summary, null, 2)}\n`);
+  const skipped = Object.entries(stats.skipped)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ${k}`);
   console.error(
-    `rule-candidates: ${stats.files} files, ${stats.filesWithCandidates} with candidates, ${lines.length} candidates ${JSON.stringify(stats.byMode)}${opt.raw ? " (RAW values)" : " (values masked)"}`,
+    `rule-candidates: ${stats.read} files${skipped.length > 0 ? ` (skipped: ${skipped.join(", ")})` : ""}, ${stats.lines} lines, ${filesWithCandidates} with candidates, ${total} candidates${opt.candidates ? ` (${GENERATOR})` : ` ${JSON.stringify(byMode)}`}${opt.raw ? " (RAW values)" : " (values masked)"}`,
   );
-  console.error(`rule-candidates: by rule ${JSON.stringify(stats.byRule)}`);
+  console.error(`rule-candidates: by rule ${JSON.stringify(byRule)}`);
+  if (opt.candidates) console.error(`rule-candidates: dropped by a kept gate ${JSON.stringify(byGate)}; ${stats.pathAllowlisted} files under the global path allowlist`);
   return 0;
 }
 
