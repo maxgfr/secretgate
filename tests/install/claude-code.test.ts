@@ -2,7 +2,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CC_DENY_RULES, claudeCodeBatchHookWired, installClaudeCode, uninstallClaudeCode } from "../../src/install/claude-code.js";
+import { CC_DENY_RULES, claudeCodeBatchHookWired, claudeCodeTakesBatchHook, installClaudeCode, uninstallClaudeCode } from "../../src/install/claude-code.js";
 import { SettingsLinkError, SettingsParseError } from "../../src/install/json-merge.js";
 
 let dir: string;
@@ -22,7 +22,7 @@ const read = () => JSON.parse(readFileSync(settingsPath, "utf8"));
 
 describe("installClaudeCode", () => {
   it("wires PostToolBatch, the only hook that sees a failed call's output, and removes it on uninstall", () => {
-    installClaudeCode({ settingsPath, command });
+    installClaudeCode({ settingsPath, command, claudeVersion: "2.1.323 (Claude Code)" });
     const group = read().hooks.PostToolBatch;
     expect(group).toHaveLength(1);
     expect(group[0].matcher).toBeUndefined();
@@ -34,6 +34,35 @@ describe("installClaudeCode", () => {
     expect(claudeCodeBatchHookWired(older)).toBe(false);
     uninstallClaudeCode({ settingsPath });
     expect(read().hooks).toBeUndefined();
+  });
+
+  // Claude Code before 2.1.101 ignores the WHOLE settings file when it names a
+  // hook event it does not know (seen on 2.0.0: with PostToolBatch in the
+  // file, no hook ran and a pasted token went to the model). The event is
+  // written only for a Claude Code known to tolerate it.
+  it("leaves PostToolBatch out for a Claude Code that would drop the whole file, or an unknown one", () => {
+    for (const claudeVersion of [undefined, "", "2.0.0 (Claude Code)", "2.1.100", "1.0.128", "not a version"]) {
+      installClaudeCode({ settingsPath, command, claudeVersion });
+      expect(Object.keys(read().hooks).sort(), String(claudeVersion)).toEqual(["PostToolUse", "PreToolUse", "UserPromptSubmit"]);
+      rmSync(settingsPath);
+    }
+    for (const claudeVersion of ["2.1.101", "2.1.263 (Claude Code)", "2.2.0", "3.0.1"]) {
+      installClaudeCode({ settingsPath, command, claudeVersion });
+      expect(Object.keys(read().hooks), claudeVersion).toContain("PostToolBatch");
+      rmSync(settingsPath);
+    }
+    expect(claudeCodeTakesBatchHook("2.1.100")).toBe(false);
+    expect(claudeCodeTakesBatchHook("2.1.101")).toBe(true);
+  });
+
+  it("removes PostToolBatch again when the install is re-run under an older Claude Code", () => {
+    writeFileSync(settingsPath, JSON.stringify({ hooks: { PostToolBatch: [{ hooks: [{ type: "command", command: "/my/audit.sh" }] }] } }));
+    installClaudeCode({ settingsPath, command, claudeVersion: "2.1.323" });
+    expect(read().hooks.PostToolBatch).toHaveLength(2);
+    installClaudeCode({ settingsPath, command, claudeVersion: "2.0.0" });
+    // The user's own entry is theirs to keep; ours is gone.
+    expect(read().hooks.PostToolBatch).toEqual([{ hooks: [{ type: "command", command: "/my/audit.sh" }] }]);
+    expect(claudeCodeBatchHookWired(read())).toBe(false);
   });
 
   it("creates settings.json from scratch with its hook events + deny rules", () => {

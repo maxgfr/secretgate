@@ -9833,11 +9833,22 @@ function retiredRulesToRemove(deny2, owned) {
   return RETIRED_DENY_RULES.filter((r) => deny2.includes(r) && (owned.includes(r) || legacyInstall));
 }
 var PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|NotebookEdit|NotebookRead|Bash|mcp__.*";
+var BATCH_HOOK_MIN_VERSION = "2.1.101";
+function claudeCodeTakesBatchHook(version) {
+  const have = /(\d+)\.(\d+)\.(\d+)/.exec(version ?? "");
+  if (!have) return false;
+  const need = BATCH_HOOK_MIN_VERSION.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const n = Number(have[i + 1]);
+    if (n !== need[i]) return n > need[i];
+  }
+  return true;
+}
 var EVENTS = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
   { event: "PreToolUse", arg: "pre-tool-use", matcher: PRE_TOOL_MATCHER },
   { event: "PostToolUse", arg: "post-tool-use", matcher: "*" },
-  { event: "PostToolBatch", arg: "post-tool-batch" }
+  { event: "PostToolBatch", arg: "post-tool-batch", recent: true }
 ];
 function claudeCodeMatcherCurrent(settings) {
   const groups = settings?.hooks?.PreToolUse;
@@ -9859,7 +9870,8 @@ function settingsTree(settingsPath, root) {
   assertWithin(ownershipPath, within);
   return { ownershipPath, within };
 }
-function installClaudeCode({ settingsPath, command, root }) {
+function installClaudeCode({ settingsPath, command, root, claudeVersion }) {
+  const recentEvents = claudeCodeTakesBatchHook(claudeVersion);
   const { ownershipPath, within } = settingsTree(settingsPath, root);
   const previous = existsSync5(ownershipPath) ? JSON.parse(readFileSync8(ownershipPath, "utf8")) : {};
   const added = [];
@@ -9868,8 +9880,13 @@ function installClaudeCode({ settingsPath, command, root }) {
     settingsPath,
     (s) => {
       s.hooks ??= {};
-      for (const { event, arg, matcher } of EVENTS) {
+      for (const { event, arg, matcher, recent } of EVENTS) {
         const kept = withoutOurGroups(s.hooks[event]);
+        if (recent && !recentEvents) {
+          if (kept.length > 0) s.hooks[event] = kept;
+          else delete s.hooks[event];
+          continue;
+        }
         const group = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}`, timeout: 30 }] };
         if (matcher) group.matcher = matcher;
         s.hooks[event] = [...kept, group];
@@ -11078,6 +11095,18 @@ function projectSettingsAliasesGlobal() {
   };
   return canon(process.cwd()) === canon(homedir8());
 }
+function claudeCodeVersion() {
+  const named = process.env.SECRETGATE_CLAUDE_CODE_VERSION?.trim();
+  if (named) return named;
+  try {
+    return execFileSync("claude", ["--version"], { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"] }).trim() || void 0;
+  } catch {
+    return void 0;
+  }
+}
+function batchHookAbsence(version) {
+  return /\d+\.\d+\.\d+/.test(version ?? "") ? `Claude Code ${version} ignores a whole settings file that names a hook event it does not know (fixed in ${BATCH_HOOK_MIN_VERSION}): upgrade Claude Code, then re-run \`secretgate init\`` : `Claude Code's version could not be found (\`claude --version\`), and before ${BATCH_HOOK_MIN_VERSION} it ignores a whole settings file that names a hook event it does not know: re-run \`secretgate init\` where \`claude\` runs, or set SECRETGATE_CLAUDE_CODE_VERSION`;
+}
 function installForAgents(flags, io) {
   const outcome = { installed: { claudeCode: false, codex: false, opencode: false }, errors: [] };
   const attempt = (name, fn) => {
@@ -11099,8 +11128,12 @@ function installForAgents(flags, io) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
       mkdirSync9(dirname11(settingsPath), { recursive: true });
-      const r = installClaudeCode({ settingsPath, command: installedCliCommand() });
+      const claudeVersion = claudeCodeVersion();
+      const r = installClaudeCode({ settingsPath, command: installedCliCommand(), claudeVersion });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
+`);
+      if (!claudeCodeTakesBatchHook(claudeVersion))
+        io.stdout(`claude-code: failed-call check NOT installed \u2014 the output of a failed tool call is not checked. ${batchHookAbsence(claudeVersion)}.
 `);
       if (r.backupPath) io.stdout(`claude-code: previous settings backed up to ${r.backupPath}
 `);
@@ -11151,7 +11184,7 @@ function spawnHook(agent, event, payload, env) {
   const self = selfInvocation();
   return execFileSync(self.file, [...self.args, "hook", agent, event], { input: JSON.stringify(payload), env, encoding: "utf8" });
 }
-function verifyClaudeCodeWiring(io) {
+function verifyClaudeCodeWiring(io, batchWired) {
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
   const tmpHome = mkdtempSync2(join13(tmpdir3(), "secretgate-verify-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
@@ -11185,17 +11218,21 @@ TOKEN=${fake}
       io.stdout("  \u2717 tool-output redaction FAILED \u2014 a secret would reach the model\n");
       ok = false;
     }
-    const batch = runHook("post-tool-batch", {
-      hook_event_name: "PostToolBatch",
-      cwd: tmpHome,
-      tool_calls: [{ tool_name: "Bash", tool_input: { command: "env" }, tool_response: `Exit code 1
+    if (batchWired) {
+      const batch = runHook("post-tool-batch", {
+        hook_event_name: "PostToolBatch",
+        cwd: tmpHome,
+        tool_calls: [{ tool_name: "Bash", tool_input: { command: "env" }, tool_response: `Exit code 1
 TOKEN=${fake}` }]
-    });
-    if (batch.continue === false && !JSON.stringify(batch).includes(fake)) {
-      io.stdout("  \u2713 a secret printed by a FAILED command stops the turn before it is sent\n");
+      });
+      if (batch.continue === false && !JSON.stringify(batch).includes(fake)) {
+        io.stdout("  \u2713 a secret printed by a FAILED command stops the turn before it is sent\n");
+      } else {
+        io.stdout("  \u2717 failed-command check FAILED \u2014 the output of a failed tool call would reach the model\n");
+        ok = false;
+      }
     } else {
-      io.stdout("  \u2717 failed-command check FAILED \u2014 the output of a failed tool call would reach the model\n");
-      ok = false;
+      io.stdout("  \u2013 the output of a FAILED command is NOT checked: that hook is not installed for this Claude Code (see above)\n");
     }
     const cleanRaw = spawnHook(
       "claude-code",
@@ -11371,7 +11408,7 @@ async function cmdInit(args, io) {
   const outcome = installForAgents(flags, io);
   io.stdout("\n== verify installed adapters (local checks, no model request) ==\n");
   let ok = true;
-  if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io) && ok;
+  if (outcome.installed.claudeCode) ok = verifyClaudeCodeWiring(io, claudeCodeBatchHookWired(readJsonSafe(claudeSettingsPath(flags.project)))) && ok;
   if (outcome.installed.codex) ok = verifyCodexWiring(io) && ok;
   if (outcome.installed.opencode) ok = verifyOpencodeBundle(io) && ok;
   if (!outcome.installed.claudeCode && !outcome.installed.codex && !outcome.installed.opencode) {
@@ -11503,6 +11540,7 @@ async function cmdStatus(_args, io) {
   const codexHooks = readJsonSafe(join13(codexHome(), "hooks.json"));
   const codexCommands = hookCommands(codexHooks, "codex");
   reportPinned([...ccScopes.flatMap(([, path]) => hookCommands(readJsonSafe(path), "claude-code")), ...codexCommands], io);
+  const ccVersion = ccScopes.some(([, path]) => hookCommands(readJsonSafe(path), "claude-code").length > 0) ? claudeCodeVersion() : void 0;
   for (const [label, path] of ccScopes) {
     const settings = readJsonSafe(path);
     const ccCommands = hookCommands(settings, "claude-code");
@@ -11517,8 +11555,15 @@ async function cmdStatus(_args, io) {
       io.stdout(`claude-code ${label}  outdated tool matcher (Glob/LS/NotebookRead/MCP not checked) \u2014 run \`secretgate init\` to update
 `);
     if (wired > 0 && !claudeCodeBatchHookWired(settings))
-      io.stdout(`claude-code ${label}  no PostToolBatch hook (the output of a FAILED tool call is not checked) \u2014 run \`secretgate init\` to add it
-`);
+      io.stdout(
+        `claude-code ${label}  no PostToolBatch hook (the output of a FAILED tool call is not checked) \u2014 ${claudeCodeTakesBatchHook(ccVersion) ? "run `secretgate init` to add it" : batchHookAbsence(ccVersion)}
+`
+      );
+    if (wired > 0 && claudeCodeBatchHookWired(settings) && /\d+\.\d+\.\d+/.test(ccVersion ?? "") && !claudeCodeTakesBatchHook(ccVersion))
+      io.stdout(
+        `claude-code ${label}  !! this file names the PostToolBatch hook, and Claude Code ${ccVersion} ignores the WHOLE settings file for it: NO hook runs \u2014 run \`secretgate init\` (it takes the entry out) or upgrade Claude Code to ${BATCH_HOOK_MIN_VERSION} or later
+`
+      );
     const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
     const retired = retiredRulesToRemove(denyRules, Array.isArray(owned) ? owned.filter((r) => typeof r === "string") : []);
     if (retired.length > 0)

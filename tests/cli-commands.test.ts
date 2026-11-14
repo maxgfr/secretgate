@@ -37,6 +37,7 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.SECRETGATE_HOME;
   delete process.env.SECRETGATE_DISABLE;
+  delete process.env.SECRETGATE_CLAUDE_CODE_VERSION;
   for (const k of hostEnvKeys) {
     if (hostEnv[k] === undefined) delete process.env[k];
     else process.env[k] = hostEnv[k];
@@ -456,6 +457,7 @@ describe("secretgate status", () => {
   it("flags an install that predates the failed-call check, until `install` adds it", async () => {
     process.env.HOME = home;
     process.chdir(work);
+    process.env.SECRETGATE_CLAUDE_CODE_VERSION = "2.1.323 (Claude Code)";
     mkdirSync(join(home, ".claude"), { recursive: true });
     const hook = (event: string) => ({ hooks: [{ type: "command", command: `secretgate hook claude-code ${event}` }] });
     writeFileSync(
@@ -470,6 +472,44 @@ describe("secretgate status", () => {
     await run(["status"], after.io);
     expect(after.text()).toContain("wired (4 hooks");
     expect(after.text()).not.toContain("no PostToolBatch hook");
+  });
+
+  // Claude Code before 2.1.101 ignores the whole settings file when it names a
+  // hook event it does not know: every hook would be off.
+  it("does not write PostToolBatch for an older or unknown Claude Code, and says so", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    for (const [version, why] of [
+      ["2.0.0 (Claude Code)", "2.0.0"],
+      ["unknown", "could not be found"],
+    ] as const) {
+      process.env.SECRETGATE_CLAUDE_CODE_VERSION = version;
+      const install = capture();
+      await run(["install", "--claude-code"], install.io);
+      expect(install.text(), version).toContain("failed-call check NOT installed");
+      expect(install.text(), version).toContain(why);
+      expect(Object.keys(JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).hooks)).not.toContain("PostToolBatch");
+      const status = capture();
+      await run(["status"], status.io);
+      expect(status.text(), version).toContain("wired (3 hooks");
+      expect(status.text(), version).toContain("no PostToolBatch hook");
+    }
+  });
+
+  it("warns loudly when the settings name PostToolBatch and this Claude Code would drop the whole file", async () => {
+    process.env.HOME = home;
+    process.chdir(work);
+    process.env.SECRETGATE_CLAUDE_CODE_VERSION = "2.1.323";
+    await run(["install", "--claude-code"], capture().io);
+    process.env.SECRETGATE_CLAUDE_CODE_VERSION = "2.0.0 (Claude Code)";
+    const status = capture();
+    await run(["status"], status.io);
+    expect(status.text()).toMatch(/!! .*2\.0\.0.*ignores the WHOLE settings file/);
+    // `install` under that version takes the entry out again.
+    await run(["install", "--claude-code"], capture().io);
+    const fixed = capture();
+    await run(["status"], fixed.io);
+    expect(fixed.text()).not.toContain("ignores the WHOLE settings file");
   });
 
   it("names the env var when that is what is off", async () => {

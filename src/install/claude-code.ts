@@ -111,11 +111,32 @@ export const PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|Notebook
 // which can neither replace the output nor stop the turn. PostToolBatch is the
 // one hook that still stands between that output and the model: it receives
 // every result of the batch as the model will read it, and can stop the turn.
-const EVENTS: Array<{ event: string; arg: string; matcher?: string }> = [
+//
+// PostToolBatch is a recent event, and Claude Code before 2.1.101 ignores the
+// WHOLE settings file when it names a hook event it does not know (its
+// changelog for 2.1.101; seen on 2.0.0, where no hook ran and a pasted token
+// went to the model). So that entry is written only for a Claude Code known
+// to tolerate it; an older or unknown one keeps the three hooks it runs.
+export const BATCH_HOOK_MIN_VERSION = "2.1.101";
+
+/** Does this Claude Code (as `claude --version` prints it) take a settings
+ *  file that names PostToolBatch? Unknown or unreadable: no. */
+export function claudeCodeTakesBatchHook(version: string | undefined): boolean {
+  const have = /(\d+)\.(\d+)\.(\d+)/.exec(version ?? "");
+  if (!have) return false;
+  const need = BATCH_HOOK_MIN_VERSION.split(".").map(Number);
+  for (let i = 0; i < 3; i++) {
+    const n = Number(have[i + 1]);
+    if (n !== need[i]) return n > need[i]!;
+  }
+  return true;
+}
+
+const EVENTS: Array<{ event: string; arg: string; matcher?: string; recent?: boolean }> = [
   { event: "UserPromptSubmit", arg: "user-prompt-submit" },
   { event: "PreToolUse", arg: "pre-tool-use", matcher: PRE_TOOL_MATCHER },
   { event: "PostToolUse", arg: "post-tool-use", matcher: "*" },
-  { event: "PostToolBatch", arg: "post-tool-batch" },
+  { event: "PostToolBatch", arg: "post-tool-batch", recent: true },
 ];
 
 /** Is a settings file wired with the current PreToolUse matcher? */
@@ -145,6 +166,9 @@ export interface InstallOptions {
   settingsPath: string;
   /** how the agent should invoke the CLI, e.g. `node /home/u/.secretgate/bin/secretgate.mjs` */
   command: string;
+  /** The Claude Code that will read the file, as `claude --version` prints
+   *  it. PostToolBatch is written only for one that tolerates it. */
+  claudeVersion?: string;
   /** The tree the settings belong to: a symlinked settings file is written
    *  through only when it resolves inside it. Default: the directory that
    *  holds `.claude/` — the project for project settings, the home directory
@@ -162,7 +186,8 @@ function settingsTree(settingsPath: string, root: string | undefined): { ownersh
   return { ownershipPath, within };
 }
 
-export function installClaudeCode({ settingsPath, command, root }: InstallOptions): EditReport {
+export function installClaudeCode({ settingsPath, command, root, claudeVersion }: InstallOptions): EditReport {
+  const recentEvents = claudeCodeTakesBatchHook(claudeVersion);
   const { ownershipPath, within } = settingsTree(settingsPath, root);
   const previous = existsSync(ownershipPath) ? JSON.parse(readFileSync(ownershipPath, "utf8")) : {};
   const added: string[] = [];
@@ -171,8 +196,14 @@ export function installClaudeCode({ settingsPath, command, root }: InstallOption
     settingsPath,
     (s) => {
       s.hooks ??= {};
-      for (const { event, arg, matcher } of EVENTS) {
+      for (const { event, arg, matcher, recent } of EVENTS) {
         const kept = withoutOurGroups(s.hooks[event]);
+        if (recent && !recentEvents) {
+          // Not for this Claude Code: ours is taken out if an earlier install put it there.
+          if (kept.length > 0) s.hooks[event] = kept;
+          else delete s.hooks[event];
+          continue;
+        }
         // 30s cap (seconds): a hung hook must not stall every tool call for the 600s default.
         const group: HookGroup = { hooks: [{ type: "command", command: `${command} hook claude-code ${arg}`, timeout: 30 }] };
         if (matcher) group.matcher = matcher;
