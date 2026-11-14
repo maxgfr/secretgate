@@ -356,6 +356,39 @@ describe("scan — dedupe", () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]!.ruleId).toBe("aws-access-token");
   });
+
+  // A quoted value that holds a vendor token AND other secret material: the
+  // vendor rule sees the token, password-assignment sees the whole value. The
+  // narrower finding used to win, so the rest of the value was never redacted.
+  it("keeps the wider finding when a vendor token is only part of a flagged value", () => {
+    const rest = "wJalrXUtnFEMI" + "K7MDENGbPxRfiCY" + "zQ9kT4mB2x";
+    for (const value of [`${FAKE.awsKeyId}:${rest}`, `${rest}:${FAKE.awsKeyId}`, `${rest}:${FAKE.awsKeyId}:${rest}`]) {
+      const text = `api_key = "${value}"`;
+      const findings = scan(text);
+      expect(findings, value).toHaveLength(1);
+      expect(findings[0]!.secret, value).toBe(value);
+      expect(text.slice(findings[0]!.start, findings[0]!.end), value).toBe(value);
+    }
+  });
+
+  it("still prefers the vendor rule when the wider finding adds nothing but punctuation", () => {
+    // generic-api-key also captures the trailing dot; the token alone is the secret.
+    const findings = scan(`TOKEN=${FAKE.githubPat}.\n`);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.ruleId).toBe("github-pat");
+    expect(findings[0]!.secret).toBe(FAKE.githubPat);
+  });
+
+  it("covers both spans when two findings overlap without one containing the other", () => {
+    // The URL password runs past the quote that ends the assigned value.
+    const [head, tail] = ["kQ9zX2mP7v", "B4wL8nR3tY"];
+    const text = `secret="amqp://svc:${head}"${tail}@mq.internal`;
+    const findings = scan(text);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.secret).toBe(`amqp://svc:${head}"${tail}`);
+    expect(text.slice(findings[0]!.start, findings[0]!.end)).toBe(findings[0]!.secret);
+    expect(findings[0]!.ruleId).toBe("url-credentials");
+  });
 });
 
 describe("scan — never flags its own rule database", () => {

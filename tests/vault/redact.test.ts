@@ -46,6 +46,14 @@ describe("redactText", () => {
     expect(new Set(r.text.match(/SECRETGATE_[0-9a-f]{12,16}/g)).size).toBe(2);
   });
 
+  it("leaves no part of a flagged value behind when a vendor token sits inside it", () => {
+    const rest = "wJalrXUtnFEMI" + "K7MDENGbPxRfiCY" + "zQ9kT4mB2x";
+    const r = redactText(`api_key = "${FAKE.awsKeyId}:${rest}"`, vault, "test");
+    expect(r.text).not.toContain(rest);
+    expect(r.text).not.toContain(FAKE.awsKeyId);
+    expect(restorePlaceholders(r.text, vault).text).toBe(`api_key = "${FAKE.awsKeyId}:${rest}"`);
+  });
+
   it("returns the text unchanged when nothing is found", () => {
     const r = redactText("nothing to see here", vault, "test");
     expect(r.text).toBe("nothing to see here");

@@ -464,16 +464,25 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     }
   }
 
-  return dedupe(findings);
+  return dedupe(findings, text);
 }
 
-// When two findings' secret spans overlap, keep the more specific one:
-// a named vendor rule beats password-assignment, which beats generic-api-key,
-// then the longer secret wins.
+// When two findings' secret spans overlap, one finding is kept and it must
+// cover everything either rule flagged: what a dropped finding saw and the
+// kept one does not would reach the model unredacted.
+//   - One span inside the other: the more specific rule names the secret (a
+//     vendor rule beats password-assignment, which beats generic-api-key, then
+//     the longer secret wins) — unless the wider one holds more around it than
+//     stray punctuation. `api_key = "<key id>:<secret key>"` is one flagged
+//     value, and the vendor rule sees only the key id.
+//   - Neither inside the other: one finding over both spans.
 const specificity = (ruleId: string): number => (ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2);
-// Findings are visited by start, so the kept spans stay sorted and disjoint:
-// only the last one kept can reach the next finding.
-function dedupe(findings: Finding[]): Finding[] {
+// What a wider finding may hold around a narrower one and still give way to
+// it: less than the shortest value password-assignment itself would flag.
+const MIN_REMAINDER = 6;
+// Findings are visited by start (longest first), so the kept spans stay sorted
+// and disjoint: only the last one kept can reach the next finding.
+function dedupe(findings: Finding[], text: string): Finding[] {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
   const kept: Finding[] = [];
   for (const f of sorted) {
@@ -482,10 +491,16 @@ function dedupe(findings: Finding[]): Finding[] {
       kept.push(f);
       continue;
     }
-    const fRank = specificity(f.ruleId);
-    const oRank = specificity(other.ruleId);
-    const preferF = fRank > oRank || (fRank === oRank && f.end - f.start > other.end - other.start);
-    if (preferF) kept[kept.length - 1] = f;
+    const preferF = specificity(f.ruleId) > specificity(other.ruleId);
+    if (f.end <= other.end) {
+      // `f` lies inside `other`.
+      const remainder = other.end - other.start - (f.end - f.start);
+      if (preferF && remainder < MIN_REMAINDER) kept[kept.length - 1] = f;
+      continue;
+    }
+    const named = preferF ? f : other;
+    const secret = text.slice(other.start, f.end);
+    kept[kept.length - 1] = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
   }
   return kept;
 }

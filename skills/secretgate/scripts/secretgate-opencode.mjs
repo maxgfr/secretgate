@@ -8310,10 +8310,11 @@ function scan(text, cfg = {}) {
       findings.push({ ruleId: rule.id, match: fullMatch, secret, start, end, entropy, line });
     }
   }
-  return dedupe(findings);
+  return dedupe(findings, text);
 }
 var specificity = (ruleId) => ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2;
-function dedupe(findings) {
+var MIN_REMAINDER = 6;
+function dedupe(findings, text) {
   const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
   const kept = [];
   for (const f of sorted) {
@@ -8322,10 +8323,15 @@ function dedupe(findings) {
       kept.push(f);
       continue;
     }
-    const fRank = specificity(f.ruleId);
-    const oRank = specificity(other.ruleId);
-    const preferF = fRank > oRank || fRank === oRank && f.end - f.start > other.end - other.start;
-    if (preferF) kept[kept.length - 1] = f;
+    const preferF = specificity(f.ruleId) > specificity(other.ruleId);
+    if (f.end <= other.end) {
+      const remainder = other.end - other.start - (f.end - f.start);
+      if (preferF && remainder < MIN_REMAINDER) kept[kept.length - 1] = f;
+      continue;
+    }
+    const named = preferF ? f : other;
+    const secret = text.slice(other.start, f.end);
+    kept[kept.length - 1] = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
   }
   return kept;
 }
