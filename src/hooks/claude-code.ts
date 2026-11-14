@@ -7,7 +7,7 @@ import { sensitivePathMatch } from "../paths.js";
 import { filterSearchOutput, promptMentions, promptScopeViolation } from "../scope.js";
 import { Vault } from "../vault/vault.js";
 import { preToolPolicy } from "./policy.js";
-import { eventRedactor, isBase64Payload, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS } from "./scan-budget.js";
+import { eventRedactor, isAttachmentPayload, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS } from "./scan-budget.js";
 import { isStoppedSession, stopSession } from "./stopped-session.js";
 import { extractToolCall } from "./tool-call.js";
 import { mapStrings } from "./walk.js";
@@ -327,10 +327,12 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookRes
   // Read hands an image or a PDF over as `{type, file: {base64}}`: an
   // attachment for the model, not text. Scanned as text, the base64 of a
   // 1.5 MB PDF ran past the budget, and reading it stopped the session.
+  // Only that envelope, only for Read, and only a payload that is one.
   const response = input.tool_response;
   const attachment = toolName === "Read" && (response?.type === "image" || response?.type === "pdf") ? response.file : undefined;
+  const mediaType = response?.type === "pdf" ? "application/pdf" : attachment?.type;
   const skip = (key: string, v: unknown, parent: object): boolean =>
-    isBinaryField(key, v, parent) || (attachment !== undefined && parent === attachment && key === "base64" && isBase64Payload(v));
+    isBinaryField(key, v, parent) || (attachment !== undefined && parent === attachment && key === "base64" && isAttachmentPayload(v, mediaType));
   const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), skip);
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
@@ -353,6 +355,13 @@ function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig): HookR
   for (const call of calls) {
     if (call === null || typeof call !== "object" || !("tool_response" in call)) continue;
     const findings = resultScanner(cfg.allowlist, deadline);
+    // An image or a PDF arrives as a content block of the result, `{type:
+    // "image" | "document", source: {type: "base64", media_type, data}}`.
+    // Only such a block, at the top of the result, holds an attachment.
+    const blocks: unknown[] = Array.isArray(call.tool_response) ? call.tool_response : [];
+    const sources = new Set<unknown>();
+    for (const b of blocks as Array<{ type?: unknown; source?: { type?: unknown } } | null>)
+      if ((b?.type === "image" || b?.type === "document") && b.source?.type === "base64") sources.add(b.source);
     mapStrings(
       call.tool_response,
       (s) => {
@@ -362,7 +371,7 @@ function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig): HookR
         }
         return s;
       },
-      isBinaryField,
+      (key, v, parent) => isBinaryField(key, v, parent) || (key === "data" && sources.has(parent) && isAttachmentPayload(v, parent.media_type)),
     );
   }
   if (rules.size === 0) return PASS;

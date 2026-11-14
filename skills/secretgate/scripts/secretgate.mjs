@@ -9140,12 +9140,22 @@ function preToolPolicy(call, cfg, cwd, opts) {
 // src/hooks/scan-budget.ts
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
-var isBase64Payload = (value) => typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
+var isBase64Text = (value) => typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
 function isBinaryField(key, value, parent) {
-  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || // A model content block's attachment: `{type: "image" | "document", source:
-  // {type: "base64", media_type, data}}`, as PostToolBatch carries an image or a PDF.
-  key === "data" && parent.type === "base64" && typeof parent.media_type === "string" && !parent.media_type.startsWith("text/") && isBase64Payload(value) || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && isBase64Payload(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
-  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && isBase64Payload(value);
+  return key === "data" && ["image", "audio"].includes(parent.type ?? "") || key === "base64" && ["image", "audio"].includes(parent.type ?? "") && isBase64Text(value) || (key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value) || // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
+  key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && isBase64Text(value);
+}
+var ATTACHMENT_START = {
+  "image/png": "iVBORw0KGgo",
+  "image/jpeg": "/9j/",
+  "image/gif": "R0lGOD",
+  "image/webp": "UklGR",
+  "application/pdf": "JVBERi0"
+};
+function isAttachmentPayload(value, mediaType) {
+  if (typeof value !== "string" || typeof mediaType !== "string") return false;
+  const start = ATTACHMENT_START[mediaType.toLowerCase()];
+  return start !== void 0 && value.startsWith(start) && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 function eventRedactor(vault, source, allowlist) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
@@ -9553,7 +9563,8 @@ function postToolUse(input, cfg) {
   const vault = new Vault();
   const response = input.tool_response;
   const attachment = toolName === "Read" && (response?.type === "image" || response?.type === "pdf") ? response.file : void 0;
-  const skip = (key, v, parent) => isBinaryField(key, v, parent) || attachment !== void 0 && parent === attachment && key === "base64" && isBase64Payload(v);
+  const mediaType = response?.type === "pdf" ? "application/pdf" : attachment?.type;
+  const skip = (key, v, parent) => isBinaryField(key, v, parent) || attachment !== void 0 && parent === attachment && key === "base64" && isAttachmentPayload(v, mediaType);
   const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), skip);
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
@@ -9566,6 +9577,10 @@ function postToolBatch(input, cfg) {
   for (const call of calls) {
     if (call === null || typeof call !== "object" || !("tool_response" in call)) continue;
     const findings = resultScanner(cfg.allowlist, deadline);
+    const blocks = Array.isArray(call.tool_response) ? call.tool_response : [];
+    const sources = /* @__PURE__ */ new Set();
+    for (const b of blocks)
+      if ((b?.type === "image" || b?.type === "document") && b.source?.type === "base64") sources.add(b.source);
     mapStrings(
       call.tool_response,
       (s) => {
@@ -9575,7 +9590,7 @@ function postToolBatch(input, cfg) {
         }
         return s;
       },
-      isBinaryField
+      (key, v, parent) => isBinaryField(key, v, parent) || key === "data" && sources.has(parent) && isAttachmentPayload(v, parent.media_type)
     );
   }
   if (rules.size === 0) return PASS;

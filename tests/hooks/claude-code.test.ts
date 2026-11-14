@@ -189,21 +189,42 @@ describe("PostToolUse — output redaction", () => {
   // As Claude Code 2.1.323 hands them over. Scanned as text, the base64 of a
   // 1.5 MB PDF exceeded the scan budget and reading it stopped the session.
   it("passes a PDF or an image read as the attachment it is, whatever its size", async () => {
-    const base64 = "JVBERi0xLjQK".repeat(300_000); // 3.6 MB of base64
-    const pdf = { type: "pdf", file: { filePath: "/tmp/spec.pdf", base64, originalSize: 2_700_000 } };
-    const image = { type: "image", file: { base64, type: "image/jpeg", originalSize: 2_700_000, dimensions: { originalWidth: 1000, originalHeight: 1000 } } };
+    const pdfBytes = "JVBERi0xLjQK".repeat(300_000); // 3.6 MB of base64, as a PDF starts
+    const jpegBytes = "/9j/4AAQSkZJ".repeat(300_000);
+    const pdf = { type: "pdf", file: { filePath: "/tmp/spec.pdf", base64: pdfBytes, originalSize: 2_700_000 } };
+    const image = {
+      type: "image",
+      file: { base64: jpegBytes, type: "image/jpeg", originalSize: 2_700_000, dimensions: { originalWidth: 1000, originalHeight: 1000 } },
+    };
     for (const response of [pdf, image]) {
       const r = await handleClaudeCode("post-tool-use", postToolEvent("Read", { file_path: "/tmp/spec.pdf" }, response));
       expect(r, response.type).toEqual({ stdout: "", exit: 0 });
     }
-    // What is not base64 is not an attachment, and no other tool gets the exemption.
-    const text = await handleClaudeCode(
-      "post-tool-use",
-      postToolEvent("Read", {}, { type: "pdf", file: { filePath: "/tmp/x.pdf", base64: `key ${FAKE.githubPat}` } }),
-    );
-    expect(text.stdout).toContain("SECRETGATE_");
-    const other = await handleClaudeCode("post-tool-use", postToolEvent("mcp__x__y", {}, { type: "pdf", file: { base64: FAKE.awsKeyId } }));
-    expect(other.stdout).toContain("SECRETGATE_");
+  });
+
+  // The exemption is for a real attachment: base64 that starts with the bytes
+  // of the format it claims, in the envelope Read uses. Text that merely fits
+  // the base64 alphabet (a key is letters and digits) is text.
+  it("still redacts text that only looks like an attachment", async () => {
+    for (const [tool, response] of [
+      ["Read", { type: "pdf", file: { filePath: "/tmp/x.pdf", base64: `key ${FAKE.githubPat}` } }],
+      ["Read", { type: "pdf", file: { filePath: "/tmp/x.pdf", base64: FAKE.awsKeyId } }],
+      ["Read", { type: "image", file: { base64: FAKE.awsKeyId, type: "image/png" } }],
+      ["mcp__x__y", { type: "pdf", file: { base64: FAKE.awsKeyId } }],
+      // An MCP result shaped like a model attachment block: base64 "type", a non-text media type.
+      [
+        "mcp__store__get",
+        {
+          content: [{ type: "text", text: "ok" }],
+          structuredContent: { blob: { type: "base64", media_type: "application/json", data: `AWS ${FAKE.awsKeyId} x` } },
+        },
+      ],
+      ["mcp__store__get", { type: "document", source: { type: "base64", media_type: "application/pdf", data: FAKE.awsKeyId } }],
+    ] as const) {
+      const r = await handleClaudeCode("post-tool-use", postToolEvent(tool, {}, response));
+      expect(r.stdout, JSON.stringify(response).slice(0, 60)).toContain("SECRETGATE_");
+      expect(r.stdout).not.toContain(FAKE.awsKeyId);
+    }
   });
 
   // A Read event names its file, and the engine has path allowlists (upstream
@@ -270,6 +291,9 @@ describe("PostToolUse — output redaction", () => {
 // that still sees it (checked against Claude Code 2.1.263 and 2.1.323).
 describe("PostToolBatch — results no hook could redact", () => {
   let session = "s1";
+  beforeEach(() => {
+    session = "s1";
+  });
   const batchEvent = (...tool_calls: Array<{ tool_name: string; tool_response: unknown }>) =>
     JSON.stringify({
       session_id: session,
@@ -311,22 +335,35 @@ describe("PostToolBatch — results no hook could redact", () => {
 
   it("reads content-block results and leaves attachments alone, whatever their size", async () => {
     // As Claude Code 2.1.323 hands over a Read of an image and of a PDF.
-    const data = "iVBORw0KGgo".repeat(300_000); // 3.3 MB of base64: over one result's text budget
-    const image = { type: "image", source: { type: "base64", data, media_type: "image/png" } };
-    const pdf = { type: "document", source: { type: "base64", media_type: "application/pdf", data } };
+    const image = { type: "image", source: { type: "base64", data: "iVBORw0KGgoA".repeat(300_000), media_type: "image/png" } };
+    const pdf = { type: "document", source: { type: "base64", media_type: "application/pdf", data: "JVBERi0xLjQK".repeat(300_000) } };
     const clean = await handleClaudeCode(
       "post-tool-batch",
       batchEvent({ tool_name: "Read", tool_response: [image] }, { tool_name: "Read", tool_response: [{ type: "text", text: "PDF file read" }, pdf] }),
     );
     expect(clean.stdout).toBe("");
-    // A text attachment is text, and what is not base64 is not an attachment.
-    for (const source of [
-      { type: "text", media_type: "text/plain", data: `key ${FAKE.awsKeyId}` },
-      { type: "base64", media_type: "image/png", data: `key ${FAKE.githubPat}` },
-    ]) {
-      session = `s-${source.type}`; // a stop closes the session it happened in
-      const r = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "mcp__x__env", tool_response: [{ type: "document", source }] }));
-      expect(JSON.parse(r.stdout).stopReason, source.type).toContain("mcp__x__env");
+  });
+
+  it("scans as text what only looks like an attachment", async () => {
+    const block = (source: Record<string, unknown>, type = "document") => [
+      { type: "text", text: "ok" },
+      { type, source },
+    ];
+    for (const [label, response] of [
+      ["a text source", block({ type: "text", media_type: "text/plain", data: `key ${FAKE.awsKeyId}` })],
+      ["not base64", block({ type: "base64", media_type: "image/png", data: `key ${FAKE.awsKeyId}` }, "image")],
+      ["spaced words in the base64 alphabet", block({ type: "base64", media_type: "application/csv", data: `AWS ${FAKE.awsKeyId} x` })],
+      ["a media type that is no attachment", block({ type: "base64", media_type: "application/json", data: FAKE.awsKeyId })],
+      ["a key where a PNG should start", block({ type: "base64", media_type: "image/png", data: FAKE.awsKeyId }, "image")],
+      ["a block that is not an attachment", block({ type: "base64", media_type: "application/pdf", data: FAKE.awsKeyId }, "note")],
+      [
+        "an attachment shape below the top level",
+        [{ type: "text", text: "ok", extra: { type: "document", source: { type: "base64", media_type: "application/pdf", data: FAKE.awsKeyId } } }],
+      ],
+    ] as const) {
+      session = `s-${label}`; // a stop closes the session it happened in
+      const r = await handleClaudeCode("post-tool-batch", batchEvent({ tool_name: "mcp__x__env", tool_response: response }));
+      expect(r.stdout, label).toContain("aws-access-token");
     }
     session = "s1";
   });

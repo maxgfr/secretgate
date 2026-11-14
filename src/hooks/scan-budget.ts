@@ -9,20 +9,40 @@ export const SCAN_CAP = 2 * 1024 * 1024;
 // scan throws and the hook fails closed.
 export const SCAN_DEADLINE_MS = 5000;
 
-/** Base64 and nothing else: what an attachment's payload looks like. */
-export const isBase64Payload = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
+const isBase64Text = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9+/=\s]*$/.test(value);
 
-export function isBinaryField(key: string, value: unknown, parent: { type?: string; encoding?: unknown; mime?: unknown; media_type?: unknown }): boolean {
+export function isBinaryField(key: string, value: unknown, parent: { type?: string; encoding?: unknown; mime?: unknown }): boolean {
   return (
     (key === "data" && ["image", "audio"].includes(parent.type ?? "")) ||
-    // A model content block's attachment: `{type: "image" | "document", source:
-    // {type: "base64", media_type, data}}`, as PostToolBatch carries an image or a PDF.
-    (key === "data" && parent.type === "base64" && typeof parent.media_type === "string" && !parent.media_type.startsWith("text/") && isBase64Payload(value)) ||
-    (key === "base64" && ["image", "audio"].includes(parent.type ?? "") && isBase64Payload(value)) ||
+    (key === "base64" && ["image", "audio"].includes(parent.type ?? "") && isBase64Text(value)) ||
     ((key === "url" || key === "uri") && typeof value === "string" && /^data:(image|audio)\//.test(value)) ||
     // OpenCode 2 `read` of an image: `{ content, encoding: "base64", mime: "image/png" }`.
-    (key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && isBase64Payload(value))
+    (key === "content" && parent.encoding === "base64" && typeof parent.mime === "string" && /^(image|audio)\//.test(parent.mime) && isBase64Text(value))
   );
+}
+
+// How the base64 of each attachment format begins: the bytes a PNG, a JPEG, a
+// GIF, a WebP or a PDF starts with.
+const ATTACHMENT_START: Record<string, string> = {
+  "image/png": "iVBORw0KGgo",
+  "image/jpeg": "/9j/",
+  "image/gif": "R0lGOD",
+  "image/webp": "UklGR",
+  "application/pdf": "JVBERi0",
+};
+
+/**
+ * The payload of an image or a PDF handed to the model as an attachment:
+ * unbroken base64 that starts with the bytes of the format it claims. The
+ * base64 alphabet alone proves nothing — a key is letters and digits too, and
+ * `AWS <key id> <secret key>` fits a pattern that allows spaces. Callers
+ * decide WHERE an attachment may stand (Claude Code's Read envelopes); this
+ * says whether the value is one.
+ */
+export function isAttachmentPayload(value: unknown, mediaType: unknown): value is string {
+  if (typeof value !== "string" || typeof mediaType !== "string") return false;
+  const start = ATTACHMENT_START[mediaType.toLowerCase()];
+  return start !== undefined && value.startsWith(start) && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
 // One budget for the entire event, including nested MCP strings.
