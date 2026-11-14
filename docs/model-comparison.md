@@ -260,15 +260,16 @@ section 5's figures on them: 65 findings in 17 files, recall 0.9772.
 value is restored locally) and a miss is a leak. So a rule may drop a finding
 only when the text makes it structurally certain that the value is public or
 not a credential. A first pass also dropped values on their look (dictionary
-words only, a masked middle, an `EXAMPLE` suffix, hex after "GPG key"); a
-review showed real passwords of each shape going unflagged, and those filters
-were taken back out. 19 of the 40 false positives meet the bar:
+words only, a masked middle, an `EXAMPLE` suffix, hex after "GPG key") and on
+what their name says they are for (a cache key, a fingerprint); two reviews
+showed real values of each kind going unflagged, and those filters were taken
+back out. 19 of the 40 false positives meet the bar:
 
 | class (section 5) | before | after | what makes it certain |
 | --- | ---: | ---: | --- |
 | example token passed to an auth helper | 12 | 0 | a GitHub token with one character eight times in a row: a generator does that about once in 10^11 tokens |
 | variable name matched as a value | 4 | 0 | the "value" is the name it is assigned to |
-| TLS public-key pins | 3 | 0 | the value's own name says "public key", with no credential word in it |
+| TLS public-key pins | 3 | 0 | the value's own name says "public key", and no keyword of the rules that trust a name stands beside it |
 | example header value, three copies | 12 | 12 | nothing: words only, and so is somebody's password |
 | placeholder test password in skycmd | 1 | 1 | the same |
 | release GPG key fingerprints | 3 | 3 | nothing: "GPG key" before 40 hex digits is likely a fingerprint, not certainly one |
@@ -283,24 +284,28 @@ By rule, the 45 are password-assignment 26, generic-api-key 7, url-credentials
 population a verifier has to judge: nothing in the text separates them from
 real values.
 
-The same pass has rules for cases the bench holds and the census does not: a
-whole Stripe publishable key (`pk_live_`, `pk_test_`), and a name that says
-"cache key" or "fingerprint". On the bench:
+The bench holds one more case the census does not: a whole Stripe publishable
+key (`pk_live_`, `pk_test_`) under a name that itself says public or
+publishable. On the bench:
 
 | rules | recall | precision | accuracy | TP | FP | FN | TN |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | before | 0.9772 | 0.7183 | 0.7946 | 987 | 387 | 23 | 599 |
-| after | 0.9772 | 0.8343 | 0.8903 | 987 | 196 | 23 | 790 |
+| after | 0.9772 | 0.8103 | 0.8727 | 987 | 231 | 23 | 755 |
 
-Of the 196 that remain, 177 are the test keys secretgate redacts on purpose
-and 19 are the bench's placeholders (an `EXAMPLE` suffix, `your-api-key-here`,
-a partly masked key), which are flagged for the reason given above. Against
-"secret or test credential" the rules now reach recall 0.9806 and precision
-0.9839. The 23 misses are the same 23 texts.
+Of the 231 that remain, 177 are the test keys secretgate redacts on purpose,
+35 are random values under a name that says "cache key" or "fingerprint", and
+19 are the bench's placeholders (an `EXAMPLE` suffix, `your-api-key-here`, a
+partly masked key). The last two groups are flagged for the reason given
+above: a name that says what a value is for does not say it may be shown, and
+a value's look proves nothing. Against "secret or test credential" the rules
+now reach recall 0.9806 and precision 0.9557. The 23 misses are the same 23
+texts.
 
-The pass also added one rule, `paired-credential`: a value attached to a
-detected credential by `:`, `=` or `,` (the secret key after the key id in an
-AWS credentials CSV). It finds nothing in the census files or in the bench.
+The pass also added one rule, `aws-secret-access-key`: the 40 base64
+characters that follow an AWS access key id after `,` or `:` (a credentials
+CSV row, where nothing names the secret key). It finds nothing in the census
+files or in the bench.
 
 **The 23 bench secrets the rules miss** are not all secrets a rule should catch:
 
