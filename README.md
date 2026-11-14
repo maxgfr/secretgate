@@ -157,8 +157,10 @@ Narrowest fix first:
    history and of `ps`
 3. `secretgate allow --path 'tests/fixtures/**'`
 4. `secretgate allow --rule <rule-id>` (last resort)
-5. one-off prompt bypass: include `[allow-secret]` in the prompt (it exempts
-   what you typed, never content attached to the prompt)
+5. one-off prompt bypass: include `[allow-secret]` in the prompt. On OpenCode
+   it exempts what you typed, never a file attached to the prompt. Claude Code
+   and Codex inline `@file` mentions themselves: there the tag also lets a
+   sensitive `@file` through, as the block message says
 6. whole firewall off for one run: type `/secretgate off` (see below)
 
 Projects can commit shared entries in `.secretgate.json`:
@@ -353,6 +355,8 @@ Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
   a possible second engine and **not adopted**. It beats them on its own
   synthetic bench, but it flags about 60 % of real files that hold no secret
   (method, numbers and limits: [docs/model-comparison.md](docs/model-comparison.md)).
+  The same page records the rules' own false positives on 8,823 real files
+  (40, then 5 after the rules learnt to read what a value says of itself).
 - Verified against **real `claude -p` sessions** by inspecting the session
   transcript: a secret in a tool result never appears in what reached the
   model (only the placeholder does), and restore-on-write puts the real value
@@ -386,6 +390,7 @@ pnpm test                 # vitest
 pnpm run rules:sync       # refresh rules/gitleaks.toml from upstream + regenerate
 pnpm run check:build      # reproducible-bundle + fresh-rules gate
 SECRETGATE_DIFFERENTIAL=1 pnpm exec vitest run tests/engine/differential.test.ts  # needs gitleaks
+node scripts/rule-candidates.mjs src --out /tmp/candidates.jsonl   # every rule finding with its context, values masked (dev tool)
 pnpm run build && pnpm run build:binaries --native   # needs Bun; dist/secretgate-<platform>-<arch>
 pnpm run smoke:binary dist/secretgate-macos-arm64    # init + hooks through the binary, no node on PATH
 ```

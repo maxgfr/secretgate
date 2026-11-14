@@ -242,11 +242,100 @@ the same roots, without sampling, as the hooks scan tool output. It covered
   - the line's text, and the whole scanned text, from which any bounded
     context window can be cut;
   - the source path when the caller passes one. `scan` does; the hooks do not
-    pass one for tool output today, although a Read event carries the file
-    path in its input.
+    pass one for tool output, although a Read event carries the file path in
+    its input (on purpose: see section 6).
 
   The key name is not a separate field. For assignment-style rules it is the
   part of the match before the operator.
+
+### 6. What was done about the rules afterwards
+
+Measured the same day on the same files, with the rules as they stand after
+the changes this section describes. The secretgate roots are a copy of the tree
+at `b1c59f5`, so the files do not move with the work; skycmd's tree had grown
+by two files since section 5 (8,823 files). At `b1c59f5` the script returns
+section 5's figures on them: 65 findings in 17 files, recall 0.9772.
+
+**Rule noise.** 35 of the 40 false positives were values that say themselves
+they are not a usable secret, and a rule can read that without losing a
+detection:
+
+| class (section 5) | before | after | what the rule reads |
+| --- | ---: | ---: | --- |
+| example token passed to an auth helper | 12 | 0 | a GitHub token with one character eight times in a row |
+| example header value, three copies | 12 | 0 | a value made only of placeholder words |
+| placeholder test password in skycmd | 1 | 0 | the same |
+| variable name matched as a value | 4 | 0 | the "value" repeats the name it is assigned to |
+| TLS public-key pins | 3 | 0 | the value's own name says "public key" |
+| release GPG key fingerprints | 3 | 0 | hex after a name that says "GPG key" |
+| base64 example credentials | 3 | 3 | nothing: real `_auth` values look the same |
+| doc-comment example of an API token | 2 | 2 | nothing: twelve letters and digits |
+| **false positives** | **40** | **5** | |
+| deliberate fakes in test fixtures | 25 | 24 | a Stripe publishable key in skycmd's generator is no longer flagged: it is public by design |
+| **findings** | **65** | **29** | in 17, then 8 files |
+
+By rule, the 29 are password-assignment 13, url-credentials 7,
+credit-card-number 4, generic-api-key 4 and private-key 1. The five that remain
+are the population a verifier has to judge; no rule separates them from real
+values.
+
+The same pass has rules for cases the bench holds and the census does not: a
+Stripe publishable key (`pk_live_`, `pk_test_`), a value ending in `EXAMPLE` or
+partly masked, a name that says "cache key" or "fingerprint". Together they
+remove every bench false positive except the test keys:
+
+| rules | recall | precision | accuracy | TP | FP | FN | TN |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| before | 0.9772 | 0.7183 | 0.7946 | 987 | 387 | 23 | 599 |
+| after | 0.9772 | 0.8479 | 0.8998 | 987 | 177 | 23 | 809 |
+
+The 177 that remain are the test keys secretgate redacts on purpose. Against
+"secret or test credential" the rules now reach recall 0.9806 and precision
+1.0000. The 23 misses are the same 23 texts.
+
+**The 23 bench secrets the rules miss** are not all secrets a rule should catch:
+
+- 18 are AWS access key ids that AWS could not have issued. The generator draws
+  their 16 characters from `A-Z0-9`; AWS uses base32 (`A-Z2-7`), and each of the
+  18 holds a 0, 1, 8 or 9. The AWS rule rightly does not match them. The
+  generic rule does not take over: 17 sit under a name ending in `key_id` or
+  `KeyId`, which upstream allowlists as an identifier, and one has an entropy
+  of 3.5 or less. A wider AWS pattern would catch them and nothing real. The generator
+  is what to fix.
+- 4 are 32 hexadecimal characters under `api_secret`, `mailgun_api_key` or
+  `datadog_api_key`, with an entropy at or below the generic rule's 3.5. Hex
+  cannot exceed 4.0, so part of every batch of random hex keys falls under
+  that floor. A hex-aware floor would catch them; it would also flag more
+  hashes sitting under a name with "key" in it, and that trade needs a larger
+  corpus than this one to be measured.
+- 1 is an `sk-proj-` key whose random body happens to spell "best", one of the
+  1,446 stopwords upstream applies to the generic rule's values. A rule keyed
+  on the `sk-proj-` prefix would catch it safely. The stopword list costs the
+  generic rule a share of all long random values, by chance alone.
+
+**Source path.** Passing a Read's file path to the engine was measured and not
+done. With a path, the census drops from 65 findings to 26 (at `b1c59f5`): all
+39 findings under `node_modules` disappear, because upstream's path allowlist
+exempts that tree whole, with lockfiles, vendor trees and more. A path only
+ever switches scanning off: the allowlists return no finding, and the four
+path-scoped rules, which run everywhere when there is no path, stop running on
+other files. And a path is what a repository or an agent arranges most easily:
+a secret copied under `node_modules/` or into a file named
+`package-lock.json` would reach the model unredacted. The same goes for the
+user's own path globs, which lift the read denial and, as the README says, keep
+output redaction. A test now pins that a read is redacted whatever its path.
+
+**Candidate export.** `scripts/rule-candidates.mjs` writes one JSON line per
+rule finding with what section 5 lists (rule, offsets of the value, of the
+match and of every capture group, line, name, entropy, a bounded context
+window, file). Values are masked by default: every letter and digit is replaced
+by another of the same class, wherever the walked files repeat the value. On
+the census files it writes 29 candidates from 8 files. With `--generic` it adds
+the values assigned to credential-sounding names and the values of
+authorization-style headers that no rule proposes, whatever their entropy or
+quoting: 1,209 candidates from 303 files, of which 1,147 assignments and 33
+headers. In both masked exports, no candidate value of 8 characters or more
+appears in any context field.
 
 ## Limits
 
@@ -298,6 +387,16 @@ nice -n 19 node scripts/model-compare.mjs \
 # the two chunk-size variants of section 3
 nice -n 19 node scripts/model-compare.mjs --wasm … --model … --no-material --fresh-runs 0 \
   --chunk-lines 3 --chunk-chars 120 --clean …   # then --chunk-lines 7 --chunk-chars 600
+```
+
+Section 6 uses the same command, with `--max-files 1 --no-material
+--fresh-runs 0` to skip what it does not need, once from a copy of the tree at
+`b1c59f5` (`git archive b1c59f5 | tar -x -C /tmp/sg-base`) and once from the
+current tree, both over the copy's `src`, `tests` and `README.md`. The export:
+
+```sh
+nice -n 19 node scripts/rule-candidates.mjs src tests README.md node_modules/.pnpm \
+  ../skycmd/crates ../skycmd/docs --out /tmp/candidates.jsonl   # add --generic for the wide mode
 ```
 
 The script prints the numbers behind every table on this page. It writes them
