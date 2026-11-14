@@ -226,8 +226,32 @@ describe("audit · shell constructs that reached a sensitive file", () => {
     expect(await decide("Bash", { command })).toBe("deny");
   });
 
-  it("still lets fixtures be renamed among themselves", async () => {
-    expect(await decide("Bash", { command: "mv tests/fixtures/server.key tests/fixtures/old.key" })).toBeUndefined();
+  // The same move, in the other spellings a shell has for it.
+  it.each([
+    "mv -t tests .env",
+    "mv -t testdata/ .env",
+    "mv -vt tests .env",
+    "mv --target-directory tests .env",
+    "ln -t __mocks__ .env",
+    "git mv src/server.key tests/fixtures/second.key",
+    "git mv -k .env tests/.env",
+    "git -C . mv .env tests/",
+    "ditto .env tests/.env",
+    "find . -maxdepth 1 -name .env -exec mv {} tests/ ;",
+    "find src -name '*.key' -exec ln {} tests/fixtures/ ;",
+  ])("denies %j", async (command) => {
+    expect(await decide("Bash", { command })).toBe("deny");
+  });
+
+  it.each([
+    "mv tests/fixtures/server.key tests/fixtures/old.key",
+    "mv -t src tests/fixtures/server.key",
+    "git mv tests/fixtures/server.key tests/fixtures/old.key",
+    "git mv src/a.ts src/b.ts",
+    "git mv .env .env.bak",
+    "find . -name '*.log' -exec mv {} testdata/ ;",
+  ])("still allows %j: no real secret changes place", async (command) => {
+    expect(await decide("Bash", { command })).toBeUndefined();
   });
 
   it("a recursive read of a tree holding a real key is refused, and says which file", async () => {

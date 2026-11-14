@@ -2262,6 +2262,7 @@ var COMMAND_SPECS = {
   },
   find: {}
 };
+for (const cmd of ["cp", "mv", "ln", "install"]) COMMAND_SPECS[cmd] = { valued: ["-t", "--target-directory"] };
 COMMAND_SPECS.egrep = COMMAND_SPECS.grep;
 COMMAND_SPECS.fgrep = COMMAND_SPECS.grep;
 COMMAND_SPECS.gawk = COMMAND_SPECS.awk;
@@ -2617,7 +2618,7 @@ function analyzeCommand(sc, cwds, ctx, depth) {
     return void 0;
   }
   if (cmd === "cp" || cmd === "mv" || cmd === "ln" || cmd === "install") {
-    analyzeAlias(cmd, targets, flags, cwds, ctx, push);
+    analyzeAlias(cmd, targets, flags, cwds, ctx, push, optionValues(parsed, "-t", "--target-directory")[0]);
     return void 0;
   }
   if (cmd === "sed") {
@@ -2702,7 +2703,9 @@ function analyzeFind(words, k, cwds, ctx, depth, push) {
       j++;
       if (argv.length === 0) continue;
       const exec = basename(argv[0].text);
-      if (/^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq)$/.test(exec))
+      if (/^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq|mv|ln|ditto|install|rsync|scp|dd)$/.test(
+        exec
+      ))
         readsContent = true;
       analyzeCommand({ words: argv, redirects: [], stdinLiteral: false }, cwds, ctx, depth + 1);
     }
@@ -2716,17 +2719,17 @@ function analyzeFind(words, k, cwds, ctx, depth, push) {
   }
   for (const w of roots) push(w, "search", { force: true, walk });
 }
-function analyzeAlias(cmd, targets, flags, cwds, ctx, push) {
-  if (targets.length < 2) {
+function analyzeAlias(cmd, targets, flags, cwds, ctx, push, into) {
+  if (into === void 0 && targets.length < 2) {
     for (const w of targets) push(w, "read");
     return;
   }
-  const destWord = targets[targets.length - 1];
-  const sources = targets.slice(0, -1);
+  const destWord = into ?? targets[targets.length - 1];
+  const sources = into ? targets : targets.slice(0, -1);
   const symbolic = cmd === "ln" && hasFlag(flags, ["s"], ["--symbolic"]);
   for (const cwd of cwds) {
     const dest = resolveWord(destWord, cwd, ctx.out).find((r) => r.type === "path")?.path;
-    const intoDir = dest !== void 0 && (sources.length > 1 || isDirectory(dest));
+    const intoDir = dest !== void 0 && (into !== void 0 || sources.length > 1 || isDirectory(dest));
     for (const w of sources) {
       const base = symbolic && dest !== void 0 && !isAbsolute(expandHome(w.text)) ? intoDir ? dest : dirname(dest) : cwd;
       for (const r of resolveWord(w, base, ctx.out)) {
@@ -2871,6 +2874,10 @@ function analyzeGit(words, k, cwds, ctx) {
     if (!m || w.text.includes("://") || sub !== "show" && sub !== "cat-file") continue;
     const relToCwd = /^\.\.?\//.test(m[1]);
     push({ ...w, text: m[1] }, "read", relToCwd ? here : roots, true);
+  }
+  if (sub === "mv") {
+    analyzeAlias("mv", pos, flags, here, ctx, (w, kind) => push(w, kind, here));
+    return;
   }
   if (!GIT_CONTENT.has(sub)) {
     for (const w of pos) push(w, "list", here);
@@ -3302,6 +3309,7 @@ var CONTENT_COMMANDS = /* @__PURE__ */ new Set([
   "split",
   "look",
   "cp",
+  "ditto",
   "install",
   "dd",
   "rsync",

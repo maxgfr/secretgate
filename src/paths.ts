@@ -246,6 +246,7 @@ const CONTENT_COMMANDS = new Set([
   "split",
   "look",
   "cp",
+  "ditto",
   "install",
   "dd",
   "rsync",

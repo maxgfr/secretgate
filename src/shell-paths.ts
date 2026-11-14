@@ -871,6 +871,8 @@ const COMMAND_SPECS: Record<string, OptionSpec> = {
   },
   find: {},
 };
+// GNU `mv -t DIR SRC…` (and cp, ln, install): the destination comes first.
+for (const cmd of ["cp", "mv", "ln", "install"]) COMMAND_SPECS[cmd] = { valued: ["-t", "--target-directory"] };
 COMMAND_SPECS.egrep = COMMAND_SPECS.grep!;
 COMMAND_SPECS.fgrep = COMMAND_SPECS.grep!;
 COMMAND_SPECS.gawk = COMMAND_SPECS.awk!;
@@ -1349,7 +1351,7 @@ function analyzeCommand(sc: SimpleCommand, cwds: Cwds, ctx: Context, depth: numb
     return undefined;
   }
   if (cmd === "cp" || cmd === "mv" || cmd === "ln" || cmd === "install") {
-    analyzeAlias(cmd, targets, flags, cwds, ctx, push);
+    analyzeAlias(cmd, targets, flags, cwds, ctx, push, optionValues(parsed, "-t", "--target-directory")[0]);
     return undefined;
   }
   // `sed -i` / `-I` (BSD) / `--in-place` rewrites its files; otherwise it prints them.
@@ -1453,7 +1455,13 @@ function analyzeFind(
       j++;
       if (argv.length === 0) continue;
       const exec = basename(argv[0]!.text);
-      if (/^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq)$/.test(exec))
+      // Printing, copying, and moving or linking under another name: each puts
+      // what find hands over within reach of a later read.
+      if (
+        /^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq|mv|ln|ditto|install|rsync|scp|dd)$/.test(
+          exec,
+        )
+      )
         readsContent = true;
       analyzeCommand({ words: argv, redirects: [], stdinLiteral: false }, cwds, ctx, depth + 1);
     }
@@ -1469,8 +1477,9 @@ function analyzeFind(
 }
 
 // cp / mv / ln / install: the sources are read (a copied .env can be printed
-// next), the last argument is the destination. The second name is recorded,
-// so a later `cat` of it in the same command reaches the source.
+// next), the last argument is the destination — or the value of `-t DIR`,
+// which makes every argument a source. The second name is recorded, so a later
+// `cat` of it in the same command reaches the source.
 function analyzeAlias(
   cmd: string,
   targets: ShellWord[],
@@ -1478,17 +1487,18 @@ function analyzeAlias(
   cwds: Cwds,
   ctx: Context,
   push: (w: ShellWord, kind: PathRefKind, opts?: Push) => void,
+  into?: ShellWord,
 ): void {
-  if (targets.length < 2) {
+  if (into === undefined && targets.length < 2) {
     for (const w of targets) push(w, "read");
     return;
   }
-  const destWord = targets[targets.length - 1]!;
-  const sources = targets.slice(0, -1);
+  const destWord = into ?? targets[targets.length - 1]!;
+  const sources = into ? targets : targets.slice(0, -1);
   const symbolic = cmd === "ln" && hasFlag(flags, ["s"], ["--symbolic"]);
   for (const cwd of cwds) {
     const dest = resolveWord(destWord, cwd, ctx.out).find((r) => r.type === "path")?.path;
-    const intoDir = dest !== undefined && (sources.length > 1 || isDirectory(dest));
+    const intoDir = dest !== undefined && (into !== undefined || sources.length > 1 || isDirectory(dest));
     for (const w of sources) {
       // `ln -s TARGET LINK`: a relative TARGET is resolved from the link's directory.
       const base = symbolic && dest !== undefined && !isAbsolute(expandHome(w.text)) ? (intoDir ? dest : dirname(dest)) : cwd;
@@ -1667,6 +1677,12 @@ function analyzeGit(words: ShellWord[], k: number, cwds: Cwds, ctx: Context): vo
     if (!m || w.text.includes("://") || (sub !== "show" && sub !== "cat-file")) continue;
     const relToCwd = /^\.\.?\//.test(m[1]!);
     push({ ...w, text: m[1]! }, "read", relToCwd ? here : roots, true);
+  }
+  // `git mv [-k] SRC… DST` renames like `mv` does: under its new name a
+  // sensitive file may become readable.
+  if (sub === "mv") {
+    analyzeAlias("mv", pos, flags, here, ctx, (w, kind) => push(w, kind, here));
+    return;
   }
   if (!GIT_CONTENT.has(sub)) {
     // add/commit/status/checkout…: names only. Still resolve explicit paths.
