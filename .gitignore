@@ -6,6 +6,9 @@ coverage/
 dist/
 build/
 
+# agent worktrees (one per branch, never part of the repository)
+.claude/worktrees/
+
 # skills installed by `npx skills add`
 .agents/skills/
 .claude/skills/
