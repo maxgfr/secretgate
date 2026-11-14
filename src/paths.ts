@@ -2,7 +2,7 @@ import { type Dirent, lstatSync, readdirSync, readFileSync, realpathSync, statSy
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isAllowedPath, pathMatchesGlob, type UserAllowlist } from "./engine/allowlist.js";
-import { analyzeShell, isGitContentCommand, type ShellAnalysis, type WalkSpec } from "./shell-paths.js";
+import { aliasOf, analyzeShell, isGitContentCommand, type ShellAnalysis, type WalkSpec } from "./shell-paths.js";
 import { defaultVaultHome } from "./vault/vault.js";
 
 export function expandHome(p: string): string {
@@ -303,6 +303,10 @@ export interface SensitiveShellRead {
   below?: string;
 }
 
+// Would a file still be refused under this name, once it is there?
+const staysSensitive = (name: string, allowlist: UserAllowlist | undefined, cwd: string): boolean =>
+  sensitivePathMatch(name, allowlist, cwd, { asIfPresent: true }) !== undefined;
+
 /**
  * The first sensitive read in an analysed command, or undefined. A path counts
  * when a content command reads it, when it is an input redirection of ANY
@@ -320,7 +324,11 @@ export function sensitiveShellRead(analysis: ShellAnalysis, allowlist: UserAllow
       // inside a fixture directory (`mv .env tests/.env`) would not be.
       if (ref.aliasTo !== undefined && sensitivePathMatch(ref.aliasTo, allowlist, cwd, { asIfPresent: true })) continue;
     } else if (!ref.redirect && !ref.walk && !isContentCommand(ref.command)) continue;
-    if (sensitivePathMatch(ref.path, allowlist, cwd)) return { raw: ref.raw };
+    // A walk that moves or links what it finds (`find … -exec mv {} DEST`) is
+    // judged like the plain `mv`: only a file whose new name would be readable counts.
+    const moved = ref.walk?.aliasTo;
+    if (sensitivePathMatch(ref.path, allowlist, cwd) && !(moved && !isDirectory(ref.path) && staysSensitive(aliasOf(moved, ref.path), allowlist, cwd)))
+      return { raw: ref.raw };
     if (ref.walk && isDirectory(ref.path)) {
       const below = sensitiveFileBelow(ref.path, ref.walk, allowlist, cwd);
       if (below === "overflow") return { raw: ref.raw, tooMany: true };
@@ -457,10 +465,15 @@ export function sensitiveFileBelow(dir: string, spec: WalkSpec, allowlist: UserA
     // could be sensitive, or a link that could lead to one.
     if (!e.isSymbolicLink() && !SENSITIVE_GLOBS.some((g) => pathMatchesGlob(abs, g, true))) return undefined;
     if (sensitivePathMatch(abs, allowlist, cwd)) {
+      // Moved or linked, not read: it counts only if its new name frees it.
+      if (spec.aliasTo && staysSensitive(aliasOf(spec.aliasTo, abs), allowlist, cwd)) return undefined;
       hit = abs;
       return "stop";
     }
     return undefined;
   });
+  // A tree too large to check, moved somewhere that frees nothing a `.env`
+  // would be: not refused (a plain `mv` of an ordinary tree is not either).
+  if (result === "overflow" && spec.aliasTo && staysSensitive(aliasOf(spec.aliasTo, join(canonical(dir), ".env")), allowlist, cwd)) return undefined;
   return result === "overflow" ? "overflow" : hit;
 }

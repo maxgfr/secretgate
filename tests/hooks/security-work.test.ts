@@ -239,6 +239,9 @@ describe("audit · shell constructs that reached a sensitive file", () => {
     "ditto .env tests/.env",
     "find . -maxdepth 1 -name .env -exec mv {} tests/ ;",
     "find src -name '*.key' -exec ln {} tests/fixtures/ ;",
+    "find . -type f -exec mv -t testdata {} ;",
+    "find src -name '*.key' -exec mv {} {}.txt ;",
+    "find . -name .env -execdir mv {} tests/ ;",
   ])("denies %j", async (command) => {
     expect(await decide("Bash", { command })).toBe("deny");
   });
@@ -250,6 +253,17 @@ describe("audit · shell constructs that reached a sensitive file", () => {
     "git mv src/a.ts src/b.ts",
     "git mv .env .env.bak",
     "find . -name '*.log' -exec mv {} testdata/ ;",
+    // A project that merely CONTAINS a .env and a key file: moving or linking
+    // them through find leaves them under names that are still refused,
+    // exactly as `mv src/server.key lib/` does.
+    "mv src/server.key lib/",
+    "find . -path ./node_modules -prune -o -type f -name '*.js' -exec mv {} dist/ ;",
+    "find . \\( -name '*.js' -o -name '*.mjs' \\) -exec mv {} dist/ ;",
+    "find . -not -name '*.env' -type f -exec mv {} dist/ ;",
+    "find src -type f -exec mv {} lib/ ;",
+    "find . -maxdepth 1 -type f -exec mv {} archive/ ;",
+    "find . -type f -exec ln -s {} links/ ;",
+    "find . -name .env -exec mv {} {}.bak ;",
   ])("still allows %j: no real secret changes place", async (command) => {
     expect(await decide("Bash", { command })).toBeUndefined();
   });

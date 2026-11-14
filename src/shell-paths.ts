@@ -61,6 +61,21 @@ export interface WalkSpec {
   include: string[];
   exclude: string[];
   excludeDir: string[];
+  /** The walk does not print what it finds: it moves or links each file
+   *  (`find … -exec mv {} DEST`). Where to, with `{}` standing for the file,
+   *  absolute — or relative when the command runs in each file's own
+   *  directory (`-execdir`). A file counts only if its new name leaves it
+   *  readable; see aliasOf. */
+  aliasTo?: { dest: string; perFileDir: boolean };
+}
+
+/** The name a file found by a moving walk ends up under. */
+export function aliasOf(spec: NonNullable<WalkSpec["aliasTo"]>, file: string): string {
+  const dest = spec.dest.replaceAll("{}", spec.perFileDir ? `./${basename(file)}` : file);
+  const abs = spec.perFileDir ? resolve(dirname(file), dest) : dest;
+  // `{}` in the destination spells the new name out; otherwise a directory takes the file under its own name.
+  if (spec.dest.includes("{}")) return abs;
+  return spec.dest.endsWith("/") || isDirectory(abs) ? join(abs, basename(file)) : abs;
 }
 
 export interface PathRef {
@@ -1443,6 +1458,8 @@ function analyzeFind(
   const names: string[] = [];
   let complex = false;
   let readsContent = false;
+  // `-exec mv {} DEST` / `-exec ln {} DEST`: where the files found go.
+  const moves: Array<NonNullable<WalkSpec["aliasTo"]>> = [];
   for (; j < words.length; j++) {
     const t = words[j]!.text;
     if (t === "-name" || t === "-iname") names.push(words[++j]?.text ?? "");
@@ -1455,18 +1472,40 @@ function analyzeFind(
       j++;
       if (argv.length === 0) continue;
       const exec = basename(argv[0]!.text);
-      // Printing, copying, and moving or linking under another name: each puts
-      // what find hands over within reach of a later read.
+      // Printing and copying read what find hands over. Moving or linking
+      // does not: it only matters where the file ends up, exactly as for a
+      // plain `mv` (a `.env` moved to `dist/` is still a `.env`).
       if (
-        /^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq|mv|ln|ditto|install|rsync|scp|dd)$/.test(
+        /^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq|ditto|install|rsync|scp|dd)$/.test(
           exec,
         )
       )
         readsContent = true;
+      else if (exec === "mv" || exec === "ln") {
+        const all = words.slice(start, j);
+        const parsed = parseArgs(all, 1, COMMAND_SPECS[exec]);
+        const dest = optionValues(parsed, "-t", "--target-directory")[0] ?? parsed.pos[parsed.pos.length - 1];
+        const into = optionValues(parsed, "-t", "--target-directory").length > 0;
+        // `mv x {}` writes over the file found; nothing gets a second name.
+        if (dest !== undefined && dest.text !== "{}") {
+          const perFileDir = t === "-execdir" || t === "-okdir";
+          const text = into && !dest.text.endsWith("/") ? `${dest.text}/` : dest.text;
+          const base = cwds.find((c) => c !== undefined);
+          if (perFileDir || text.startsWith("{}")) moves.push({ dest: text, perFileDir });
+          else if (base !== undefined) moves.push({ dest: resolve(base, expandHome(text)) + (text.endsWith("/") ? "/" : ""), perFileDir });
+          else readsContent = true; // a destination that cannot be placed: judged as a read
+        }
+      }
       analyzeCommand({ words: argv, redirects: [], stdinLiteral: false }, cwds, ctx, depth + 1);
     }
   }
-  const walk: WalkSpec | undefined = readsContent ? { hidden: true, ignore: false, include: complex ? [] : names, exclude: [], excludeDir: [] } : undefined;
+  // One destination can be followed file by file; several execs, or a move
+  // next to a read, are judged as a read of everything found.
+  const aliasTo = !readsContent && moves.length === 1 ? moves[0] : undefined;
+  const walk: WalkSpec | undefined =
+    readsContent || moves.length > 0
+      ? { hidden: true, ignore: false, include: complex ? [] : names, exclude: [], excludeDir: [], ...(aliasTo ? { aliasTo } : {}) }
+      : undefined;
   if (roots.length === 0) {
     for (const cwd of cwds) {
       if (cwd !== undefined) out.refs.push({ path: cwd, kind: "search", raw: ".", command: "find", explicit: true, ...(walk ? { walk } : {}) });
@@ -1498,7 +1537,8 @@ function analyzeAlias(
   const symbolic = cmd === "ln" && hasFlag(flags, ["s"], ["--symbolic"]);
   for (const cwd of cwds) {
     const dest = resolveWord(destWord, cwd, ctx.out).find((r) => r.type === "path")?.path;
-    const intoDir = dest !== undefined && (into !== undefined || sources.length > 1 || isDirectory(dest));
+    // A destination written with a trailing slash is a directory, whether it exists yet or not.
+    const intoDir = dest !== undefined && (into !== undefined || sources.length > 1 || destWord.text.endsWith("/") || isDirectory(dest));
     for (const w of sources) {
       // `ln -s TARGET LINK`: a relative TARGET is resolved from the link's directory.
       const base = symbolic && dest !== undefined && !isAbsolute(expandHome(w.text)) ? (intoDir ? dest : dirname(dest)) : cwd;

@@ -1076,6 +1076,12 @@ import { readdirSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, resolve } from "path";
 var DYN = "\0";
+function aliasOf(spec, file) {
+  const dest = spec.dest.replaceAll("{}", spec.perFileDir ? `./${basename(file)}` : file);
+  const abs = spec.perFileDir ? resolve(dirname(file), dest) : dest;
+  if (spec.dest.includes("{}")) return abs;
+  return spec.dest.endsWith("/") || isDirectory(abs) ? join(abs, basename(file)) : abs;
+}
 var SEP_CHARS = /* @__PURE__ */ new Set([";", "&", "|", "(", ")", "\n"]);
 function matchParen(s, start) {
   let depth = 1;
@@ -2164,6 +2170,7 @@ function analyzeFind(words, k, cwds, ctx, depth, push) {
   const names = [];
   let complex = false;
   let readsContent = false;
+  const moves = [];
   for (; j < words.length; j++) {
     const t = words[j].text;
     if (t === "-name" || t === "-iname") names.push(words[++j]?.text ?? "");
@@ -2176,14 +2183,29 @@ function analyzeFind(words, k, cwds, ctx, depth, push) {
       j++;
       if (argv.length === 0) continue;
       const exec = basename(argv[0].text);
-      if (/^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq|mv|ln|ditto|install|rsync|scp|dd)$/.test(
+      if (/^(?:cat|head|tail|less|more|bat|grep|egrep|fgrep|rg|strings|xxd|od|hexdump|base64|nl|tac|sed|awk|gawk|cp|tar|zip|curl|jq|ditto|install|rsync|scp|dd)$/.test(
         exec
       ))
         readsContent = true;
+      else if (exec === "mv" || exec === "ln") {
+        const all = words.slice(start, j);
+        const parsed = parseArgs(all, 1, COMMAND_SPECS[exec]);
+        const dest = optionValues(parsed, "-t", "--target-directory")[0] ?? parsed.pos[parsed.pos.length - 1];
+        const into = optionValues(parsed, "-t", "--target-directory").length > 0;
+        if (dest !== void 0 && dest.text !== "{}") {
+          const perFileDir = t === "-execdir" || t === "-okdir";
+          const text = into && !dest.text.endsWith("/") ? `${dest.text}/` : dest.text;
+          const base = cwds.find((c) => c !== void 0);
+          if (perFileDir || text.startsWith("{}")) moves.push({ dest: text, perFileDir });
+          else if (base !== void 0) moves.push({ dest: resolve(base, expandHome(text)) + (text.endsWith("/") ? "/" : ""), perFileDir });
+          else readsContent = true;
+        }
+      }
       analyzeCommand({ words: argv, redirects: [], stdinLiteral: false }, cwds, ctx, depth + 1);
     }
   }
-  const walk = readsContent ? { hidden: true, ignore: false, include: complex ? [] : names, exclude: [], excludeDir: [] } : void 0;
+  const aliasTo = !readsContent && moves.length === 1 ? moves[0] : void 0;
+  const walk = readsContent || moves.length > 0 ? { hidden: true, ignore: false, include: complex ? [] : names, exclude: [], excludeDir: [], ...aliasTo ? { aliasTo } : {} } : void 0;
   if (roots.length === 0) {
     for (const cwd of cwds) {
       if (cwd !== void 0) out.refs.push({ path: cwd, kind: "search", raw: ".", command: "find", explicit: true, ...walk ? { walk } : {} });
@@ -2202,7 +2224,7 @@ function analyzeAlias(cmd, targets, flags, cwds, ctx, push, into) {
   const symbolic = cmd === "ln" && hasFlag(flags, ["s"], ["--symbolic"]);
   for (const cwd of cwds) {
     const dest = resolveWord(destWord, cwd, ctx.out).find((r) => r.type === "path")?.path;
-    const intoDir = dest !== void 0 && (into !== void 0 || sources.length > 1 || isDirectory(dest));
+    const intoDir = dest !== void 0 && (into !== void 0 || sources.length > 1 || destWord.text.endsWith("/") || isDirectory(dest));
     for (const w of sources) {
       const base = symbolic && dest !== void 0 && !isAbsolute(expandHome(w.text)) ? intoDir ? dest : dirname(dest) : cwd;
       for (const r of resolveWord(w, base, ctx.out)) {
@@ -2826,6 +2848,7 @@ var ALIASING = /* @__PURE__ */ new Set(["ln", "mv"]);
 function isContentCommand(command) {
   return CONTENT_COMMANDS.has(command) || PYTHON.test(command) || isGitContentCommand(command);
 }
+var staysSensitive = (name, allowlist, cwd) => sensitivePathMatch(name, allowlist, cwd, { asIfPresent: true }) !== void 0;
 function sensitiveShellRead(analysis, allowlist, cwd) {
   for (const ref of analysis.refs) {
     if (ref.kind === "write" || ref.kind === "list" || ref.kind === "exec") continue;
@@ -2833,7 +2856,9 @@ function sensitiveShellRead(analysis, allowlist, cwd) {
     if (ALIASING.has(ref.command)) {
       if (ref.aliasTo !== void 0 && sensitivePathMatch(ref.aliasTo, allowlist, cwd, { asIfPresent: true })) continue;
     } else if (!ref.redirect && !ref.walk && !isContentCommand(ref.command)) continue;
-    if (sensitivePathMatch(ref.path, allowlist, cwd)) return { raw: ref.raw };
+    const moved = ref.walk?.aliasTo;
+    if (sensitivePathMatch(ref.path, allowlist, cwd) && !(moved && !isDirectory(ref.path) && staysSensitive(aliasOf(moved, ref.path), allowlist, cwd)))
+      return { raw: ref.raw };
     if (ref.walk && isDirectory(ref.path)) {
       const below = sensitiveFileBelow(ref.path, ref.walk, allowlist, cwd);
       if (below === "overflow") return { raw: ref.raw, tooMany: true };
@@ -2927,11 +2952,13 @@ function sensitiveFileBelow(dir, spec, allowlist, cwd) {
     if (spec.exclude.some((g) => pathMatchesGlob(e.name, g))) return void 0;
     if (!e.isSymbolicLink() && !SENSITIVE_GLOBS.some((g) => pathMatchesGlob(abs, g, true))) return void 0;
     if (sensitivePathMatch(abs, allowlist, cwd)) {
+      if (spec.aliasTo && staysSensitive(aliasOf(spec.aliasTo, abs), allowlist, cwd)) return void 0;
       hit = abs;
       return "stop";
     }
     return void 0;
   });
+  if (result === "overflow" && spec.aliasTo && staysSensitive(aliasOf(spec.aliasTo, join3(canonical(dir), ".env")), allowlist, cwd)) return void 0;
   return result === "overflow" ? "overflow" : hit;
 }
 
