@@ -2709,7 +2709,7 @@ function covers(dir, p) {
   const b = fold(canonical(p));
   return a === b || b.startsWith(a.endsWith(sep) ? a : a + sep);
 }
-function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
+function sensitivePathMatch(path, allowlist, cwd = process.cwd(), opts = {}) {
   const normalized = expandHome(path.replaceAll("\\", "/"));
   const absolute2 = resolve2(cwd, normalized).replaceAll("\\", "/");
   const real = canonical(absolute2).replaceAll("\\", "/");
@@ -2719,7 +2719,7 @@ function sensitivePathMatch(path, allowlist, cwd = process.cwd()) {
   const vaultHome = defaultVaultHome();
   if (covers(join3(vaultHome, "vault.json"), real) || covers(join3(vaultHome, "salt"), real)) return "secretgate vault";
   const inside = relative(canonical(cwd), real).replaceAll("\\", "/");
-  if (exists(real) && !inside.startsWith("../") && inside !== ".." && !isAbsolute2(inside) && inside.split("/").slice(0, -1).some((seg) => FIXTURE_DIRS.has(seg.toLowerCase())))
+  if ((opts.asIfPresent || exists(real)) && !inside.startsWith("../") && inside !== ".." && !isAbsolute2(inside) && inside.split("/").slice(0, -1).some((seg) => FIXTURE_DIRS.has(seg.toLowerCase())))
     return void 0;
   for (const p of spellings) {
     if (EXEMPT_GLOBS.some((g) => pathMatchesGlob(p, g, true))) continue;
@@ -2823,7 +2823,7 @@ function sensitiveShellRead(analysis, allowlist, cwd) {
     if (ref.kind === "write" || ref.kind === "list" || ref.kind === "exec") continue;
     if (ref.fromOption && INTERPRETER_CONTENT.test(ref.command)) continue;
     if (ALIASING.has(ref.command)) {
-      if (ref.aliasTo !== void 0 && sensitivePathMatch(ref.aliasTo, allowlist, cwd)) continue;
+      if (ref.aliasTo !== void 0 && sensitivePathMatch(ref.aliasTo, allowlist, cwd, { asIfPresent: true })) continue;
     } else if (!ref.redirect && !ref.walk && !isContentCommand(ref.command)) continue;
     if (sensitivePathMatch(ref.path, allowlist, cwd)) return { raw: ref.raw };
     if (ref.walk && isDirectory(ref.path)) {

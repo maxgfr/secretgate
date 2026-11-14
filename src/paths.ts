@@ -152,7 +152,9 @@ export function covers(dir: string, p: string): boolean {
 // Globs above are rooted with `**/` so they match absolute and relative paths
 // alike. Every spelling of the path is checked: as written, lexically resolved
 // (`x/../.env`) and canonical (a symlink whose target is `.env`).
-export function sensitivePathMatch(path: string, allowlist?: UserAllowlist, cwd = process.cwd()): string | undefined {
+// `asIfPresent` asks about a name nothing exists under yet: would the file
+// be sensitive once it is there?
+export function sensitivePathMatch(path: string, allowlist?: UserAllowlist, cwd = process.cwd(), opts: { asIfPresent?: boolean } = {}): string | undefined {
   const normalized = expandHome(path.replaceAll("\\", "/"));
   const absolute = resolve(cwd, normalized).replaceAll("\\", "/");
   const real = canonical(absolute).replaceAll("\\", "/");
@@ -173,7 +175,7 @@ export function sensitivePathMatch(path: string, allowlist?: UserAllowlist, cwd 
   // elsewhere is no fixture.
   const inside = relative(canonical(cwd), real).replaceAll("\\", "/");
   if (
-    exists(real) &&
+    (opts.asIfPresent || exists(real)) &&
     !inside.startsWith("../") &&
     inside !== ".." &&
     !isAbsolute(inside) &&
@@ -313,7 +315,9 @@ export function sensitiveShellRead(analysis: ShellAnalysis, allowlist: UserAllow
     // `node --env-file=.env app.js` loads the file, it does not print it.
     if (ref.fromOption && INTERPRETER_CONTENT.test(ref.command)) continue;
     if (ALIASING.has(ref.command)) {
-      if (ref.aliasTo !== undefined && sensitivePathMatch(ref.aliasTo, allowlist, cwd)) continue;
+      // The new name must still be refused once the file is under it: a name
+      // inside a fixture directory (`mv .env tests/.env`) would not be.
+      if (ref.aliasTo !== undefined && sensitivePathMatch(ref.aliasTo, allowlist, cwd, { asIfPresent: true })) continue;
     } else if (!ref.redirect && !ref.walk && !isContentCommand(ref.command)) continue;
     if (sensitivePathMatch(ref.path, allowlist, cwd)) return { raw: ref.raw };
     if (ref.walk && isDirectory(ref.path)) {

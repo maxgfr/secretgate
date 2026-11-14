@@ -213,6 +213,23 @@ describe("audit · shell constructs that reached a sensitive file", () => {
     expect(await decide("Bash", { command })).toBeUndefined();
   });
 
+  // A fixture directory is readable. Moving the real `.env` there used to be
+  // allowed (the new name is still `.env`, so it "stays sensitive"), and the
+  // file could then be read as a fixture.
+  it.each([
+    "mv .env testdata/.env",
+    "mv .env tests/fixtures/",
+    "ln .env __mocks__/.env",
+    "mv src/server.key tests/fixtures/second.key",
+    "mv .env testdata/.env && cat testdata/.env",
+  ])("denies %j: a fixture directory is not a place to park a real secret", async (command) => {
+    expect(await decide("Bash", { command })).toBe("deny");
+  });
+
+  it("still lets fixtures be renamed among themselves", async () => {
+    expect(await decide("Bash", { command: "mv tests/fixtures/server.key tests/fixtures/old.key" })).toBeUndefined();
+  });
+
   it("a recursive read of a tree holding a real key is refused, and says which file", async () => {
     const r = await handleClaudeCode(
       "pre-tool-use",
