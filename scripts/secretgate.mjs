@@ -9927,14 +9927,15 @@ function retiredRulesToRemove(deny2, owned) {
 }
 var PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|NotebookEdit|NotebookRead|Bash|mcp__.*";
 var BATCH_HOOK_MIN_VERSION = "2.1.101";
+function claudeCodeVersionOf(output) {
+  const m = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?: \(Claude Code\))?$/.exec((output ?? "").trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : void 0;
+}
 function claudeCodeTakesBatchHook(version) {
-  const have = /(\d+)\.(\d+)\.(\d+)/.exec(version ?? "");
+  const have = claudeCodeVersionOf(version);
   if (!have) return false;
   const need = BATCH_HOOK_MIN_VERSION.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    const n = Number(have[i + 1]);
-    if (n !== need[i]) return n > need[i];
-  }
+  for (let i = 0; i < 3; i++) if (have[i] !== need[i]) return have[i] > need[i];
   return true;
 }
 var EVENTS = [
@@ -11194,17 +11195,33 @@ function projectSettingsAliasesGlobal() {
   };
   return canon(process.cwd()) === canon(homedir8());
 }
+function trustedClaude() {
+  const names = process.platform === "win32" ? ["claude.exe"] : ["claude"];
+  const project = repositoryRoot(process.cwd()) ?? process.cwd();
+  const inProject = (dir) => !covers(project, homedir8()) && covers(project, dir);
+  for (const dir of (process.env.PATH ?? "").split(delimiter3)) {
+    if (!isAbsolute5(dir) || /[\\/]node_modules[\\/]\.bin[\\/]?$/.test(dir) || inProject(dir)) continue;
+    for (const name of names) {
+      const file = join13(dir, name);
+      if (statSync5(file, { throwIfNoEntry: false })?.isFile()) return file;
+    }
+  }
+  return void 0;
+}
 function claudeCodeVersion() {
   const named = process.env.SECRETGATE_CLAUDE_CODE_VERSION?.trim();
   if (named) return named;
+  const claude = trustedClaude();
+  if (claude === void 0) return void 0;
   try {
-    return execFileSync("claude", ["--version"], { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"] }).trim() || void 0;
+    return execFileSync(claude, ["--version"], { encoding: "utf8", timeout: 5e3, stdio: ["ignore", "pipe", "ignore"] }).trim() || void 0;
   } catch {
     return void 0;
   }
 }
 function batchHookAbsence(version) {
-  return /\d+\.\d+\.\d+/.test(version ?? "") ? `Claude Code ${version} ignores a whole settings file that names a hook event it does not know (fixed in ${BATCH_HOOK_MIN_VERSION}): upgrade Claude Code, then re-run \`secretgate init\`` : `Claude Code's version could not be found (\`claude --version\`), and before ${BATCH_HOOK_MIN_VERSION} it ignores a whole settings file that names a hook event it does not know: re-run \`secretgate init\` where \`claude\` runs, or set SECRETGATE_CLAUDE_CODE_VERSION`;
+  const known = claudeCodeVersionOf(version);
+  return known ? `Claude Code ${known.join(".")} ignores a whole settings file that names a hook event it does not know (fixed in ${BATCH_HOOK_MIN_VERSION}): upgrade Claude Code, then re-run \`secretgate init\`` : `Claude Code's version could not be found (\`claude --version\`), and before ${BATCH_HOOK_MIN_VERSION} it ignores a whole settings file that names a hook event it does not know: re-run \`secretgate init\` where \`claude\` runs, or set SECRETGATE_CLAUDE_CODE_VERSION`;
 }
 function installForAgents(flags, io) {
   const outcome = { installed: { claudeCode: false, codex: false, opencode: false }, errors: [] };
@@ -11658,9 +11675,10 @@ async function cmdStatus(_args, io) {
         `claude-code ${label}  no PostToolBatch hook (the output of a FAILED tool call is not checked) \u2014 ${claudeCodeTakesBatchHook(ccVersion) ? "run `secretgate init` to add it" : batchHookAbsence(ccVersion)}
 `
       );
-    if (wired > 0 && claudeCodeBatchHookWired(settings) && /\d+\.\d+\.\d+/.test(ccVersion ?? "") && !claudeCodeTakesBatchHook(ccVersion))
+    const ccKnown = claudeCodeVersionOf(ccVersion);
+    if (wired > 0 && claudeCodeBatchHookWired(settings) && ccKnown && !claudeCodeTakesBatchHook(ccVersion))
       io.stdout(
-        `claude-code ${label}  !! this file names the PostToolBatch hook, and Claude Code ${ccVersion} ignores the WHOLE settings file for it: NO hook runs \u2014 run \`secretgate init\` (it takes the entry out) or upgrade Claude Code to ${BATCH_HOOK_MIN_VERSION} or later
+        `claude-code ${label}  !! this file names the PostToolBatch hook, and Claude Code ${ccKnown.join(".")} ignores the WHOLE settings file for it: NO hook runs \u2014 run \`secretgate init\` (it takes the entry out) or upgrade Claude Code to ${BATCH_HOOK_MIN_VERSION} or later
 `
       );
     const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;

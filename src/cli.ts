@@ -30,12 +30,14 @@ import {
   claudeCodeBatchHookWired,
   claudeCodeMatcherCurrent,
   claudeCodeTakesBatchHook,
+  claudeCodeVersionOf,
   installClaudeCode,
   retiredRulesToRemove,
   uninstallClaudeCode,
 } from "./install/claude-code.js";
 import { CODEX_HOOK_COUNT, codexHome, codexWiringStatus, installCodex, uninstallCodex } from "./install/codex.js";
 import { SettingsLinkError, SettingsParseError } from "./install/json-merge.js";
+import { covers, repositoryRoot } from "./paths.js";
 import { isSecretgateHook } from "./install/hook-marker.js";
 import { installOpencode, opencodeConfigDir, opencodePluginFile, uninstallOpencode } from "./install/opencode.js";
 import { redactText } from "./redact.js";
@@ -740,14 +742,39 @@ interface InstallOutcome {
 // Install each requested agent INDEPENDENTLY: one agent failing (e.g. its
 // plugin bundle is missing, or its config is corrupt) must not abort the others
 // or the self-test. Errors are collected and reported, never thrown out.
+// The `claude` whose version decides what is written. `npm exec` and `pnpm
+// exec` put the project's `node_modules/.bin` first on PATH, and a repository
+// can ship a `claude` there (or anywhere in its tree): run for its version, it
+// would execute the repository's code, and could pass for a recent Claude
+// Code. So PATH is walked here, and an entry is trusted only when it is an
+// absolute directory, is not a `node_modules/.bin`, and lies outside the
+// project (the repository around the current directory, or that directory;
+// run from the home directory, there is no project to exclude — the user's
+// own `~/.local/bin` is theirs). Nothing found: the version is unknown.
+function trustedClaude(): string | undefined {
+  const names = process.platform === "win32" ? ["claude.exe"] : ["claude"];
+  const project = repositoryRoot(process.cwd()) ?? process.cwd();
+  const inProject = (dir: string): boolean => !covers(project, homedir()) && covers(project, dir);
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!isAbsolute(dir) || /[\\/]node_modules[\\/]\.bin[\\/]?$/.test(dir) || inProject(dir)) continue;
+    for (const name of names) {
+      const file = join(dir, name);
+      if (statSync(file, { throwIfNoEntry: false })?.isFile()) return file;
+    }
+  }
+  return undefined;
+}
+
 // The Claude Code on this machine, as `claude --version` prints it ("2.1.323
 // (Claude Code)"), or undefined when it cannot be run. SECRETGATE_CLAUDE_CODE_VERSION
 // names it instead: for a `claude` that is not on this shell's PATH.
 function claudeCodeVersion(): string | undefined {
   const named = process.env.SECRETGATE_CLAUDE_CODE_VERSION?.trim();
   if (named) return named;
+  const claude = trustedClaude();
+  if (claude === undefined) return undefined;
   try {
-    return execFileSync("claude", ["--version"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
+    return execFileSync(claude, ["--version"], { encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined;
   } catch {
     return undefined;
   }
@@ -755,8 +782,9 @@ function claudeCodeVersion(): string | undefined {
 
 // Why the failed-call check is not in a settings file, in the words of `init` and `status`.
 function batchHookAbsence(version: string | undefined): string {
-  return /\d+\.\d+\.\d+/.test(version ?? "")
-    ? `Claude Code ${version} ignores a whole settings file that names a hook event it does not know (fixed in ${BATCH_HOOK_MIN_VERSION}): upgrade Claude Code, then re-run \`secretgate init\``
+  const known = claudeCodeVersionOf(version);
+  return known
+    ? `Claude Code ${known.join(".")} ignores a whole settings file that names a hook event it does not know (fixed in ${BATCH_HOOK_MIN_VERSION}): upgrade Claude Code, then re-run \`secretgate init\``
     : `Claude Code's version could not be found (\`claude --version\`), and before ${BATCH_HOOK_MIN_VERSION} it ignores a whole settings file that names a hook event it does not know: re-run \`secretgate init\` where \`claude\` runs, or set SECRETGATE_CLAUDE_CODE_VERSION`;
 }
 
@@ -1245,9 +1273,10 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
         `claude-code ${label}  no PostToolBatch hook (the output of a FAILED tool call is not checked) — ${claudeCodeTakesBatchHook(ccVersion) ? "run `secretgate init` to add it" : batchHookAbsence(ccVersion)}\n`,
       );
     // The other way round is worse: the entry is there, and this Claude Code drops the file for it.
-    if (wired > 0 && claudeCodeBatchHookWired(settings) && /\d+\.\d+\.\d+/.test(ccVersion ?? "") && !claudeCodeTakesBatchHook(ccVersion))
+    const ccKnown = claudeCodeVersionOf(ccVersion);
+    if (wired > 0 && claudeCodeBatchHookWired(settings) && ccKnown && !claudeCodeTakesBatchHook(ccVersion))
       io.stdout(
-        `claude-code ${label}  !! this file names the PostToolBatch hook, and Claude Code ${ccVersion} ignores the WHOLE settings file for it: NO hook runs — run \`secretgate init\` (it takes the entry out) or upgrade Claude Code to ${BATCH_HOOK_MIN_VERSION} or later\n`,
+        `claude-code ${label}  !! this file names the PostToolBatch hook, and Claude Code ${ccKnown.join(".")} ignores the WHOLE settings file for it: NO hook runs — run \`secretgate init\` (it takes the entry out) or upgrade Claude Code to ${BATCH_HOOK_MIN_VERSION} or later\n`,
       );
     const owned = readJsonSafe(`${path}.secretgate-ownership.json`)?.deny;
     const retired = retiredRulesToRemove(denyRules, Array.isArray(owned) ? owned.filter((r): r is string => typeof r === "string") : []);

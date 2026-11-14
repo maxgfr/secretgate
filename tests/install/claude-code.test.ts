@@ -55,6 +55,28 @@ describe("installClaudeCode", () => {
     expect(claudeCodeTakesBatchHook("2.1.101")).toBe(true);
   });
 
+  // `claude --version` prints "2.1.323 (Claude Code)". Anything else is not
+  // read for a number that happens to be in it: a wrapper that prints another
+  // program's version first must not pass for a recent Claude Code.
+  it("reads a version only in the shape Claude Code prints it; anything else is unknown", () => {
+    for (const v of ["2.1.101 (Claude Code)", "2.1.101", " 2.2.0 (Claude Code)\n", "10.0.0", "2.1.1010 (Claude Code)"])
+      expect(claudeCodeTakesBatchHook(v), v).toBe(true);
+    for (const v of [
+      "node v22.11.0\n2.1.323 (Claude Code)",
+      "v22.11.0\n2.0.5 (Claude Code)",
+      "Claude Code v2.10.0",
+      "v2.1.323",
+      "2.1.323 (Some Wrapper)",
+      "2.1.101-beta.1",
+      "02.001.0101",
+      "1.2.3.4 2.1.200",
+      "2.1.323 2.1.323",
+      "2.1",
+      "3",
+    ])
+      expect(claudeCodeTakesBatchHook(v), v).toBe(false);
+  });
+
   it("removes PostToolBatch again when the install is re-run under an older Claude Code", () => {
     writeFileSync(settingsPath, JSON.stringify({ hooks: { PostToolBatch: [{ hooks: [{ type: "command", command: "/my/audit.sh" }] }] } }));
     installClaudeCode({ settingsPath, command, claudeVersion: "2.1.323" });

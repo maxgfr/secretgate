@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -511,6 +511,55 @@ describe("secretgate status", () => {
       await run(["status"], status.io);
       expect(status.text(), version).toContain("wired (3 hooks");
       expect(status.text(), version).toContain("no PostToolBatch hook");
+    }
+  });
+
+  // `npm exec` / `pnpm exec` put the project's node_modules/.bin first on
+  // PATH. A `claude` a repository ships there must not be the one asked for
+  // its version: it could run anything, or pass for a recent Claude Code.
+  it.runIf(process.platform !== "win32")("asks the version of a `claude` the project cannot plant", async () => {
+    process.env.HOME = home;
+    const savedPath = process.env.PATH;
+    const project = realpathSync(work);
+    const program = (dir: string, version: string, mark: string) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "claude"), `#!/bin/sh\ntouch "${join(home, mark)}"\necho "${version} (Claude Code)"\n`);
+      chmodSync(join(dir, "claude"), 0o755);
+    };
+    program(join(project, "node_modules", ".bin"), "9.9.9", "ran-project-bin");
+    program(join(project, "tools"), "9.9.8", "ran-project-tools");
+    const system = join(home, "system-bin");
+    program(system, "2.0.0", "ran-system");
+    process.chdir(project);
+    try {
+      process.env.PATH = [join(project, "node_modules", ".bin"), "tools", ".", join(project, "tools"), system, savedPath].join(":");
+      const install = capture();
+      await run(["install", "--claude-code"], install.io);
+      expect(install.text()).toContain("failed-call check NOT installed");
+      expect(install.text()).toContain("Claude Code 2.0.0");
+      expect(existsSync(join(home, "ran-system"))).toBe(true);
+      expect(existsSync(join(home, "ran-project-bin"))).toBe(false);
+      expect(existsSync(join(home, "ran-project-tools"))).toBe(false);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  });
+
+  it.runIf(process.platform !== "win32")("trusts the user's own bin directory when run from the home directory", async () => {
+    process.env.HOME = home;
+    const savedPath = process.env.PATH;
+    mkdirSync(join(home, ".local", "bin"), { recursive: true });
+    writeFileSync(join(home, ".local", "bin", "claude"), '#!/bin/sh\necho "2.1.323 (Claude Code)"\n');
+    chmodSync(join(home, ".local", "bin", "claude"), 0o755);
+    process.chdir(home);
+    try {
+      process.env.PATH = [join(home, ".local", "bin"), "/usr/bin", "/bin"].join(":");
+      const install = capture();
+      await run(["install", "--claude-code"], install.io);
+      expect(install.text()).not.toContain("failed-call check NOT installed");
+      expect(Object.keys(JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).hooks)).toContain("PostToolBatch");
+    } finally {
+      process.env.PATH = savedPath;
     }
   });
 

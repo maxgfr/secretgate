@@ -119,16 +119,24 @@ export const PRE_TOOL_MATCHER = "Read|Grep|Glob|LS|Edit|Write|MultiEdit|Notebook
 // to tolerate it; an older or unknown one keeps the three hooks it runs.
 export const BATCH_HOOK_MIN_VERSION = "2.1.101";
 
-/** Does this Claude Code (as `claude --version` prints it) take a settings
- *  file that names PostToolBatch? Unknown or unreadable: no. */
+/**
+ * The version in what `claude --version` printed: "2.1.323 (Claude Code)", or
+ * the bare number. Exactly that shape — a number found anywhere in other
+ * output (a wrapper that prints its own version first, a pre-release, a
+ * different program) is not a version of Claude Code, and reads as unknown.
+ */
+export function claudeCodeVersionOf(output: string | undefined): [number, number, number] | undefined {
+  const m = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?: \(Claude Code\))?$/.exec((output ?? "").trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : undefined;
+}
+
+/** Does this Claude Code take a settings file that names PostToolBatch?
+ *  Unknown or unreadable: no. */
 export function claudeCodeTakesBatchHook(version: string | undefined): boolean {
-  const have = /(\d+)\.(\d+)\.(\d+)/.exec(version ?? "");
+  const have = claudeCodeVersionOf(version);
   if (!have) return false;
   const need = BATCH_HOOK_MIN_VERSION.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    const n = Number(have[i + 1]);
-    if (n !== need[i]) return n > need[i]!;
-  }
+  for (let i = 0; i < 3; i++) if (have[i] !== need[i]) return have[i]! > need[i]!;
   return true;
 }
 
