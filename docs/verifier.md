@@ -2,7 +2,8 @@
 
 secretgate can run a small model after its rules: the **verifier**. It is
 **off by default**, it never downloads anything on its own, and it can only add
-redactions to what the rules already do. This page says what it is, what it
+redactions to what the rules already do. It makes a hook slower: by a bounded
+amount, given below. This page says what it is, what it
 measured, what it does in each hook, and what it costs.
 
 ## What it is, plainly
@@ -29,7 +30,7 @@ What was measured there, and nothing more is claimed here:
 |---|---|---|
 | line F1 on 221 real test repositories (Samsung CredData) | **0.856** (precision 0.839, recall 0.874) | secretgate's default rules 0.728; the best rule scanner (Betterleaks) 0.733; an open 17M-parameter model (cbx-secrets-detector-17M) 0.683 |
 | candidate F1 on issue reports with real values | **0.816** | Gitleaks 0.710 |
-| clean real files with an accepted candidate (8,825 files) | **0.35%** (31 files) | default rules 0.12% |
+| clean real files with an accepted candidate (8,825 files), **with the file's path** | **0.35%** (31 files) | default rules 0.12% |
 | calibration (ECE, CredData test candidates) | 0.007 | |
 | time per candidate | about 1.6 ms natively, 2.6 ms in WebAssembly | |
 
@@ -41,8 +42,9 @@ without any path is the issue reports. secretgate's option is not exactly the
 measured system: it runs after **today's** default engine (not the engine of
 the measurement), it only judges what that engine left, it has a time budget,
 and the hooks have a path for a Read only. Without the path, the same model
-accepts more on the clean files (below). The measurements of the option itself
-are at the end of this page.
+accepts more on the clean files (below). **The rates that apply to the hooks
+are the option's own, measured at the end of this page: 0.46% of the clean files
+get a verifier redaction without a path (Bash output), 0.27% with it (Read).**
 
 ## Turning it on
 
@@ -75,8 +77,11 @@ did in a hook, set `SECRETGATE_DEBUG=verifier`: each hook writes one line to
 stderr with counts, times and, for each accepted candidate, its line, the rule
 that proposed it and P — never a value.
 
-To silence it for one value, `secretgate allow <value>` works as for a rule;
-`secretgate allow --rule verifier:s6-secrets` switches it off entirely.
+To silence it for one value, `secretgate allow <value>` works as for a rule.
+`secretgate allow --rule <rule id>` reaches the verifier too: a rule you
+disabled proposes no candidate to it (a value only that rule proposes is not
+judged; one another rule also proposes still is, under that rule). `secretgate
+allow --rule verifier:s6-secrets` switches the verifier off entirely.
 
 ## What it does in each hook
 
@@ -101,40 +106,68 @@ real"). A model's judgement does not stop a turn: only a rule finding does.
 
 ## The rules stay the authority
 
-- The verifier runs after the rules, on the original text, and judges only the
-  candidates that **no** finding of the default engine overlaps. A rule finding
-  is redacted exactly as without the verifier (same span, same placeholder,
-  same rule id): the measurement below checks this file by file.
-- Its time is not taken from the rules: the rules' deadline is moved by the
-  time the verifier spent, so it can make a hook slower by its budget, never
-  make the rules run out of theirs.
-- Every failure skips it, and the text goes on exactly as the rules left it:
-  the data files missing or not the pinned ones, a WebAssembly error on load or
-  on a candidate, the budget running out, a `verifier` entry in config.json
-  that is not understood. It never makes a hook fail closed, never blocks an
-  agent.
+- The rules' pass over the whole event runs first and is complete, exactly as
+  with the option off. The verifier then works from the original text and
+  judges only the candidates that **no** rule finding overlaps; a rule finding
+  is redacted exactly as without it (same span, same placeholder, same rule
+  id): the measurements below check this file by file.
+- What it may add: the values it accepts, and every other place the same
+  event repeats one of those values (8 characters or more).
+- With the option **off**, nothing changed: `tests/e2e/option-off.mjs` runs the
+  bundles of v1.8.1 and of this version on the same 59 recorded hook events and
+  commands (every event of Claude Code, Codex and the OpenCode plugin; scan,
+  pipe, vault list, status) and finds no difference in stdout, stderr, exit
+  codes or files written, but the new `status` line, the new `--help` line and
+  the new command.
+- Every failure skips it, and the hook answers with the rules' result exactly
+  as with the option off: the data files missing or not the pinned ones, a
+  WebAssembly error on load or on a candidate, the child process killed at its
+  bound, crashing or answering garbage, a `verifier` entry in config.json that
+  is not understood. It never makes a hook fail closed, never blocks an agent.
 
-## Budget
+## Budget: a hard bound
 
-A hook is a fresh process. Loading the engine costs about 20 ms; each
-candidate about 2.6 ms (3.3 ms without relaxed SIMD). Per hook event, the
-verifier has:
+A hook is a fresh process, and the generator's frozen `generic-keyword` regex is
+quadratic on text an attacker can write (40 KB of `keykeykey…` take 0.4 s; a
+Read of `key` ×5,000, `=`, 1,030,000 spaces kept a hook busy for 29.5 s in the
+first version of this option). No deadline can interrupt one regex, and an
+estimate cannot be the safety of a regex that may not change. So:
 
-- **750 ms** of wall-clock time, the engine's load included;
-- **200 candidates** at most;
-- strings of at most **1 MiB** (a longer one is not given to the generator).
-
-Strings are walked in a fixed order and candidates are judged in text order.
-When the budget or the cap is reached, the candidates left are **not judged**
-(and so not redacted by it); `SECRETGATE_DEBUG=verifier` says how many. The
-engine is loaded only when a string has a candidate to judge, and the
-verifier's code is loaded only when it is on: with it off, a hook loads none of
-it.
-
-One rule of the generator, `generic-keyword`, is quadratic on some inputs (a
-run of `keykeykey…`: 40 KB of it take 0.4 s); a string whose estimated cost for
-that rule is too high is not given to the generator, and the generator stops
-between two rules once the budget is spent.
+- **The generator and the model run in a child process** of the same program
+  (`secretgate __verifier-job`: the Node bundle under the same node, or the
+  Homebrew binary itself), and the hook **kills it (SIGKILL) at 1,000 ms** from
+  its start. When it has not answered by then, there is nothing to add: the
+  hook answers with the rules' result. A child process starts in about 30 ms
+  (Node bundle) or 15 ms (Bun binary) here; a worker thread starts faster
+  (about 10 ms and 4 ms), but Bun did not interrupt a worker stuck in a regex
+  (it waited for the regex), and a worker shares the hook's memory, where a
+  process killed with its own memory takes a runaway allocation with it.
+- **Re-redacting** a string the verifier adds to costs what the rules' pass over
+  it cost; it is done only when that pass took at most 250 ms (else the string
+  keeps the rules' redaction alone), under a 250 ms deadline.
+- So the **worst-case added wall time per hook event is 1,000 ms for the child
+  plus 250 ms of re-redaction, about 1.25 s**, against the 30 s hook timeout.
+  Tests prove it on the reviewer's inputs and on other quadratic shapes (long
+  names, many separators, escaped quotes, a 1 MiB line whose keyword comes at
+  the end, 2 MiB of keywords), through `PostToolUse` (Read and Bash) and
+  `PostToolBatch`, with the early skip below turned off, so that the kill alone
+  holds the bound, and with children that loop, grow their memory, ignore
+  SIGTERM, crash or answer garbage (`tests/hooks/verifier-bound.test.ts`; with
+  `SECRETGATE_BOUND_STRICT=1` the child's time must stay within 150 ms of the
+  bound, which it did in every case). A machine starved of CPU can fire any
+  timer late; the bound is wall-clock time.
+- Inside the child, a softer budget: **750 ms** from its start and **200
+  candidates**, past which the candidates left are **not judged**
+  (`SECRETGATE_DEBUG=verifier` says how many), so that it can answer with what
+  it judged before the kill. Strings over **1 MiB**, and strings whose
+  estimated cost for `generic-keyword` is too high, are skipped early: an early
+  skip only, the kill is the bound.
+- `PostToolBatch` reads every result again; the strings `PostToolUse` answered
+  with (recorded by their sha256, per session, and taken by the batch) are not
+  judged again there.
+- Strings are walked in a fixed order and candidates are judged in text order.
+  The engine is loaded only when a string has a candidate to judge, and the
+  verifier's code is loaded only when it is on.
 
 ## Paths
 
@@ -224,27 +257,31 @@ machine, not of an idle one.
 as the output of a tool call (`PostToolUse`), in a fresh process, once with the
 verifier off and once on, and records the verifier's own debug line. Two
 readings: as the stdout of a Bash call (no path, as most tool output), and as a
-Read of the file (its path below the repository goes to the model).
+Read of the file (its path below the repository goes to the model). **These are
+the rates that apply to the hooks**; the 0.35% of the model's evaluation was
+measured with the file's path given to the model, and with the model alone.
 
 | | Bash output, no path | Read, with the path |
 |---|---:|---:|
-| files with a verifier redaction | **41 (0.46%)** | **23 (0.26%)** |
-| values the verifier redacted | 85 | 60 |
-| by the rule that proposed them | generic-keyword 45, gcp-api-key 16, generic-api-key 11, github-pat 7, password-assignment 4, url-credentials 2 | generic-keyword 25, gcp-api-key 16, generic-api-key 8, github-pat 7, password-assignment 4 |
-| candidates (in 2,159 files) / left to a rule finding | 13,475 / 80 | 13,475 / 80 |
-| judged / not judged (budget or cap reached, files) | 12,229 / 1,166 (10 files) | 12,104 / 1,291 (13 files) |
-| strings over 1 MiB, not given to the generator | 1 | 1 |
+| files with a verifier redaction | **41 (0.46%)** | **24 (0.27%)** |
+| values the verifier accepted | 85 | 61 |
+| by the rule that proposed them | generic-keyword 45, gcp-api-key 16, generic-api-key 11, github-pat 7, password-assignment 4, url-credentials 2 | generic-keyword 26, gcp-api-key 16, generic-api-key 8, github-pat 7, password-assignment 4 |
+| candidates / left to a rule finding | 13,389 / 80 | 13,475 / 80 |
+| judged / not judged (child budget or cap reached, files) | 12,150 / 1,159 (7 files) | 12,066 / 1,329 (6 files) |
+| files where the child hit the **hard bound** (killed, nothing added) | **1** | **0** |
+| child process time, spawn to answer, median / p95 / max | 49 / 159 / 1,019 ms | 50 / 134 / 909 ms |
+| engine load in the child, median / p95 | 24.3 / 47.5 ms | 24.6 / 33.1 ms |
+| hook wall time off → on, median | 43.8 → 97.8 ms | 43.6 → 100.0 ms |
+| **added wall time per file, median / p95 / max** | **52 / 175 / 1,109 ms** | **52 / 139 / 937 ms** |
 | files where the rules' output changed | **0** | **0** |
 | hook failures, off / on | 0 / 0 | 0 / 0 |
-| verifier time per file, median / p95 / max | 1.3 / 62 / 690 ms | 2.8 / 72 / 750 ms |
-| the same, files where it loaded the engine (2,154) | 41.7 / 118 ms | 45.8 / 151 ms |
-| engine load, median / p95 | 20.7 / 35.5 ms | 21.6 / 42.1 ms |
-| hook wall time off → on, median | 35.6 → 42.2 ms | 39.2 → 46.1 ms |
-| added wall time per file, median / p95 / max | **4.0 / 80.7 / 716 ms** | **5.1 / 94.8 / 872 ms** |
 
 "The rules' output changed" is checked file by file: with every placeholder of
 the verifier put back to its value, the output with the verifier on must be the
-output with it off, byte for byte (same rule findings, same placeholders).
+output with it off, byte for byte (same rule findings, same placeholders). The
+median added time is mostly the child process's start (it runs for every event
+with text, before anyone knows whether it holds a candidate); the largest one
+is the file whose child was killed at the bound.
 
 These files are clean: every redaction above is a false positive of the
 verifier, as far as they were read. skycmd's hand reading of the 110 candidates
@@ -257,15 +294,15 @@ accepts only without a path were not read by hand.
 ### secretgate's own fixtures
 
 The same measurement on this repository's `tests/fixtures/` (12 files) and
-`tests/` (59 files), whose fake tokens are mostly assembled by concatenation:
+`tests/` (62 files), whose fake tokens are mostly assembled by concatenation:
 
 | | `tests/fixtures`, no path | `tests/fixtures`, Read | `tests`, no path | `tests`, Read |
 |---|---:|---:|---:|---:|
-| candidates / left to a rule / judged | 58 / 2 / 56 | 58 / 2 / 56 | 502 / 69 / 433 | 502 / 69 / 433 |
-| values redacted (files) | 1 (1) | 2 (1) | 6 (6) | 6 (5) |
+| candidates / left to a rule / judged | 58 / 2 / 56 | 58 / 2 / 56 | 547 / 69 / 478 | 547 / 69 / 478 |
+| values accepted (files redacted) | 1 (1) | 2 (1) | 6 (6) | 6 (5) |
 | files where the rules' output changed | 0 | 0 | 0 | 0 |
-| hook failures | 0 | 0 | 0 | 0 |
-| added wall time per file, median / p95 | 52 / 194 ms | 51 / 136 ms | 65 / 257 ms | 81 / 419 ms |
+| hook failures; hard-bound kills | 0; 0 | 0; 0 | 0; 0 | 0; 0 |
+| added wall time per file, median / p95 | 119 / 205 ms | 100 / 193 ms | 120 / 269 ms | 125 / 231 ms |
 
 The verifier never fights the rules there: it judges only what no rule found,
 and no rule finding changed.
@@ -274,13 +311,16 @@ and no rule finding changed.
 
 - Per candidate (the end-to-end proof, 4,234 candidates): median 2.68 ms and
   p95 5.53 ms with the relaxed-SIMD build, median 3.73 ms and p95 7.47 ms with
-  the SIMD128 build.
+  the SIMD128 build (on a less loaded moment of the same machine; under the
+  heaviest load of the re-run, 3.48 and 5.22 ms).
 - With the verifier **off**: its code is not loaded, but the bundle is larger
-  (`scripts/secretgate.mjs` 389,863 → 577,228 bytes; the OpenCode plugin
-  275,115 → 277,211) and a hook starts about 0.9 ms later (median 30.7 → 31.6
-  ms over 120 interleaved runs of a small PostToolUse event).
-- The Homebrew binary (Bun) loads the relaxed-SIMD build too; with the option
-  off and no data file it behaves as before (`pnpm run smoke:binary`).
+  (`scripts/secretgate.mjs` 389,863 → 587,487 bytes; the OpenCode plugin
+  275,115 → 277,172), and a hook starts about 1 ms later (median 45.0 → 46.0
+  ms over 120 interleaved runs of a small PostToolUse event). Its answers are
+  those of v1.8.1 (`tests/e2e/option-off.mjs`).
+- The Homebrew binary (Bun) runs the same child (itself, `__verifier-job`) and
+  loads the relaxed-SIMD build; with the option off and no data file it behaves
+  as before (`pnpm run smoke:binary`).
 - With a real Claude Code (2.1.325) against a loopback model
   (`SECRETGATE_VERIFIER_ASSETS=… node tests/e2e/live-agents.mjs claude-code`):
   a value only the verifier accepts never reached a model request after a
@@ -303,7 +343,16 @@ and no rule finding changed.
 
 - **Verified**: size and sha256 of each file before it is written (a file that
   does not match is refused and nothing is written for it), and again every
-  time a hook loads it. No hook ever touches the network.
+  time the verifier loads it. No hook ever touches the network.
+- **Symlinks and permissions: accepted, by decision.** v1.8.1 follows a
+  settings symlink only to a file that can be a settings file, because what it
+  reads there is trusted as policy. Here nothing is trusted from the file but
+  its bytes: each file is read once, checked against its pin, and compiled from
+  that same buffer, so a symlink, a file other accounts can write, or two files
+  swapped can only fail their pin, and the verifier is then skipped (the rules
+  are not concerned). A path that is not a regular file (a directory, a
+  dangling link) counts as missing, and a file of the wrong size is refused
+  unread.
 - **Vendored**, reviewed source in this repository, never downloaded: the
   WebAssembly host (`src/verifier/host.ts`, from `verify-host.mjs` sha256
   `7190b42f…0ac0ce` at the same commit; it refuses a module that asks for any

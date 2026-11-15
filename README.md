@@ -95,10 +95,15 @@ anything per-use.
   tool output and redacts the ones it accepts, as `verifier:s6-secrets`. It
   **failed its pre-registered gate** (line F1 0.856 against 0.733 for the best
   rule scanner on 221 real repositories, +0.123 where +0.15 was asked) and is
-  offered as an experiment. It never removes or delays a rule finding, never
-  blocks a prompt or stops a turn, and is skipped on any failure. Its four data
-  files are downloaded only by `secretgate verifier fetch`, pinned by sha256 —
-  see [docs/verifier.md](docs/verifier.md).
+  offered as an experiment. On 8,825 clean real files it redacts something in
+  0.46% of them without a path (most tool output) and 0.27% with one (a Read);
+  the model's own 0.35% was measured with the path. The rules' result is
+  computed first and never changes; the verifier runs in a child process killed
+  at 1 s and adds at most about 1.25 s to a hook (median 52 ms measured); it
+  never blocks a prompt or stops a turn, and any failure leaves the rules'
+  result exactly as with it off. Its four data files are downloaded only by
+  `secretgate verifier fetch`, pinned by sha256 — see
+  [docs/verifier.md](docs/verifier.md).
 - **Project scope** (optional): a `.secretgate.json` can keep the agent inside
   some directories of the repository — see [Scope](#scope).
 - **Standalone scanner**: `secretgate scan <dir>` (exit 1 on findings) doubles
