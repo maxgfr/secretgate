@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, symlinkSync } from "node:fs";
+import { copyFileSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,11 @@ const root = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const bundle = join(root, "scripts/secretgate.mjs");
 const mcp = join(root, "tests/e2e/mcp-fixture.mjs");
 const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
+// A value no rule flags (`DB_PASS=…`) and the experimental verifier accepts.
+// Its scenarios run only when SECRETGATE_VERIFIER_ASSETS names the verifier's
+// four data files (Claude Code only).
+const verifierValue = ["Qm7", "xR2", "pL9", "vN4", "kT8"].join("");
+const verifierAssets = process.env.SECRETGATE_VERIFIER_ASSETS;
 const agents = process.argv.slice(2).length ? process.argv.slice(2) : ["claude-code", "codex", "opencode"];
 const requested = new Set(["claude-code", "codex", "opencode"]);
 for (const agent of agents) assert(requested.has(agent), `Unknown agent: ${agent}`);
@@ -158,6 +163,7 @@ for (const agent of agents) {
       const body = JSON.parse(raw);
       requests.push({ phase, body });
       assert(!raw.includes(fake), `${agent}: RAW SYNTHETIC SECRET REACHED MODEL REQUEST (${phase})`);
+      if (phase === "verifier") assert(!raw.includes(verifierValue), `${agent}: a value the verifier accepts reached the model request`);
       if (phase === "prompt") {
         anthropic(res, body.model, undefined);
         return;
@@ -226,7 +232,8 @@ for (const agent of agents) {
         anthropic(res, body.model, { name: "shell", args: { command: "sleep 1" } });
         return;
       }
-      if (phase === "failed") {
+      if (phase === "verifier-failed") requests.at(-1).holdsVerifierValue = raw.includes(verifierValue);
+      if (phase === "failed" || phase === "verifier-failed") {
         if (turn++ === 0) anthropic(res, body.model, { name: "Bash", args: { command: "cat ci-values.txt; exit 3" } });
         else anthropic(res, body.model);
         return;
@@ -397,6 +404,56 @@ for (const agent of agents) {
       }
       assert.equal(turn, 1, `claude-code: a failed command's output was followed by ${turn - 1} more model request(s)`);
       console.log(`PASS ${agent} failed command: output held back, turn stopped, ${requests.filter((r) => r.phase === "failed").length} request(s) inspected`);
+    }
+
+    // The experimental verifier, on: what it accepts in a Read is redacted
+    // before the model request and restored on disk; in a failed command's
+    // output it cannot be redacted, and it never stops the turn.
+    if (agent === "claude-code" && verifierAssets) {
+      const dir = join(state, "verifier", "s6-secrets-verify-pico-9d44c27848bc");
+      mkdirSync(dir, { recursive: true });
+      for (const f of ["sky_web_bg.wasm", "sky_web_relaxed_bg.wasm", "s6-secrets-verify-pico.gguf", "dictionary.txt"])
+        copyFileSync(join(verifierAssets, f), join(dir, f));
+      execFileSync("node", [bundle, "verifier", "on"], { cwd: project, env, stdio: "pipe" });
+      phase = "verifier";
+      turn = 0;
+      rmSync(join(project, "copy.txt"), { force: true });
+      writeFileSync(join(project, "ci-values.txt"), `DB_PASS=${verifierValue}\n`);
+      const result = await run(command, [...args, "Read ci-values.txt, then copy its line into copy.txt using the file writing tool."], { cwd: project, env });
+      if (failure) {
+        console.error((result.stderr + result.stdout).replaceAll(verifierValue, "[VALUE]").slice(-5000));
+        throw failure;
+      }
+      assert.equal(result.code, 0, `verifier roundtrip failed: ${result.stderr.slice(-700)}`);
+      assert(turn >= 3, `claude-code: incomplete verifier tool loop (${turn})`);
+      assert(readFileSync(join(project, "copy.txt"), "utf8").includes(verifierValue), "the verifier's placeholder was not restored on disk");
+      console.log(
+        `PASS ${agent} verifier: accepted value redacted before model request, restore on disk, ${requests.filter((r) => r.phase === phase).length} requests inspected`,
+      );
+
+      phase = "verifier-failed";
+      turn = 0;
+      const failed = await run(
+        command,
+        [
+          ...args.slice(0, args.indexOf("--allowedTools") + 1),
+          "mcp__audit__emit,Bash",
+          ...args.slice(args.indexOf("--allowedTools") + 2),
+          "Print ci-values.txt.",
+        ],
+        { cwd: project, env },
+      );
+      if (failure) {
+        console.error((failed.stderr + failed.stdout).replaceAll(verifierValue, "[VALUE]").slice(-5000));
+        throw failure;
+      }
+      const seen = requests.filter((r) => r.phase === phase);
+      assert.equal(turn, 2, `claude-code: the verifier stopped the turn after a failed command (${turn} request(s))`);
+      assert(seen.at(-1).holdsVerifierValue, "the failed command's output was expected to reach the model unredacted");
+      console.log(
+        `PASS ${agent} verifier, failed command: reached the model unredacted (not rewritable), turn NOT stopped, ${seen.length} request(s) inspected`,
+      );
+      execFileSync("node", [bundle, "verifier", "off"], { cwd: project, env, stdio: "pipe" });
     }
 
     // Scope: the project fences the agent into src/; a read of private/ is
