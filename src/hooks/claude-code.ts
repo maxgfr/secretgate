@@ -352,14 +352,30 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig, lib?: Ve
   // hard bound, and can only add redactions to it.
   const seen: Seen[] = [];
   const first = new Map<string, { text: string; ms: number }>();
+  // The rules redact object keys as they always did; the verifier never sees
+  // nor rewrites one (a key is the tool's structure, not its output).
+  const keys = new Map<string, string>();
+  let inKey = false;
   const source = `claude-code:${toolName}`;
   const remember = lib
     ? (s: string, r: RedactResult, ms: number) => {
-        seen.push({ text: s, findings: r.findings });
-        first.set(s, { text: r.text, ms });
+        if (inKey) keys.set(s, r.text);
+        else {
+          seen.push({ text: s, findings: r.findings });
+          first.set(s, { text: r.text, ms });
+        }
       }
     : undefined;
-  let { value, changed } = mapStrings(filtered.value, eventRedactor(vault, source, cfg.allowlist, remember), skip);
+  const redact = eventRedactor(vault, source, cfg.allowlist, remember);
+  const redactKey = (k: string): string => {
+    inKey = true;
+    try {
+      return redact(k);
+    } finally {
+      inKey = false;
+    }
+  };
+  let { value, changed } = lib ? mapStrings(filtered.value, redact, skip, redactKey) : mapStrings(filtered.value, redact, skip);
   if (lib) {
     const debug = lib.debugFromEnv();
     // A Read names the file it read: only that path goes to the model.
@@ -371,34 +387,41 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig, lib?: Ve
       ...(debug ? { debug } : {}),
       label: "PostToolUse",
     });
-    const answered: string[] = [];
-    if (v.extra.size > 0) {
-      const again = mapStrings(
-        filtered.value,
-        (s) => {
-          const pass = first.get(s);
-          const rules = pass?.text ?? s;
-          const extra = v.extra.get(s);
-          let out = rules;
-          // Redacting again costs what the rules' pass cost: a string whose
-          // pass took longer than that budget keeps the rules' redaction.
-          if (extra && pass !== undefined && pass.ms <= lib.REDACT_AGAIN_MS) {
-            try {
-              out = redactText(s, vault, source, { allowlist: cfg.allowlist, deadlineMs: lib.REDACT_AGAIN_MS }, () => extra).text;
-            } catch {
-              // Out of time or of luck: this string keeps the rules' redaction.
-              out = rules;
-            }
+    // Each distinct string once, all under ONE deadline for the event (set when
+    // the child answered): past it, the strings left keep the rules' result.
+    const answered = new Map<string, string>();
+    let late = 0;
+    const valueOut = (s: string): string => {
+      const known = answered.get(s);
+      if (known !== undefined) return known;
+      const pass = first.get(s);
+      let out = pass?.text ?? s;
+      const extra = v.extra.get(s);
+      if (extra && pass !== undefined) {
+        const left = v.deadline - performance.now();
+        // Redacting again costs about what the rules' pass over it cost.
+        if (left > 0 && pass.ms <= left) {
+          try {
+            out = redactText(s, vault, source, { allowlist: cfg.allowlist, deadlineMs: left }, () => extra).text;
+          } catch {
+            late++;
           }
-          answered.push(out);
-          return out;
-        },
-        skip,
-      );
+        } else late++;
+      }
+      answered.set(s, out);
+      return out;
+    };
+    if (v.extra.size > 0) {
+      // In order of value: the strings holding a value the child accepted,
+      // then the ones it only spreads to; the cheapest rule pass first.
+      const ms = (s: string): number => first.get(s)?.ms ?? Number.POSITIVE_INFINITY;
+      for (const s of [...v.extra.keys()].sort((a, b) => Number(v.own.has(b)) - Number(v.own.has(a)) || ms(a) - ms(b))) valueOut(s);
+      const again = mapStrings(filtered.value, valueOut, skip, (k) => keys.get(k) ?? k);
       value = again.value;
       changed ||= again.changed;
-    } else answered.push(...[...first.values()].map((p) => p.text));
-    if (v.completed) lib.recordHandled(input.session_id, answered);
+      if (late > 0) debug?.(`PostToolUse: the event's deadline left ${late} string(s) with the rules' redaction only`);
+    } else for (const [s, p] of first) answered.set(s, p.text);
+    if (v.completed) lib.recordHandled(input.session_id, [...answered.values()]);
   }
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
@@ -432,17 +455,22 @@ function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig, lib?: 
     const sources = new Set<unknown>();
     for (const b of blocks as Array<{ type?: unknown; source?: { type?: unknown } } | null>)
       if ((b?.type === "image" || b?.type === "document") && b.source?.type === "base64") sources.add(b.source);
+    const scanned = (s: string): string => {
+      for (const f of findings(s)) {
+        rules.add(f.ruleId);
+        tools.add(tool);
+      }
+      return s;
+    };
     mapStrings(
       call.tool_response,
       (s) => {
-        for (const f of findings(s)) {
-          rules.add(f.ruleId);
-          tools.add(tool);
-        }
+        // Values go to the verifier too, keys never.
         strings.push(s);
-        return s;
+        return scanned(s);
       },
       (key, v, parent) => isBinaryField(key, v, parent) || (key === "data" && sources.has(parent) && isAttachmentPayload(v, parent.media_type)),
+      scanned,
     );
   }
   if (rules.size === 0) return lib ? verifierBatchReport(results, cfg, lib, input.session_id) : PASS;

@@ -111,8 +111,20 @@ real"). A model's judgement does not stop a turn: only a rule finding does.
   judges only the candidates that **no** rule finding overlaps; a rule finding
   is redacted exactly as without it (same span, same placeholder, same rule
   id): the measurements below check this file by file.
-- What it may add: the values it accepts, and every other place the same
-  event repeats one of those values (8 characters or more).
+- What it may add: the values it accepts, at their own span; and another place
+  where the same event repeats one of them, only when the value is long and
+  unusual enough not to be a word or a piece of code (**12 characters or more,
+  with a digit or both cases**) and that occurrence is a **whole token** (no
+  letter, digit or `_` right before or after it), never inside or across an
+  existing `SECRETGATE_…` placeholder. The model's precision was about 0.84: a
+  false acceptance must stay one wrong redaction, never spread through the
+  text (an accepted `postgres` must not eat `postgresql://` or `postgres_fdw`).
+- It judges and rewrites string **values** only: object keys of a tool result
+  (`filePath`, `stdout`, `type`…) are never sent to it nor rewritten by it; the
+  rules redact keys as they always did. A span it answers is applied only if it
+  lies in its text, splits no surrogate pair, and is not inside or across an
+  existing placeholder (one that holds a whole placeholder is kept: the
+  restore resolves the nested one).
 - With the option **off**, nothing changed: `tests/e2e/option-off.mjs` runs the
   bundles of v1.8.1 and of this version on the same 59 recorded hook events and
   commands (every event of Claude Code, Codex and the OpenCode plugin; scan,
@@ -142,11 +154,21 @@ estimate cannot be the safety of a regex that may not change. So:
   (about 10 ms and 4 ms), but Bun did not interrupt a worker stuck in a regex
   (it waited for the regex), and a worker shares the hook's memory, where a
   process killed with its own memory takes a runaway allocation with it.
-- **Re-redacting** a string the verifier adds to costs what the rules' pass over
-  it cost; it is done only when that pass took at most 250 ms (else the string
-  keeps the rules' redaction alone), under a 250 ms deadline.
+- **Everything the verifier causes after its child answers** (spreading a
+  value, re-redacting the strings it adds to) runs under **one deadline per
+  event, 250 ms** from that answer. Each distinct string is handled once (an
+  output that repeats a string pays once); the strings holding a value the
+  child accepted come first, then the ones it only spreads to, the cheapest
+  rule pass first; a string whose rules' pass took longer than the time left
+  is not redacted again; and past the deadline the strings left keep the
+  rules' result.
 - So the **worst-case added wall time per hook event is 1,000 ms for the child
-  plus 250 ms of re-redaction, about 1.25 s**, against the 30 s hook timeout.
+  plus 250 ms after it, about 1.25 s** (a rule that is running when the deadline
+  passes finishes first: the rules' deadline is checked between two rules),
+  against the 30 s hook timeout. On the review's input (one value, then 20
+  identical 100 KB strings that end with it), the first version of this bound
+  added 4.5 s (7.0 s on, 2.5 s off); now -0.28 to +0.57 s over three paired runs
+  of the bundle with the real model.
   Tests prove it on the reviewer's inputs and on other quadratic shapes (long
   names, many separators, escaped quotes, a 1 MiB line whose keyword comes at
   the end, 2 MiB of keywords), through `PostToolUse` (Read and Bash) and
@@ -163,7 +185,10 @@ estimate cannot be the safety of a regex that may not change. So:
   estimated cost for `generic-keyword` is too high, are skipped early: an early
   skip only, the kill is the bound.
 - `PostToolBatch` reads every result again. The strings `PostToolUse` answered
-  with are recorded by their sha256 (per session, taken by the batch) and not
+  with are recorded by their sha256 (per session, in
+  `~/.secretgate/verifier-batch/`, outside the asset directory; a session id
+  that is not a plain name of letters, digits, `_` and `-` records nothing, so
+  `.` or `..` can never name a path; taken by the batch) and not
   judged again when the batch carries them as they were answered. With Claude
   Code 2.1.325 it does not: the batch carries each result in the shape the
   model reads, so its strings are judged again, which costs one more child

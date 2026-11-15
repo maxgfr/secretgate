@@ -3980,8 +3980,11 @@ var init_common = __esm({
 var hook_exports = {};
 __export(hook_exports, {
   REDACT_AGAIN_MS: () => REDACT_AGAIN_MS,
+  REPEAT_MIN_LENGTH: () => REPEAT_MIN_LENGTH,
   VERIFIER_RULE_ID: () => VERIFIER_RULE_ID,
+  applicableSpan: () => applicableSpan,
   debugFromEnv: () => debugFromEnv,
+  propagates: () => propagates,
   recordHandled: () => recordHandled,
   repositoryPath: () => repositoryPath,
   takeHandled: () => takeHandled,
@@ -3989,14 +3992,30 @@ __export(hook_exports, {
 });
 import { createHash as createHash4 } from "crypto";
 import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync6, readFileSync as readFileSync6, renameSync as renameSync4, rmSync as rmSync4 } from "fs";
-import { join as join11 } from "path";
+import { basename as basename6, dirname as dirname7, join as join11 } from "path";
+function applicableSpan(text, start, end, placeholders) {
+  if (!(Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length)) return false;
+  if (isLow(text.charCodeAt(start)) && start > 0 && isHigh(text.charCodeAt(start - 1))) return false;
+  if (end < text.length && isLow(text.charCodeAt(end)) && isHigh(text.charCodeAt(end - 1))) return false;
+  return placeholders.every((p) => !overlaps(p, { start, end }) || start <= p.start && end >= p.end);
+}
+function propagates(value) {
+  return value.length >= REPEAT_MIN_LENGTH && (/\d/.test(value) || /[a-z]/.test(value) && /[A-Z]/.test(value));
+}
+function wholeToken(text, at, end) {
+  const before = at > 0 ? text.slice(Math.max(0, at - 2), at) : "";
+  const after = text.slice(end, end + 2);
+  const last = before ? [...before].at(-1) : "";
+  const next = after ? [...after][0] : "";
+  return !(last && WORD.test(last)) && !(next && WORD.test(next));
+}
 function verifyStrings(seen, o) {
-  const none = { extra: /* @__PURE__ */ new Map(), completed: false };
+  const none = { extra: /* @__PURE__ */ new Map(), completed: false, deadline: 0, own: /* @__PURE__ */ new Set() };
   try {
     if (!o.config.enabled || isDisabledRule(VERIFIER_RULE_ID, o.allowlist)) return none;
     const byText = /* @__PURE__ */ new Map();
     for (const s of seen) if (s.text.length >= 4 && !byText.has(s.text)) byText.set(s.text, s.findings);
-    if (byText.size === 0) return { extra: /* @__PURE__ */ new Map(), completed: true };
+    if (byText.size === 0) return { extra: /* @__PURE__ */ new Map(), completed: true, deadline: 0, own: /* @__PURE__ */ new Set() };
     const texts = [...byText.keys()];
     const job = {
       v: 1,
@@ -4012,25 +4031,45 @@ function verifyStrings(seen, o) {
       return none;
     }
     o.debug?.(`${o.label}: child answered in ${out.ms.toFixed(0)} ms; ${out.result.summary}`);
+    const deadline = performance.now() + REDACT_AGAIN_MS;
+    const placeholdersOf = /* @__PURE__ */ new Map();
+    const placeholders = (text) => {
+      let p = placeholdersOf.get(text);
+      if (p === void 0) placeholdersOf.set(text, p = [...text.matchAll(PLACEHOLDER2)].map((m) => ({ start: m.index, end: m.index + m[0].length })));
+      return p;
+    };
     const spans = /* @__PURE__ */ new Map();
+    const own = /* @__PURE__ */ new Set();
     const values = /* @__PURE__ */ new Set();
     for (const a of out.result.accepted) {
       const text = texts[a.i];
-      if (text === void 0 || a.start < 0 || a.end > text.length) continue;
+      if (text === void 0 || !applicableSpan(text, a.start, a.end, placeholders(text))) continue;
       const rules = byText.get(text);
       const f = finding(text, a.start, a.end);
       if (rules.some((r) => overlaps(r, f))) continue;
       const list = spans.get(text) ?? [];
       if (!list.some((x) => overlaps(x, f))) list.push(f);
       spans.set(text, list);
-      if (f.secret.length >= MIN_REPEAT) values.add(f.secret);
+      own.add(text);
+      if (propagates(f.secret)) values.add(f.secret);
     }
-    for (const text of texts) {
+    spread: for (const text of texts) {
       const rules = byText.get(text);
       const list = spans.get(text) ?? [];
       for (const v of values) {
         for (let at = text.indexOf(v); at !== -1; at = text.indexOf(v, at + v.length)) {
-          const f = finding(text, at, at + v.length);
+          if (performance.now() > deadline) {
+            o.debug?.(`${o.label}: the event's deadline passed while spreading accepted values; the strings left keep what they have`);
+            if (list.length > 0)
+              spans.set(
+                text,
+                list.sort((a, b) => a.start - b.start)
+              );
+            break spread;
+          }
+          const end = at + v.length;
+          if (!wholeToken(text, at, end) || !applicableSpan(text, at, end, placeholders(text))) continue;
+          const f = finding(text, at, end);
           if (!rules.some((r) => overlaps(r, f)) && !list.some((x) => overlaps(x, f))) list.push(f);
         }
       }
@@ -4040,7 +4079,7 @@ function verifyStrings(seen, o) {
           list.sort((a, b) => a.start - b.start)
         );
     }
-    return { extra: spans, completed: true };
+    return { extra: spans, completed: true, deadline, own };
   } catch {
     return none;
   }
@@ -4071,7 +4110,7 @@ function takeHandled(session) {
   }
   return (s) => hashes.size > 0 && hashes.has(digest(s));
 }
-var REDACT_AGAIN_MS, MIN_REPEAT, overlaps, finding, handledDir, sessionFile, digest;
+var REDACT_AGAIN_MS, overlaps, PLACEHOLDER2, finding, isHigh, isLow, REPEAT_MIN_LENGTH, WORD, handledDir, sessionFile, digest;
 var init_hook = __esm({
   "src/verifier/hook.ts"() {
     "use strict";
@@ -4082,16 +4121,25 @@ var init_hook = __esm({
     init_common();
     init_common();
     REDACT_AGAIN_MS = 250;
-    MIN_REPEAT = 8;
     overlaps = (a, b) => a.start < b.end && b.start < a.end;
+    PLACEHOLDER2 = /SECRETGATE_[0-9a-f]{12,16}/g;
     finding = (text, start, end) => {
       const value = text.slice(start, end);
       let line = 0;
       for (let i = text.indexOf("\n"); i !== -1 && i < start; i = text.indexOf("\n", i + 1)) line++;
       return { ruleId: VERIFIER_RULE_ID, match: value, secret: value, start, end, entropy: shannonEntropy(value), line };
     };
-    handledDir = () => join11(defaultVaultHome(), "verifier", "handled");
-    sessionFile = (session) => typeof session === "string" && /^[\w.-]{1,128}$/.test(session) ? join11(handledDir(), session) : void 0;
+    isHigh = (c) => c >= 55296 && c <= 56319;
+    isLow = (c) => c >= 56320 && c <= 57343;
+    REPEAT_MIN_LENGTH = 12;
+    WORD = /[\p{L}\p{N}_]/u;
+    handledDir = () => join11(defaultVaultHome(), "verifier-batch");
+    sessionFile = (session) => {
+      if (typeof session !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(session)) return void 0;
+      const dir = handledDir();
+      const file = join11(dir, session);
+      return dirname7(file) === dir && basename6(file) === session ? file : void 0;
+    };
     digest = (s) => createHash4("sha256").update(s).digest("hex");
   }
 });
@@ -8631,7 +8679,7 @@ var init_rules_gen = __esm({
 // src/verifier/sg-cand-1/scanner.ts
 function alreadyRedacted2(secret) {
   if (!secret.includes("SECRETGATE_")) return false;
-  const rest = secret.replace(PLACEHOLDER2, "");
+  const rest = secret.replace(PLACEHOLDER3, "");
   return rest.length < secret.length && rest.length < MIN_REMAINDER;
 }
 function compileAllowlist2(a) {
@@ -8899,7 +8947,7 @@ function dedupe2(findings, text) {
   }
   return kept;
 }
-var ScanBudgetError2, PLACEHOLDER2, MIN_REMAINDER, IIN2, PLACEHOLDER_WORDS2, DESCRIBING_WORDS, NAME_TRUSTING_RULES2, alnum2, PUBLIC_NAME2, CREDENTIAL_WORD, GITHUB_TOKEN_RULES2, EIGHT_IN_A_ROW2, BUILTIN_RULES2, COMPILED2, RULE_SOURCE_BLOB2, PATH_RULES_COMPILED2, GLOBAL_PATHS2, GLOBAL_REGEXES2, GLOBAL_STOPWORDS2, POST_BESIDES_PLACEHOLDER, specificity2;
+var ScanBudgetError2, PLACEHOLDER3, MIN_REMAINDER, IIN2, PLACEHOLDER_WORDS2, DESCRIBING_WORDS, NAME_TRUSTING_RULES2, alnum2, PUBLIC_NAME2, CREDENTIAL_WORD, GITHUB_TOKEN_RULES2, EIGHT_IN_A_ROW2, BUILTIN_RULES2, COMPILED2, RULE_SOURCE_BLOB2, PATH_RULES_COMPILED2, GLOBAL_PATHS2, GLOBAL_REGEXES2, GLOBAL_STOPWORDS2, POST_BESIDES_PLACEHOLDER, specificity2;
 var init_scanner2 = __esm({
   "src/verifier/sg-cand-1/scanner.ts"() {
     "use strict";
@@ -8914,7 +8962,7 @@ var init_scanner2 = __esm({
         this.name = "ScanBudgetError";
       }
     };
-    PLACEHOLDER2 = /SECRETGATE_[0-9a-f]{12,16}/g;
+    PLACEHOLDER3 = /SECRETGATE_[0-9a-f]{12,16}/g;
     MIN_REMAINDER = 6;
     IIN2 = /^(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|2(?:22[1-9]|2[3-9]\d|[3-6]\d{2}|7[01]\d|720)\d{12}|3[47]\d{13}|6(?:011|5\d{2})\d{12})$/;
     PLACEHOLDER_WORDS2 = /* @__PURE__ */ new Set([
@@ -9854,7 +9902,7 @@ init_config2();
 import { execFileSync } from "child_process";
 import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync12, mkdtempSync as mkdtempSync2, readFileSync as readFileSync14, readdirSync as readdirSync4, realpathSync as realpathSync5, rmSync as rmSync8, statSync as statSync6 } from "fs";
 import { homedir as homedir8, tmpdir as tmpdir3 } from "os";
-import { delimiter as delimiter3, dirname as dirname12, isAbsolute as isAbsolute6, join as join17, relative as relative5, resolve as resolve8 } from "path";
+import { delimiter as delimiter3, dirname as dirname13, isAbsolute as isAbsolute6, join as join17, relative as relative5, resolve as resolve8 } from "path";
 import { fileURLToPath as fileURLToPath2, pathToFileURL as pathToFileURL2 } from "url";
 
 // src/scope.ts
@@ -15624,10 +15672,15 @@ function extractToolCall(toolName, toolInput) {
 }
 
 // src/hooks/walk.ts
-function mapStrings(value, fn, skip) {
+function mapStrings(value, fn, skip, fnKey = fn) {
   let changed = false;
   const map = (s) => {
     const out = fn(s);
+    if (out !== s) changed = true;
+    return out;
+  };
+  const mapKey = (s) => {
+    const out = fnKey(s);
     if (out !== s) changed = true;
     return out;
   };
@@ -15648,7 +15701,7 @@ function mapStrings(value, fn, skip) {
       }
     } else {
       for (const key of Object.keys(src)) {
-        const mappedKey = map(key);
+        const mappedKey = mapKey(key);
         const v = src[key];
         if (skip?.(key, v, src)) Object.defineProperty(dest, mappedKey, { value: v, enumerable: true, configurable: true, writable: true });
         else if (typeof v === "string") Object.defineProperty(dest, mappedKey, { value: map(v), enumerable: true, configurable: true, writable: true });
@@ -15920,12 +15973,26 @@ function postToolUse(input, cfg, lib) {
   const skip = (key, v, parent) => isBinaryField(key, v, parent) || attachment !== void 0 && parent === attachment && key === "base64" && isAttachmentPayload(v, mediaType);
   const seen = [];
   const first = /* @__PURE__ */ new Map();
+  const keys = /* @__PURE__ */ new Map();
+  let inKey = false;
   const source = `claude-code:${toolName}`;
   const remember = lib ? (s, r, ms) => {
-    seen.push({ text: s, findings: r.findings });
-    first.set(s, { text: r.text, ms });
+    if (inKey) keys.set(s, r.text);
+    else {
+      seen.push({ text: s, findings: r.findings });
+      first.set(s, { text: r.text, ms });
+    }
   } : void 0;
-  let { value, changed } = mapStrings(filtered.value, eventRedactor(vault, source, cfg.allowlist, remember), skip);
+  const redact = eventRedactor(vault, source, cfg.allowlist, remember);
+  const redactKey = (k) => {
+    inKey = true;
+    try {
+      return redact(k);
+    } finally {
+      inKey = false;
+    }
+  };
+  let { value, changed } = lib ? mapStrings(filtered.value, redact, skip, redactKey) : mapStrings(filtered.value, redact, skip);
   if (lib) {
     const debug = lib.debugFromEnv();
     const path = toolName === "Read" ? lib.repositoryPath(input.tool_input?.file_path, str2(input.cwd) ?? process.cwd()) : void 0;
@@ -15936,31 +16003,36 @@ function postToolUse(input, cfg, lib) {
       ...debug ? { debug } : {},
       label: "PostToolUse"
     });
-    const answered = [];
-    if (v.extra.size > 0) {
-      const again = mapStrings(
-        filtered.value,
-        (s) => {
-          const pass = first.get(s);
-          const rules = pass?.text ?? s;
-          const extra = v.extra.get(s);
-          let out = rules;
-          if (extra && pass !== void 0 && pass.ms <= lib.REDACT_AGAIN_MS) {
-            try {
-              out = redactText(s, vault, source, { allowlist: cfg.allowlist, deadlineMs: lib.REDACT_AGAIN_MS }, () => extra).text;
-            } catch {
-              out = rules;
-            }
+    const answered = /* @__PURE__ */ new Map();
+    let late = 0;
+    const valueOut = (s) => {
+      const known = answered.get(s);
+      if (known !== void 0) return known;
+      const pass = first.get(s);
+      let out = pass?.text ?? s;
+      const extra = v.extra.get(s);
+      if (extra && pass !== void 0) {
+        const left = v.deadline - performance.now();
+        if (left > 0 && pass.ms <= left) {
+          try {
+            out = redactText(s, vault, source, { allowlist: cfg.allowlist, deadlineMs: left }, () => extra).text;
+          } catch {
+            late++;
           }
-          answered.push(out);
-          return out;
-        },
-        skip
-      );
+        } else late++;
+      }
+      answered.set(s, out);
+      return out;
+    };
+    if (v.extra.size > 0) {
+      const ms = (s) => first.get(s)?.ms ?? Number.POSITIVE_INFINITY;
+      for (const s of [...v.extra.keys()].sort((a, b) => Number(v.own.has(b)) - Number(v.own.has(a)) || ms(a) - ms(b))) valueOut(s);
+      const again = mapStrings(filtered.value, valueOut, skip, (k) => keys.get(k) ?? k);
       value = again.value;
       changed ||= again.changed;
-    } else answered.push(...[...first.values()].map((p) => p.text));
-    if (v.completed) lib.recordHandled(input.session_id, answered);
+      if (late > 0) debug?.(`PostToolUse: the event's deadline left ${late} string(s) with the rules' redaction only`);
+    } else for (const [s, p] of first) answered.set(s, p.text);
+    if (v.completed) lib.recordHandled(input.session_id, [...answered.values()]);
   }
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
@@ -15981,17 +16053,21 @@ function postToolBatch(input, cfg, lib) {
     const sources = /* @__PURE__ */ new Set();
     for (const b of blocks)
       if ((b?.type === "image" || b?.type === "document") && b.source?.type === "base64") sources.add(b.source);
+    const scanned = (s) => {
+      for (const f of findings(s)) {
+        rules.add(f.ruleId);
+        tools.add(tool);
+      }
+      return s;
+    };
     mapStrings(
       call.tool_response,
       (s) => {
-        for (const f of findings(s)) {
-          rules.add(f.ruleId);
-          tools.add(tool);
-        }
         strings2.push(s);
-        return s;
+        return scanned(s);
       },
-      (key, v, parent) => isBinaryField(key, v, parent) || key === "data" && sources.has(parent) && isAttachmentPayload(v, parent.media_type)
+      (key, v, parent) => isBinaryField(key, v, parent) || key === "data" && sources.has(parent) && isAttachmentPayload(v, parent.media_type),
+      scanned
     );
   }
   if (rules.size === 0) return lib ? verifierBatchReport(results, cfg, lib, input.session_id) : PASS;
@@ -16058,13 +16134,13 @@ init_main();
 init_config2();
 init_fs_atomic();
 import { mkdirSync as mkdirSync7, readFileSync as readFileSync7 } from "fs";
-import { dirname as dirname7 } from "path";
+import { dirname as dirname8 } from "path";
 var AllowlistFileError = class extends Error {
 };
 var KEYS = ["sha256", "rules", "paths"];
 function writeAllow(add) {
   const path = allowlistPath();
-  mkdirSync7(dirname7(path), { recursive: true, mode: 448 });
+  mkdirSync7(dirname8(path), { recursive: true, mode: 448 });
   let text;
   try {
     text = readFileSync7(path, "utf8");
@@ -16110,7 +16186,7 @@ function isSecretgateHook(command, agent) {
 init_fs_atomic();
 init_paths();
 import { copyFileSync as copyFileSync2, existsSync as existsSync5, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync5 } from "fs";
-import { basename as basename6, dirname as dirname8, join as join12 } from "path";
+import { basename as basename7, dirname as dirname9, join as join12 } from "path";
 var SettingsParseError = class extends Error {
   constructor(path, cause) {
     super(`refusing to edit ${path}: it is not valid JSON (${cause}). Fix it manually, then re-run.`);
@@ -16133,9 +16209,9 @@ var SETTINGS_DIRS = /* @__PURE__ */ new Set([".claude", ".codex", "opencode"]);
 function assertWithin(path, roots) {
   const real = canonical(path);
   if (!roots.some((root) => covers(root, real)))
-    throw new SettingsLinkError(path, real, `outside ${roots[0] ?? dirname8(path)} (secretgate only writes through a link that stays inside that directory)`);
-  if (basename6(real).toLowerCase() !== basename6(path).toLowerCase() && !dirname8(real).split(/[\\/]/).some((segment) => SETTINGS_DIRS.has(segment)))
-    throw new SettingsLinkError(path, real, `which is not a settings file (another name than ${basename6(path)}, and not in a directory of the agent's own)`);
+    throw new SettingsLinkError(path, real, `outside ${roots[0] ?? dirname9(path)} (secretgate only writes through a link that stays inside that directory)`);
+  if (basename7(real).toLowerCase() !== basename7(path).toLowerCase() && !dirname9(real).split(/[\\/]/).some((segment) => SETTINGS_DIRS.has(segment)))
+    throw new SettingsLinkError(path, real, `which is not a settings file (another name than ${basename7(path)}, and not in a directory of the agent's own)`);
 }
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -16148,7 +16224,7 @@ function canonicalize(value) {
 }
 var stableStringify = (v) => JSON.stringify(canonicalize(v));
 function editJsonFile(path, mutate, opts = {}) {
-  assertWithin(path, opts.within ?? [dirname8(path)]);
+  assertWithin(path, opts.within ?? [dirname9(path)]);
   let original;
   let obj = {};
   if (existsSync5(path)) {
@@ -16176,8 +16252,8 @@ function editJsonFile(path, mutate, opts = {}) {
     const stamp = (/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-");
     backupPath = `${path}.secretgate-backup-${stamp}`;
     if (opts.latestBackupOnly) {
-      const prefix = `${basename6(path)}.secretgate-backup-`;
-      for (const f of readdirSync3(dirname8(path))) if (f.startsWith(prefix)) rmSync5(join12(dirname8(path), f), { force: true });
+      const prefix = `${basename7(path)}.secretgate-backup-`;
+      for (const f of readdirSync3(dirname9(path))) if (f.startsWith(prefix)) rmSync5(join12(dirname9(path), f), { force: true });
     }
     copyFileSync2(path, backupPath);
   }
@@ -16187,7 +16263,7 @@ function editJsonFile(path, mutate, opts = {}) {
 
 // src/install/claude-code.ts
 import { existsSync as existsSync6, readFileSync as readFileSync9, rmSync as rmSync6 } from "fs";
-import { dirname as dirname9 } from "path";
+import { dirname as dirname10 } from "path";
 var CC_DENY_RULES = [
   "Read(**/.env)",
   "Read(**/.env.local)",
@@ -16282,7 +16358,7 @@ function withoutOurGroups(groups) {
 }
 function settingsTree(settingsPath, root) {
   const ownershipPath = `${settingsPath}.secretgate-ownership.json`;
-  const within = [root ?? dirname9(dirname9(settingsPath))];
+  const within = [root ?? dirname10(dirname10(settingsPath))];
   assertWithin(settingsPath, within);
   assertWithin(ownershipPath, within);
   return { ownershipPath, within };
@@ -16361,7 +16437,7 @@ init_fs_atomic();
 import { createHash as createHash5 } from "crypto";
 import { copyFileSync as copyFileSync3, existsSync as existsSync7, mkdirSync as mkdirSync8, readFileSync as readFileSync10, realpathSync as realpathSync4 } from "fs";
 import { homedir as homedir6 } from "os";
-import { dirname as dirname10, join as join13, resolve as resolve7 } from "path";
+import { dirname as dirname11, join as join13, resolve as resolve7 } from "path";
 
 // src/install/toml-touch.ts
 var BLOCK_START = "# >>> secretgate managed >>>";
@@ -16669,7 +16745,7 @@ function codexWiringStatus(codexDir) {
   }
 }
 function codexTree(codexDir) {
-  const within = [homedir6(), dirname10(resolve7(codexDir))];
+  const within = [homedir6(), dirname11(resolve7(codexDir))];
   assertWithin(join13(codexDir, "hooks.json"), within);
   assertWithin(join13(codexDir, "config.toml"), within);
   return within;
@@ -16778,7 +16854,7 @@ init_main();
 init_fs_atomic();
 import { copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync9, readFileSync as readFileSync11, rmSync as rmSync7 } from "fs";
 import { homedir as homedir7 } from "os";
-import { dirname as dirname11, join as join14 } from "path";
+import { dirname as dirname12, join as join14 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
   const custom = process.env.OPENCODE_CONFIG_DIR;
@@ -16806,7 +16882,7 @@ function installOpencode(options) {
     }
     if (existing === content) return { path: target, changed: removeStalePlugin(configDir) };
   }
-  mkdirSync9(dirname11(target), { recursive: true });
+  mkdirSync9(dirname12(target), { recursive: true });
   writeFileAtomic(target, content, 420);
   removeStalePlugin(configDir);
   return { path: target, changed: true };
@@ -16831,7 +16907,7 @@ function uninstallOpencode({ configDir }) {
   for (const name of ["opencode.json", "opencode.jsonc"]) {
     const path = join14(configDir, name);
     if (!existsSync8(path)) continue;
-    assertWithin(path, [homedir7(), dirname11(configDir)]);
+    assertWithin(path, [homedir7(), dirname12(configDir)]);
     const text = withoutNpmPin(path);
     if (text !== void 0) edits.push({ path, text });
   }
@@ -17415,7 +17491,7 @@ function parseAgentFlags(args, io) {
 }
 function opencodePlugin() {
   if (embeddedOpencodePlugin !== void 0) return { pluginContent: embeddedOpencodePlugin };
-  const selfDir = dirname12(fileURLToPath2(import.meta.url));
+  const selfDir = dirname13(fileURLToPath2(import.meta.url));
   const candidates = [join17(selfDir, "secretgate-opencode.mjs"), join17(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
   const found = candidates.find((c) => existsSync9(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
@@ -17482,7 +17558,7 @@ function installForAgents(flags, io) {
       if (flags.project && projectSettingsAliasesGlobal()) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
-      mkdirSync12(dirname12(settingsPath), { recursive: true });
+      mkdirSync12(dirname13(settingsPath), { recursive: true });
       const claudeVersion = claudeCodeVersion();
       const r = installClaudeCode({ settingsPath, command: installedCliCommand(), claudeVersion });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
