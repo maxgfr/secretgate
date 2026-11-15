@@ -295,7 +295,8 @@ measured with the file's path given to the model, and with the model alone.
 | files with a verifier redaction | **41 (0.46%)** | **24 (0.27%)** |
 | values the verifier accepted | 85 | 61 |
 | other places those values were spread to (whole tokens, see the rule above) | 30, in 5 files | 24, in 4 files |
-| candidates judged / not judged (child budget or cap reached, files) | 12,236 / 1,153 (6 files) | 11,982 / 1,468 (11 files) |
+| candidates / left to a rule finding | 13,475 / 80 | 13,475 / 80 |
+| candidates judged / not judged (child budget or cap reached, files) | 12,242 / 1,153 (6 files) | 11,927 / 1,468 (11 files) |
 | files where the child hit the **hard bound** (killed, nothing added) | **0** | **0** |
 | child process time, spawn to answer, median / p95 / max | 42 / 122 / 809 ms | 55 / 171 / 997 ms |
 | hook wall time off → on, median | 38.8 → 84.3 ms | 47.8 → 112.9 ms |
