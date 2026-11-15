@@ -1,6 +1,8 @@
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { handleClaudeCode } from "../../src/hooks/claude-code.js";
 import { Vault } from "../../src/vault/vault.js";
@@ -68,4 +70,46 @@ describe.skipIf(!source)("the verifier with its real assets", () => {
     expect(JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput.stdout).toMatch(/^DB_PASS=SECRETGATE_[0-9a-f]{12}\n$/);
     expect(new Vault().list().map((e) => e.ruleId)).toEqual([VERIFIER_RULE_ID]);
   });
+
+  it("loads through a symlinked asset (its bytes are what is checked)", () => {
+    const moved = join(home, "gguf-elsewhere");
+    renameSync(join(assetDir(), "s6-secrets-verify-pico.gguf"), moved);
+    symlinkSync(moved, join(assetDir(), "s6-secrets-verify-pico.gguf"));
+    try {
+      expect(loadEngine("f1").tau).toBeCloseTo(0.2598, 4);
+    } finally {
+      rmSync(join(assetDir(), "s6-secrets-verify-pico.gguf"));
+      renameSync(moved, join(assetDir(), "s6-secrets-verify-pico.gguf"));
+    }
+  });
+
+  it("concurrent hooks of the built bundle share the asset directory and all redact the same", async () => {
+    const bundle = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "scripts", "secretgate.mjs");
+    const input = JSON.stringify({
+      session_id: "s1",
+      cwd: "/tmp",
+      tool_name: "Bash",
+      tool_input: { command: "env" },
+      tool_response: { stdout: `DB_PASS=${value}\n`, stderr: "" },
+    });
+    const runs = await Promise.all(
+      Array.from(
+        { length: 8 },
+        () =>
+          new Promise<string>((done, fail) => {
+            const child = spawn(process.execPath, [bundle, "hook", "claude-code", "post-tool-use"], { env: { ...process.env, SECRETGATE_HOME: home } });
+            let out = "";
+            child.stdout.on("data", (d) => {
+              out += d;
+            });
+            child.on("error", fail);
+            child.on("close", () => done(out));
+            child.stdin.end(input);
+          }),
+      ),
+    );
+    const outputs = runs.map((r) => JSON.parse(r).hookSpecificOutput.updatedToolOutput.stdout);
+    expect(new Set(outputs).size).toBe(1);
+    expect(outputs[0]).toMatch(/^DB_PASS=SECRETGATE_[0-9a-f]{12}\n$/);
+  }, 60_000);
 });
