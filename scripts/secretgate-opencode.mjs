@@ -913,7 +913,8 @@ function writeFileAtomic(path, content, mode = 420) {
   const fd = openSync(tmp, "wx", mode);
   try {
     try {
-      writeSync(fd, content);
+      if (typeof content === "string") writeSync(fd, content);
+      else for (let at = 0; at < content.length; ) at += writeSync(fd, content, at, content.length - at);
     } finally {
       closeSync(fd);
     }
@@ -2429,7 +2430,7 @@ function secretgateInvocation(argv) {
     const verb = argv[k];
     if (verb === void 0) return void 0;
     const next = argv[skipFlags(k + 1)];
-    return verb === "vault" && next ? `vault ${next}` : verb;
+    return (verb === "vault" || verb === "verifier") && next ? `${verb} ${next}` : verb;
   };
   const first = argv[index];
   if (first === void 0) return void 0;
@@ -2962,6 +2963,21 @@ function sensitiveFileBelow(dir, spec, allowlist, cwd) {
   return result === "overflow" ? "overflow" : hit;
 }
 
+// src/verifier/config.ts
+var THRESHOLD_PRESETS = ["f1", "f05", "f2"];
+var VERIFIER_OFF = { enabled: false, threshold: "f1" };
+function readVerifierConfig(raw) {
+  if (raw === void 0) return VERIFIER_OFF;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { ...VERIFIER_OFF, invalid: "verifier must be an object" };
+  const v = raw;
+  const unknown = Object.keys(v).find((k) => k !== "enabled" && k !== "threshold");
+  if (unknown !== void 0) return { ...VERIFIER_OFF, invalid: `verifier.${unknown} is not a known key (enabled, threshold)` };
+  if (v.enabled !== void 0 && typeof v.enabled !== "boolean") return { ...VERIFIER_OFF, invalid: "verifier.enabled must be true or false" };
+  if (v.threshold !== void 0 && !THRESHOLD_PRESETS.includes(v.threshold))
+    return { ...VERIFIER_OFF, invalid: 'verifier.threshold must be "f1", "f05" or "f2"' };
+  return { enabled: v.enabled === true, threshold: v.threshold ?? "f1" };
+}
+
 // src/config.ts
 function readJsonFile(path) {
   let bytes;
@@ -3075,6 +3091,8 @@ function loadConfig(cwd) {
   return {
     restoreBash: base.restoreBash === true,
     hybrid: base.hybrid === "off" ? "off" : "auto",
+    // Only the user's own config.json: a repository cannot switch it on or off.
+    verifier: readVerifierConfig(base.verifier),
     allowlist: merged,
     scanAllowlist: forScan,
     untrusted,
@@ -3699,7 +3717,7 @@ function touchesOnly(call, file, cwd) {
   if (call.kind !== "read" && call.kind !== "write" && call.kind !== "patch") return false;
   return call.paths.length > 0 && call.paths.every((p) => canonical(resolve5(cwd, expandHome(p))) === canonical(file));
 }
-var GUARDED = /* @__PURE__ */ new Set(["disable", "allow", "uninstall", "trust", "vault clear"]);
+var GUARDED = /* @__PURE__ */ new Set(["disable", "allow", "uninstall", "trust", "vault clear", "verifier on", "verifier off", "verifier fetch"]);
 function tamperReason(call, cwd, analysis) {
   if (analysis) {
     for (const argv of analysis.commands) {
@@ -8456,10 +8474,24 @@ var RedactionUnsettledError = class extends Error {
     this.name = "RedactionUnsettledError";
   }
 };
-function redactText(text, vault, source, cfg = {}) {
-  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : void 0;
+function redactText(text, vault, source, cfg = {}, extra) {
+  let deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : void 0;
   const scanNow = (t) => scan(t, { ...cfg, pragmas: cfg.pragmas ?? false, ...deadline !== void 0 ? { deadlineMs: deadline - performance.now() } : {} });
-  const findings = scanNow(text);
+  const ruleFindings = scanNow(text);
+  let findings = ruleFindings;
+  if (extra) {
+    const t0 = performance.now();
+    let proposed = [];
+    try {
+      proposed = extra(text, ruleFindings);
+    } catch {
+    }
+    const added = proposed.filter((x) => x.end > x.start && !ruleFindings.some((f) => f.start < x.end && x.start < f.end));
+    if (deadline !== void 0) deadline += performance.now() - t0;
+    const disjoint = [];
+    for (const x of [...added].sort((a, b) => a.start - b.start)) if (disjoint.every((d) => x.start >= d.end || x.end <= d.start)) disjoint.push(x);
+    if (disjoint.length > 0) findings = [...ruleFindings, ...disjoint].sort((a, b) => a.start - b.start);
+  }
   if (findings.length === 0) return { text, findings, replaced: [] };
   const replaced = [];
   let current = text;
@@ -8574,14 +8606,15 @@ function isAttachmentPayload(value, declared) {
   if (typeof value !== "string" || value.length < 8 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
   return hasSignature(Buffer.from(value.slice(0, 1400), "base64"), typeof declared === "string" ? declared.toLowerCase() : "");
 }
-function eventRedactor(vault, source, allowlist) {
+function eventRedactor(vault, source, allowlist, verifier) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
   let remaining = SCAN_CAP;
+  const extra = verifier?.active ? (text, findings) => verifier.accept(text, findings) : void 0;
   return (text) => {
     remaining -= text.length;
-    const deadlineMs = deadline - performance.now();
+    const deadlineMs = deadline + (verifier?.spentMs ?? 0) - performance.now();
     if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
-    return redactText(text, vault, source, { allowlist, deadlineMs }).text;
+    return redactText(text, vault, source, { allowlist, deadlineMs }, extra).text;
   };
 }
 

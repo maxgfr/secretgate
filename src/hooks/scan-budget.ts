@@ -2,6 +2,7 @@ import type { UserAllowlist } from "../engine/allowlist.js";
 import { type Finding, scan } from "../engine/scanner.js";
 import { redactText } from "../redact.js";
 import type { Vault } from "../vault/vault.js";
+import type { VerifierSession } from "../verifier/verifier.js";
 
 export const SCAN_CAP = 2 * 1024 * 1024;
 // Wall-clock budget per hook scan. Well under a typical agent hook timeout so a
@@ -96,14 +97,21 @@ export function isAttachmentPayload(value: unknown, declared?: unknown): value i
 // lockfiles and vendor trees whole; path-scoped rules stop running elsewhere),
 // and a path is what a repository or an agent arranges most easily. Those
 // allowlists are for `scan`, where the repository describes its own files.
-export function eventRedactor(vault: Vault, source: string, allowlist: UserAllowlist): (text: string) => string {
+//
+// The experimental verifier, when the event has one, judges what the rules
+// left in each string (src/verifier/verifier.ts). It has a budget of its own
+// (VERIFIER_BUDGET_MS, VERIFIER_MAX_CANDIDATES per event), and the rules'
+// deadline is moved by the time it took: the verifier can make a hook slower
+// by its budget, never make the rules run out of theirs.
+export function eventRedactor(vault: Vault, source: string, allowlist: UserAllowlist, verifier?: VerifierSession): (text: string) => string {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
   let remaining = SCAN_CAP;
+  const extra = verifier?.active ? (text: string, findings: readonly Finding[]) => verifier.accept(text, findings) : undefined;
   return (text) => {
     remaining -= text.length;
-    const deadlineMs = deadline - performance.now();
+    const deadlineMs = deadline + (verifier?.spentMs ?? 0) - performance.now();
     if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
-    return redactText(text, vault, source, { allowlist, deadlineMs }).text;
+    return redactText(text, vault, source, { allowlist, deadlineMs }, extra).text;
   };
 }
 

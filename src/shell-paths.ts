@@ -1777,7 +1777,7 @@ const RUNNER_VALUED = new Set([
 
 /**
  * The secretgate subcommand an argv runs (`["secretgate", "disable"]` →
- * "disable"; `vault clear` → "vault clear"), recognising `secretgate`,
+ * "disable"; `vault clear` → "vault clear", `verifier off` → "verifier off"), recognising `secretgate`,
  * `node …/secretgate.mjs`, and every package-manager launcher (`npx
  * [--package secretgate] secretgate`, `pnpm [exec|dlx] secretgate`, `yarn
  * [dlx] secretgate`, `npm exec secretgate`, `bunx`, `bun x`), behind any
@@ -1798,7 +1798,7 @@ export function secretgateInvocation(argv: string[]): string | undefined {
     const verb = argv[k];
     if (verb === undefined) return undefined;
     const next = argv[skipFlags(k + 1)];
-    return verb === "vault" && next ? `vault ${next}` : verb;
+    return (verb === "vault" || verb === "verifier") && next ? `${verb} ${next}` : verb;
   };
   const first = argv[index];
   if (first === undefined) return undefined;

@@ -1,17 +1,18 @@
 #!/usr/bin/env node
-
-// src/cli.ts
-import { execFileSync } from "child_process";
-import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync2, readFileSync as readFileSync11, readdirSync as readdirSync4, realpathSync as realpathSync5, rmSync as rmSync7, statSync as statSync5 } from "fs";
-import { homedir as homedir8, tmpdir as tmpdir3 } from "os";
-import { delimiter as delimiter3, dirname as dirname11, isAbsolute as isAbsolute5, join as join13, relative as relative4, resolve as resolve7 } from "path";
-import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
-
-// src/config.ts
-import { createHash as createHash2 } from "crypto";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync as statSync4 } from "fs";
-import { homedir as homedir4 } from "os";
-import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
+var __defProp = Object.defineProperty;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
+};
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
 
 // node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/scanner.js
 function createScanner(text, ignoreTrivia = false) {
@@ -351,119 +352,130 @@ function isDigit(ch) {
   return ch >= 48 && ch <= 57;
 }
 var CharacterCodes;
-(function(CharacterCodes2) {
-  CharacterCodes2[CharacterCodes2["lineFeed"] = 10] = "lineFeed";
-  CharacterCodes2[CharacterCodes2["carriageReturn"] = 13] = "carriageReturn";
-  CharacterCodes2[CharacterCodes2["space"] = 32] = "space";
-  CharacterCodes2[CharacterCodes2["_0"] = 48] = "_0";
-  CharacterCodes2[CharacterCodes2["_1"] = 49] = "_1";
-  CharacterCodes2[CharacterCodes2["_2"] = 50] = "_2";
-  CharacterCodes2[CharacterCodes2["_3"] = 51] = "_3";
-  CharacterCodes2[CharacterCodes2["_4"] = 52] = "_4";
-  CharacterCodes2[CharacterCodes2["_5"] = 53] = "_5";
-  CharacterCodes2[CharacterCodes2["_6"] = 54] = "_6";
-  CharacterCodes2[CharacterCodes2["_7"] = 55] = "_7";
-  CharacterCodes2[CharacterCodes2["_8"] = 56] = "_8";
-  CharacterCodes2[CharacterCodes2["_9"] = 57] = "_9";
-  CharacterCodes2[CharacterCodes2["a"] = 97] = "a";
-  CharacterCodes2[CharacterCodes2["b"] = 98] = "b";
-  CharacterCodes2[CharacterCodes2["c"] = 99] = "c";
-  CharacterCodes2[CharacterCodes2["d"] = 100] = "d";
-  CharacterCodes2[CharacterCodes2["e"] = 101] = "e";
-  CharacterCodes2[CharacterCodes2["f"] = 102] = "f";
-  CharacterCodes2[CharacterCodes2["g"] = 103] = "g";
-  CharacterCodes2[CharacterCodes2["h"] = 104] = "h";
-  CharacterCodes2[CharacterCodes2["i"] = 105] = "i";
-  CharacterCodes2[CharacterCodes2["j"] = 106] = "j";
-  CharacterCodes2[CharacterCodes2["k"] = 107] = "k";
-  CharacterCodes2[CharacterCodes2["l"] = 108] = "l";
-  CharacterCodes2[CharacterCodes2["m"] = 109] = "m";
-  CharacterCodes2[CharacterCodes2["n"] = 110] = "n";
-  CharacterCodes2[CharacterCodes2["o"] = 111] = "o";
-  CharacterCodes2[CharacterCodes2["p"] = 112] = "p";
-  CharacterCodes2[CharacterCodes2["q"] = 113] = "q";
-  CharacterCodes2[CharacterCodes2["r"] = 114] = "r";
-  CharacterCodes2[CharacterCodes2["s"] = 115] = "s";
-  CharacterCodes2[CharacterCodes2["t"] = 116] = "t";
-  CharacterCodes2[CharacterCodes2["u"] = 117] = "u";
-  CharacterCodes2[CharacterCodes2["v"] = 118] = "v";
-  CharacterCodes2[CharacterCodes2["w"] = 119] = "w";
-  CharacterCodes2[CharacterCodes2["x"] = 120] = "x";
-  CharacterCodes2[CharacterCodes2["y"] = 121] = "y";
-  CharacterCodes2[CharacterCodes2["z"] = 122] = "z";
-  CharacterCodes2[CharacterCodes2["A"] = 65] = "A";
-  CharacterCodes2[CharacterCodes2["B"] = 66] = "B";
-  CharacterCodes2[CharacterCodes2["C"] = 67] = "C";
-  CharacterCodes2[CharacterCodes2["D"] = 68] = "D";
-  CharacterCodes2[CharacterCodes2["E"] = 69] = "E";
-  CharacterCodes2[CharacterCodes2["F"] = 70] = "F";
-  CharacterCodes2[CharacterCodes2["G"] = 71] = "G";
-  CharacterCodes2[CharacterCodes2["H"] = 72] = "H";
-  CharacterCodes2[CharacterCodes2["I"] = 73] = "I";
-  CharacterCodes2[CharacterCodes2["J"] = 74] = "J";
-  CharacterCodes2[CharacterCodes2["K"] = 75] = "K";
-  CharacterCodes2[CharacterCodes2["L"] = 76] = "L";
-  CharacterCodes2[CharacterCodes2["M"] = 77] = "M";
-  CharacterCodes2[CharacterCodes2["N"] = 78] = "N";
-  CharacterCodes2[CharacterCodes2["O"] = 79] = "O";
-  CharacterCodes2[CharacterCodes2["P"] = 80] = "P";
-  CharacterCodes2[CharacterCodes2["Q"] = 81] = "Q";
-  CharacterCodes2[CharacterCodes2["R"] = 82] = "R";
-  CharacterCodes2[CharacterCodes2["S"] = 83] = "S";
-  CharacterCodes2[CharacterCodes2["T"] = 84] = "T";
-  CharacterCodes2[CharacterCodes2["U"] = 85] = "U";
-  CharacterCodes2[CharacterCodes2["V"] = 86] = "V";
-  CharacterCodes2[CharacterCodes2["W"] = 87] = "W";
-  CharacterCodes2[CharacterCodes2["X"] = 88] = "X";
-  CharacterCodes2[CharacterCodes2["Y"] = 89] = "Y";
-  CharacterCodes2[CharacterCodes2["Z"] = 90] = "Z";
-  CharacterCodes2[CharacterCodes2["asterisk"] = 42] = "asterisk";
-  CharacterCodes2[CharacterCodes2["backslash"] = 92] = "backslash";
-  CharacterCodes2[CharacterCodes2["closeBrace"] = 125] = "closeBrace";
-  CharacterCodes2[CharacterCodes2["closeBracket"] = 93] = "closeBracket";
-  CharacterCodes2[CharacterCodes2["colon"] = 58] = "colon";
-  CharacterCodes2[CharacterCodes2["comma"] = 44] = "comma";
-  CharacterCodes2[CharacterCodes2["dot"] = 46] = "dot";
-  CharacterCodes2[CharacterCodes2["doubleQuote"] = 34] = "doubleQuote";
-  CharacterCodes2[CharacterCodes2["minus"] = 45] = "minus";
-  CharacterCodes2[CharacterCodes2["openBrace"] = 123] = "openBrace";
-  CharacterCodes2[CharacterCodes2["openBracket"] = 91] = "openBracket";
-  CharacterCodes2[CharacterCodes2["plus"] = 43] = "plus";
-  CharacterCodes2[CharacterCodes2["slash"] = 47] = "slash";
-  CharacterCodes2[CharacterCodes2["formFeed"] = 12] = "formFeed";
-  CharacterCodes2[CharacterCodes2["tab"] = 9] = "tab";
-})(CharacterCodes || (CharacterCodes = {}));
+var init_scanner = __esm({
+  "node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/scanner.js"() {
+    "use strict";
+    (function(CharacterCodes2) {
+      CharacterCodes2[CharacterCodes2["lineFeed"] = 10] = "lineFeed";
+      CharacterCodes2[CharacterCodes2["carriageReturn"] = 13] = "carriageReturn";
+      CharacterCodes2[CharacterCodes2["space"] = 32] = "space";
+      CharacterCodes2[CharacterCodes2["_0"] = 48] = "_0";
+      CharacterCodes2[CharacterCodes2["_1"] = 49] = "_1";
+      CharacterCodes2[CharacterCodes2["_2"] = 50] = "_2";
+      CharacterCodes2[CharacterCodes2["_3"] = 51] = "_3";
+      CharacterCodes2[CharacterCodes2["_4"] = 52] = "_4";
+      CharacterCodes2[CharacterCodes2["_5"] = 53] = "_5";
+      CharacterCodes2[CharacterCodes2["_6"] = 54] = "_6";
+      CharacterCodes2[CharacterCodes2["_7"] = 55] = "_7";
+      CharacterCodes2[CharacterCodes2["_8"] = 56] = "_8";
+      CharacterCodes2[CharacterCodes2["_9"] = 57] = "_9";
+      CharacterCodes2[CharacterCodes2["a"] = 97] = "a";
+      CharacterCodes2[CharacterCodes2["b"] = 98] = "b";
+      CharacterCodes2[CharacterCodes2["c"] = 99] = "c";
+      CharacterCodes2[CharacterCodes2["d"] = 100] = "d";
+      CharacterCodes2[CharacterCodes2["e"] = 101] = "e";
+      CharacterCodes2[CharacterCodes2["f"] = 102] = "f";
+      CharacterCodes2[CharacterCodes2["g"] = 103] = "g";
+      CharacterCodes2[CharacterCodes2["h"] = 104] = "h";
+      CharacterCodes2[CharacterCodes2["i"] = 105] = "i";
+      CharacterCodes2[CharacterCodes2["j"] = 106] = "j";
+      CharacterCodes2[CharacterCodes2["k"] = 107] = "k";
+      CharacterCodes2[CharacterCodes2["l"] = 108] = "l";
+      CharacterCodes2[CharacterCodes2["m"] = 109] = "m";
+      CharacterCodes2[CharacterCodes2["n"] = 110] = "n";
+      CharacterCodes2[CharacterCodes2["o"] = 111] = "o";
+      CharacterCodes2[CharacterCodes2["p"] = 112] = "p";
+      CharacterCodes2[CharacterCodes2["q"] = 113] = "q";
+      CharacterCodes2[CharacterCodes2["r"] = 114] = "r";
+      CharacterCodes2[CharacterCodes2["s"] = 115] = "s";
+      CharacterCodes2[CharacterCodes2["t"] = 116] = "t";
+      CharacterCodes2[CharacterCodes2["u"] = 117] = "u";
+      CharacterCodes2[CharacterCodes2["v"] = 118] = "v";
+      CharacterCodes2[CharacterCodes2["w"] = 119] = "w";
+      CharacterCodes2[CharacterCodes2["x"] = 120] = "x";
+      CharacterCodes2[CharacterCodes2["y"] = 121] = "y";
+      CharacterCodes2[CharacterCodes2["z"] = 122] = "z";
+      CharacterCodes2[CharacterCodes2["A"] = 65] = "A";
+      CharacterCodes2[CharacterCodes2["B"] = 66] = "B";
+      CharacterCodes2[CharacterCodes2["C"] = 67] = "C";
+      CharacterCodes2[CharacterCodes2["D"] = 68] = "D";
+      CharacterCodes2[CharacterCodes2["E"] = 69] = "E";
+      CharacterCodes2[CharacterCodes2["F"] = 70] = "F";
+      CharacterCodes2[CharacterCodes2["G"] = 71] = "G";
+      CharacterCodes2[CharacterCodes2["H"] = 72] = "H";
+      CharacterCodes2[CharacterCodes2["I"] = 73] = "I";
+      CharacterCodes2[CharacterCodes2["J"] = 74] = "J";
+      CharacterCodes2[CharacterCodes2["K"] = 75] = "K";
+      CharacterCodes2[CharacterCodes2["L"] = 76] = "L";
+      CharacterCodes2[CharacterCodes2["M"] = 77] = "M";
+      CharacterCodes2[CharacterCodes2["N"] = 78] = "N";
+      CharacterCodes2[CharacterCodes2["O"] = 79] = "O";
+      CharacterCodes2[CharacterCodes2["P"] = 80] = "P";
+      CharacterCodes2[CharacterCodes2["Q"] = 81] = "Q";
+      CharacterCodes2[CharacterCodes2["R"] = 82] = "R";
+      CharacterCodes2[CharacterCodes2["S"] = 83] = "S";
+      CharacterCodes2[CharacterCodes2["T"] = 84] = "T";
+      CharacterCodes2[CharacterCodes2["U"] = 85] = "U";
+      CharacterCodes2[CharacterCodes2["V"] = 86] = "V";
+      CharacterCodes2[CharacterCodes2["W"] = 87] = "W";
+      CharacterCodes2[CharacterCodes2["X"] = 88] = "X";
+      CharacterCodes2[CharacterCodes2["Y"] = 89] = "Y";
+      CharacterCodes2[CharacterCodes2["Z"] = 90] = "Z";
+      CharacterCodes2[CharacterCodes2["asterisk"] = 42] = "asterisk";
+      CharacterCodes2[CharacterCodes2["backslash"] = 92] = "backslash";
+      CharacterCodes2[CharacterCodes2["closeBrace"] = 125] = "closeBrace";
+      CharacterCodes2[CharacterCodes2["closeBracket"] = 93] = "closeBracket";
+      CharacterCodes2[CharacterCodes2["colon"] = 58] = "colon";
+      CharacterCodes2[CharacterCodes2["comma"] = 44] = "comma";
+      CharacterCodes2[CharacterCodes2["dot"] = 46] = "dot";
+      CharacterCodes2[CharacterCodes2["doubleQuote"] = 34] = "doubleQuote";
+      CharacterCodes2[CharacterCodes2["minus"] = 45] = "minus";
+      CharacterCodes2[CharacterCodes2["openBrace"] = 123] = "openBrace";
+      CharacterCodes2[CharacterCodes2["openBracket"] = 91] = "openBracket";
+      CharacterCodes2[CharacterCodes2["plus"] = 43] = "plus";
+      CharacterCodes2[CharacterCodes2["slash"] = 47] = "slash";
+      CharacterCodes2[CharacterCodes2["formFeed"] = 12] = "formFeed";
+      CharacterCodes2[CharacterCodes2["tab"] = 9] = "tab";
+    })(CharacterCodes || (CharacterCodes = {}));
+  }
+});
 
 // node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/string-intern.js
-var cachedSpaces = new Array(20).fill(0).map((_, index) => {
-  return " ".repeat(index);
-});
-var maxCachedValues = 200;
-var cachedBreakLinesWithSpaces = {
-  " ": {
-    "\n": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return "\n" + " ".repeat(index);
-    }),
-    "\r": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return "\r" + " ".repeat(index);
-    }),
-    "\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return "\r\n" + " ".repeat(index);
-    })
-  },
-  "	": {
-    "\n": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return "\n" + "	".repeat(index);
-    }),
-    "\r": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return "\r" + "	".repeat(index);
-    }),
-    "\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
-      return "\r\n" + "	".repeat(index);
-    })
+var cachedSpaces, maxCachedValues, cachedBreakLinesWithSpaces, supportedEols;
+var init_string_intern = __esm({
+  "node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/string-intern.js"() {
+    "use strict";
+    cachedSpaces = new Array(20).fill(0).map((_, index) => {
+      return " ".repeat(index);
+    });
+    maxCachedValues = 200;
+    cachedBreakLinesWithSpaces = {
+      " ": {
+        "\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+          return "\n" + " ".repeat(index);
+        }),
+        "\r": new Array(maxCachedValues).fill(0).map((_, index) => {
+          return "\r" + " ".repeat(index);
+        }),
+        "\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+          return "\r\n" + " ".repeat(index);
+        })
+      },
+      "	": {
+        "\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+          return "\n" + "	".repeat(index);
+        }),
+        "\r": new Array(maxCachedValues).fill(0).map((_, index) => {
+          return "\r" + "	".repeat(index);
+        }),
+        "\r\n": new Array(maxCachedValues).fill(0).map((_, index) => {
+          return "\r\n" + "	".repeat(index);
+        })
+      }
+    };
+    supportedEols = ["\n", "\r", "\r\n"];
   }
-};
-var supportedEols = ["\n", "\r", "\r\n"];
+});
 
 // node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/format.js
 function format(documentText, range, options) {
@@ -700,14 +712,15 @@ function getEOL(options, text) {
 function isEOL(text, offset) {
   return "\r\n".indexOf(text.charAt(offset)) !== -1;
 }
+var init_format = __esm({
+  "node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/format.js"() {
+    "use strict";
+    init_scanner();
+    init_string_intern();
+  }
+});
 
 // node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/parser.js
-var ParseOptions;
-(function(ParseOptions2) {
-  ParseOptions2.DEFAULT = {
-    allowTrailingComma: false
-  };
-})(ParseOptions || (ParseOptions = {}));
 function parse(text, errors = [], options = ParseOptions.DEFAULT) {
   let currentProperty = null;
   let currentParent = [];
@@ -789,11 +802,11 @@ function parseTree(text, errors = [], options = ParseOptions.DEFAULT) {
       onValue({ type: getNodeType(value), offset, length, parent: currentParent, value });
       ensurePropertyComplete(offset + length);
     },
-    onSeparator: (sep3, offset, length) => {
+    onSeparator: (sep4, offset, length) => {
       if (currentParent.type === "property") {
-        if (sep3 === ":") {
+        if (sep4 === ":") {
           currentParent.colonOffset = offset;
-        } else if (sep3 === ",") {
+        } else if (sep4 === ",") {
           ensurePropertyComplete(offset);
         }
       }
@@ -1165,6 +1178,18 @@ function getNodeType(value) {
       return "null";
   }
 }
+var ParseOptions;
+var init_parser = __esm({
+  "node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/parser.js"() {
+    "use strict";
+    init_scanner();
+    (function(ParseOptions2) {
+      ParseOptions2.DEFAULT = {
+        allowTrailingComma: false
+      };
+    })(ParseOptions || (ParseOptions = {}));
+  }
+});
 
 // node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/edit.js
 function setProperty(text, originalPath, value, options) {
@@ -1309,58 +1334,15 @@ function withFormatting(text, edit, options) {
 function applyEdit(text, edit) {
   return text.substring(0, edit.offset) + edit.content + text.substring(edit.offset + edit.length);
 }
+var init_edit = __esm({
+  "node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/impl/edit.js"() {
+    "use strict";
+    init_format();
+    init_parser();
+  }
+});
 
 // node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/main.js
-var ScanError;
-(function(ScanError2) {
-  ScanError2[ScanError2["None"] = 0] = "None";
-  ScanError2[ScanError2["UnexpectedEndOfComment"] = 1] = "UnexpectedEndOfComment";
-  ScanError2[ScanError2["UnexpectedEndOfString"] = 2] = "UnexpectedEndOfString";
-  ScanError2[ScanError2["UnexpectedEndOfNumber"] = 3] = "UnexpectedEndOfNumber";
-  ScanError2[ScanError2["InvalidUnicode"] = 4] = "InvalidUnicode";
-  ScanError2[ScanError2["InvalidEscapeCharacter"] = 5] = "InvalidEscapeCharacter";
-  ScanError2[ScanError2["InvalidCharacter"] = 6] = "InvalidCharacter";
-})(ScanError || (ScanError = {}));
-var SyntaxKind;
-(function(SyntaxKind2) {
-  SyntaxKind2[SyntaxKind2["OpenBraceToken"] = 1] = "OpenBraceToken";
-  SyntaxKind2[SyntaxKind2["CloseBraceToken"] = 2] = "CloseBraceToken";
-  SyntaxKind2[SyntaxKind2["OpenBracketToken"] = 3] = "OpenBracketToken";
-  SyntaxKind2[SyntaxKind2["CloseBracketToken"] = 4] = "CloseBracketToken";
-  SyntaxKind2[SyntaxKind2["CommaToken"] = 5] = "CommaToken";
-  SyntaxKind2[SyntaxKind2["ColonToken"] = 6] = "ColonToken";
-  SyntaxKind2[SyntaxKind2["NullKeyword"] = 7] = "NullKeyword";
-  SyntaxKind2[SyntaxKind2["TrueKeyword"] = 8] = "TrueKeyword";
-  SyntaxKind2[SyntaxKind2["FalseKeyword"] = 9] = "FalseKeyword";
-  SyntaxKind2[SyntaxKind2["StringLiteral"] = 10] = "StringLiteral";
-  SyntaxKind2[SyntaxKind2["NumericLiteral"] = 11] = "NumericLiteral";
-  SyntaxKind2[SyntaxKind2["LineCommentTrivia"] = 12] = "LineCommentTrivia";
-  SyntaxKind2[SyntaxKind2["BlockCommentTrivia"] = 13] = "BlockCommentTrivia";
-  SyntaxKind2[SyntaxKind2["LineBreakTrivia"] = 14] = "LineBreakTrivia";
-  SyntaxKind2[SyntaxKind2["Trivia"] = 15] = "Trivia";
-  SyntaxKind2[SyntaxKind2["Unknown"] = 16] = "Unknown";
-  SyntaxKind2[SyntaxKind2["EOF"] = 17] = "EOF";
-})(SyntaxKind || (SyntaxKind = {}));
-var parse2 = parse;
-var ParseErrorCode;
-(function(ParseErrorCode2) {
-  ParseErrorCode2[ParseErrorCode2["InvalidSymbol"] = 1] = "InvalidSymbol";
-  ParseErrorCode2[ParseErrorCode2["InvalidNumberFormat"] = 2] = "InvalidNumberFormat";
-  ParseErrorCode2[ParseErrorCode2["PropertyNameExpected"] = 3] = "PropertyNameExpected";
-  ParseErrorCode2[ParseErrorCode2["ValueExpected"] = 4] = "ValueExpected";
-  ParseErrorCode2[ParseErrorCode2["ColonExpected"] = 5] = "ColonExpected";
-  ParseErrorCode2[ParseErrorCode2["CommaExpected"] = 6] = "CommaExpected";
-  ParseErrorCode2[ParseErrorCode2["CloseBraceExpected"] = 7] = "CloseBraceExpected";
-  ParseErrorCode2[ParseErrorCode2["CloseBracketExpected"] = 8] = "CloseBracketExpected";
-  ParseErrorCode2[ParseErrorCode2["EndOfFileExpected"] = 9] = "EndOfFileExpected";
-  ParseErrorCode2[ParseErrorCode2["InvalidCommentToken"] = 10] = "InvalidCommentToken";
-  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfComment"] = 11] = "UnexpectedEndOfComment";
-  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfString"] = 12] = "UnexpectedEndOfString";
-  ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfNumber"] = 13] = "UnexpectedEndOfNumber";
-  ParseErrorCode2[ParseErrorCode2["InvalidUnicode"] = 14] = "InvalidUnicode";
-  ParseErrorCode2[ParseErrorCode2["InvalidEscapeCharacter"] = 15] = "InvalidEscapeCharacter";
-  ParseErrorCode2[ParseErrorCode2["InvalidCharacter"] = 16] = "InvalidCharacter";
-})(ParseErrorCode || (ParseErrorCode = {}));
 function printParseErrorCode(code) {
   switch (code) {
     case 1:
@@ -1421,6 +1403,63 @@ function applyEdits(text, edits) {
   }
   return text;
 }
+var ScanError, SyntaxKind, parse2, ParseErrorCode;
+var init_main = __esm({
+  "node_modules/.pnpm/jsonc-parser@3.3.1/node_modules/jsonc-parser/lib/esm/main.js"() {
+    "use strict";
+    init_format();
+    init_edit();
+    init_scanner();
+    init_parser();
+    (function(ScanError2) {
+      ScanError2[ScanError2["None"] = 0] = "None";
+      ScanError2[ScanError2["UnexpectedEndOfComment"] = 1] = "UnexpectedEndOfComment";
+      ScanError2[ScanError2["UnexpectedEndOfString"] = 2] = "UnexpectedEndOfString";
+      ScanError2[ScanError2["UnexpectedEndOfNumber"] = 3] = "UnexpectedEndOfNumber";
+      ScanError2[ScanError2["InvalidUnicode"] = 4] = "InvalidUnicode";
+      ScanError2[ScanError2["InvalidEscapeCharacter"] = 5] = "InvalidEscapeCharacter";
+      ScanError2[ScanError2["InvalidCharacter"] = 6] = "InvalidCharacter";
+    })(ScanError || (ScanError = {}));
+    (function(SyntaxKind2) {
+      SyntaxKind2[SyntaxKind2["OpenBraceToken"] = 1] = "OpenBraceToken";
+      SyntaxKind2[SyntaxKind2["CloseBraceToken"] = 2] = "CloseBraceToken";
+      SyntaxKind2[SyntaxKind2["OpenBracketToken"] = 3] = "OpenBracketToken";
+      SyntaxKind2[SyntaxKind2["CloseBracketToken"] = 4] = "CloseBracketToken";
+      SyntaxKind2[SyntaxKind2["CommaToken"] = 5] = "CommaToken";
+      SyntaxKind2[SyntaxKind2["ColonToken"] = 6] = "ColonToken";
+      SyntaxKind2[SyntaxKind2["NullKeyword"] = 7] = "NullKeyword";
+      SyntaxKind2[SyntaxKind2["TrueKeyword"] = 8] = "TrueKeyword";
+      SyntaxKind2[SyntaxKind2["FalseKeyword"] = 9] = "FalseKeyword";
+      SyntaxKind2[SyntaxKind2["StringLiteral"] = 10] = "StringLiteral";
+      SyntaxKind2[SyntaxKind2["NumericLiteral"] = 11] = "NumericLiteral";
+      SyntaxKind2[SyntaxKind2["LineCommentTrivia"] = 12] = "LineCommentTrivia";
+      SyntaxKind2[SyntaxKind2["BlockCommentTrivia"] = 13] = "BlockCommentTrivia";
+      SyntaxKind2[SyntaxKind2["LineBreakTrivia"] = 14] = "LineBreakTrivia";
+      SyntaxKind2[SyntaxKind2["Trivia"] = 15] = "Trivia";
+      SyntaxKind2[SyntaxKind2["Unknown"] = 16] = "Unknown";
+      SyntaxKind2[SyntaxKind2["EOF"] = 17] = "EOF";
+    })(SyntaxKind || (SyntaxKind = {}));
+    parse2 = parse;
+    (function(ParseErrorCode2) {
+      ParseErrorCode2[ParseErrorCode2["InvalidSymbol"] = 1] = "InvalidSymbol";
+      ParseErrorCode2[ParseErrorCode2["InvalidNumberFormat"] = 2] = "InvalidNumberFormat";
+      ParseErrorCode2[ParseErrorCode2["PropertyNameExpected"] = 3] = "PropertyNameExpected";
+      ParseErrorCode2[ParseErrorCode2["ValueExpected"] = 4] = "ValueExpected";
+      ParseErrorCode2[ParseErrorCode2["ColonExpected"] = 5] = "ColonExpected";
+      ParseErrorCode2[ParseErrorCode2["CommaExpected"] = 6] = "CommaExpected";
+      ParseErrorCode2[ParseErrorCode2["CloseBraceExpected"] = 7] = "CloseBraceExpected";
+      ParseErrorCode2[ParseErrorCode2["CloseBracketExpected"] = 8] = "CloseBracketExpected";
+      ParseErrorCode2[ParseErrorCode2["EndOfFileExpected"] = 9] = "EndOfFileExpected";
+      ParseErrorCode2[ParseErrorCode2["InvalidCommentToken"] = 10] = "InvalidCommentToken";
+      ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfComment"] = 11] = "UnexpectedEndOfComment";
+      ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfString"] = 12] = "UnexpectedEndOfString";
+      ParseErrorCode2[ParseErrorCode2["UnexpectedEndOfNumber"] = 13] = "UnexpectedEndOfNumber";
+      ParseErrorCode2[ParseErrorCode2["InvalidUnicode"] = 14] = "InvalidUnicode";
+      ParseErrorCode2[ParseErrorCode2["InvalidEscapeCharacter"] = 15] = "InvalidEscapeCharacter";
+      ParseErrorCode2[ParseErrorCode2["InvalidCharacter"] = 16] = "InvalidCharacter";
+    })(ParseErrorCode || (ParseErrorCode = {}));
+  }
+});
 
 // src/fs-atomic.ts
 import { randomBytes } from "crypto";
@@ -1430,7 +1469,8 @@ function writeFileAtomic(path, content, mode = 420) {
   const fd = openSync(tmp, "wx", mode);
   try {
     try {
-      writeSync(fd, content);
+      if (typeof content === "string") writeSync(fd, content);
+      else for (let at = 0; at < content.length; ) at += writeSync(fd, content, at, content.length - at);
     } finally {
       closeSync(fd);
     }
@@ -1450,11 +1490,11 @@ function rewriteFileAtomic(path, content, mode = 420) {
   }
   writeFileAtomic(target, content, keep);
 }
-
-// src/paths.ts
-import { lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
-import { homedir as homedir3 } from "os";
-import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
+var init_fs_atomic = __esm({
+  "src/fs-atomic.ts"() {
+    "use strict";
+  }
+});
 
 // src/engine/allowlist.ts
 import { createHash } from "crypto";
@@ -1469,7 +1509,6 @@ function isAllowedValue(secret, allowlist) {
 function isDisabledRule(ruleId, allowlist) {
   return allowlist?.rules?.includes(ruleId) ?? false;
 }
-var SEQUENCE = /^(?:(-?\d+)\.\.(-?\d+)|([A-Za-z])\.\.([A-Za-z]))(?:\.\.(-?\d+))?$/;
 function sequence(inner, limit) {
   const m = SEQUENCE.exec(inner);
   if (!m) return void 0;
@@ -1580,7 +1619,6 @@ function matchTokens(tokens, path) {
   }
   return next[0] === 1;
 }
-var GLOB_CACHE = /* @__PURE__ */ new Map();
 function pathMatchesGlob(path, glob, caseInsensitive = false) {
   const key = `${caseInsensitive ? "i" : "s"}${glob}`;
   let alternatives = GLOB_CACHE.get(key);
@@ -1597,19 +1635,25 @@ function isAllowedPath(path, allowlist) {
   if (!path || !allowlist?.paths?.length) return false;
   return allowlist.paths.some((g) => pathMatchesGlob(path, g));
 }
+var SEQUENCE, GLOB_CACHE;
+var init_allowlist = __esm({
+  "src/engine/allowlist.ts"() {
+    "use strict";
+    SEQUENCE = /^(?:(-?\d+)\.\.(-?\d+)|([A-Za-z])\.\.([A-Za-z]))(?:\.\.(-?\d+))?$/;
+    GLOB_CACHE = /* @__PURE__ */ new Map();
+  }
+});
 
 // src/shell-paths.ts
 import { readdirSync } from "fs";
 import { homedir } from "os";
 import { basename, dirname, isAbsolute, join, resolve } from "path";
-var DYN = "\0";
 function aliasOf(spec, file) {
   const dest = spec.dest.replaceAll("{}", spec.perFileDir ? `./${basename(file)}` : file);
   const abs = spec.perFileDir ? resolve(dirname(file), dest) : dest;
   if (spec.dest.includes("{}")) return abs;
   return spec.dest.endsWith("/") || isDirectory(abs) ? join(abs, basename(file)) : abs;
 }
-var SEP_CHARS = /* @__PURE__ */ new Set([";", "&", "|", "(", ")", "\n"]);
 function matchParen(s, start) {
   let depth = 1;
   let i = start;
@@ -1653,21 +1697,6 @@ function innerSubstitutions(text) {
   }
   return out;
 }
-var ANSI_ESCAPES = {
-  n: "\n",
-  t: "	",
-  r: "\r",
-  a: "\x07",
-  b: "\b",
-  e: "\x1B",
-  E: "\x1B",
-  f: "\f",
-  v: "\v",
-  "\\": "\\",
-  "'": "'",
-  '"': '"',
-  "?": "?"
-};
 function ansiC(s, start) {
   let text = "";
   let cut = false;
@@ -1702,7 +1731,6 @@ function ansiC(s, start) {
   }
   return { text, end: Math.min(i + 1, s.length) };
 }
-var VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*/;
 function tokenize(command, opts) {
   const st = { commands: [], substitutions: [], dynamic: [], structure: [] };
   const fresh = () => ({ words: [], redirects: [], stdinLiteral: false });
@@ -1947,7 +1975,6 @@ function tokenize(command, opts) {
   endCommand();
   return st;
 }
-var BRACE_LIMIT = 256;
 function segmentRegex(segment) {
   let re = "";
   for (let i = 0; i < segment.length; i++) {
@@ -1969,7 +1996,6 @@ function segmentRegex(segment) {
     return /(?!)/;
   }
 }
-var GLOB_LIMIT = 2e3;
 function expandGlob(absPattern) {
   const parts = absPattern.split("/").filter((p, idx) => p !== "" || idx === 0);
   let frontier = [parts[0] === "" ? "/" : parts[0]];
@@ -2090,231 +2116,6 @@ function parseArgs(words, start, spec = {}) {
   res.next = j;
   return res;
 }
-var optionValues = (p, ...flags) => p.values.filter((v) => flags.includes(v.flag)).map((v) => v.word);
-var hasFlag = (flags, short, long) => flags.some((f) => long.includes(f.split("=")[0]) || /^-[A-Za-z]+$/.test(f) && short.some((s) => f.includes(s)));
-var COMMAND_SPECS = {
-  grep: {
-    valued: [
-      "-e",
-      "--regexp",
-      "-f",
-      "--file",
-      "-m",
-      "--max-count",
-      "-A",
-      "-B",
-      "-C",
-      "--after-context",
-      "--before-context",
-      "--include",
-      "--exclude",
-      "--exclude-dir",
-      "--exclude-from",
-      "--label",
-      "--binary-files",
-      "-d",
-      "--directories",
-      "-D",
-      "--devices",
-      "--group-separator"
-    ],
-    paths: ["-f", "--file", "--exclude-from"]
-  },
-  rg: {
-    valued: [
-      "-e",
-      "--regexp",
-      "-f",
-      "--file",
-      "-g",
-      "--glob",
-      "--iglob",
-      "-t",
-      "--type",
-      "-T",
-      "--type-not",
-      "--type-add",
-      "--type-clear",
-      "-m",
-      "--max-count",
-      "-A",
-      "-B",
-      "-C",
-      "--after-context",
-      "--before-context",
-      "--context",
-      "-M",
-      "--max-columns",
-      "--max-depth",
-      "-d",
-      "--max-filesize",
-      "-j",
-      "--threads",
-      "-E",
-      "--encoding",
-      "--sort",
-      "--sortr",
-      "-r",
-      "--replace",
-      "--pre",
-      "--pre-glob",
-      "--color",
-      "--colors",
-      "--context-separator",
-      "--path-separator",
-      "--engine",
-      "--ignore-file"
-    ],
-    paths: ["-f", "--file", "--ignore-file"]
-  },
-  ag: {
-    valued: [
-      "-G",
-      "--file-search-regex",
-      "-g",
-      "--ignore",
-      "--ignore-dir",
-      "-A",
-      "-B",
-      "-C",
-      "-m",
-      "--max-count",
-      "--depth",
-      "-p",
-      "--path-to-ignore",
-      "-W",
-      "--width"
-    ],
-    paths: ["-p", "--path-to-ignore"]
-  },
-  ack: { valued: ["--type", "--match", "--ignore-dir", "--ignore-file", "-A", "-B", "-C", "-m", "--max-count"] },
-  head: { valued: ["-n", "-c", "--lines", "--bytes"] },
-  tail: { valued: ["-n", "-c", "--lines", "--bytes", "-s", "--sleep-interval", "--pid"] },
-  sed: { valued: ["-e", "--expression", "-f", "--file"], paths: ["-f", "--file"] },
-  awk: {
-    valued: ["-f", "--file", "-v", "--assign", "-F", "--field-separator", "-i", "--include", "-l", "--load", "-E", "--exec"],
-    paths: ["-f", "--file", "-E", "--exec"]
-  },
-  xargs: {
-    valued: [
-      "-a",
-      "--arg-file",
-      "-n",
-      "--max-args",
-      "-L",
-      "--max-lines",
-      "-s",
-      "--max-chars",
-      "-P",
-      "--max-procs",
-      "-d",
-      "--delimiter",
-      "-E",
-      "--eof",
-      "-I",
-      "--replace",
-      "--process-slot-var"
-    ],
-    paths: ["-a", "--arg-file"],
-    stopAtPositional: true
-  },
-  tar: {
-    valued: [
-      "-f",
-      "--file",
-      "-C",
-      "--directory",
-      "-T",
-      "--files-from",
-      "-X",
-      "--exclude-from",
-      "--exclude",
-      "-b",
-      "--blocking-factor",
-      "-H",
-      "--format",
-      "--transform",
-      "-I",
-      "--use-compress-program",
-      "--owner",
-      "--group",
-      "--mode",
-      "--mtime"
-    ],
-    paths: ["-T", "--files-from"]
-  },
-  zip: { valued: ["-P", "--password", "-b", "-n", "-t", "-tt", "-O", "-Z"] },
-  openssl: { valued: ["-out", "-keyout", "-passout", "-passin", "-subj", "-days"] },
-  curl: {
-    valued: [
-      "-H",
-      "--header",
-      "-X",
-      "--request",
-      "-A",
-      "--user-agent",
-      "-e",
-      "--referer",
-      "-w",
-      "--write-out",
-      "-m",
-      "--max-time",
-      "--connect-timeout",
-      "-x",
-      "--proxy",
-      "-u",
-      "--user"
-    ]
-  },
-  find: {}
-};
-for (const cmd of ["cp", "mv", "ln", "install"]) COMMAND_SPECS[cmd] = { valued: ["-t", "--target-directory"] };
-COMMAND_SPECS.egrep = COMMAND_SPECS.grep;
-COMMAND_SPECS.fgrep = COMMAND_SPECS.grep;
-COMMAND_SPECS.gawk = COMMAND_SPECS.awk;
-var WRAPPERS = {
-  sudo: {
-    valued: [
-      "-u",
-      "--user",
-      "-g",
-      "--group",
-      "-h",
-      "--host",
-      "-p",
-      "--prompt",
-      "-C",
-      "--close-from",
-      "-D",
-      "--chdir",
-      "-r",
-      "--role",
-      "-t",
-      "--type",
-      "-U",
-      "--other-user",
-      "-T",
-      "--command-timeout"
-    ]
-  },
-  doas: { valued: ["-u", "-C"] },
-  env: { valued: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-P"] },
-  nice: { valued: ["-n", "--adjustment"] },
-  timeout: { valued: ["-k", "--kill-after", "-s", "--signal"], positional: 1 },
-  flock: { valued: ["-w", "--wait", "--timeout", "-E", "--conflict-exit-code", "-c", "--command"], positional: 1 },
-  watch: { valued: ["-n", "--interval", "-q", "--equexit"] },
-  chrt: { positional: 1 },
-  ionice: { valued: ["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"] },
-  stdbuf: { valued: ["-i", "--input", "-o", "--output", "-e", "--error"] },
-  time: { valued: ["-f", "--format", "-o", "--output"] },
-  nohup: {},
-  command: {},
-  builtin: {},
-  exec: { valued: ["-a"] },
-  caffeinate: { valued: ["-t", "-w"] }
-};
-var KEYWORDS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}"]);
-var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 function unwrap(words) {
   let k = 0;
   let cwdWord;
@@ -2347,69 +2148,6 @@ function unwrap(words) {
     }
   }
 }
-var NON_PATH_ARGS = /* @__PURE__ */ new Set([
-  "echo",
-  "printf",
-  "print",
-  "export",
-  "alias",
-  "unalias",
-  "true",
-  "false",
-  "sleep",
-  "kill",
-  "exit",
-  "return",
-  "set",
-  "unset",
-  "read",
-  "type",
-  "which",
-  "hash",
-  "jobs",
-  "wait",
-  "shift",
-  "trap",
-  "ulimit",
-  "umask",
-  "history"
-]);
-var WRITE_ARGS = /* @__PURE__ */ new Set(["touch", "mkdir", "rm", "rmdir", "tee", "truncate", "chmod", "chown", "chgrp", "unlink", "shred"]);
-var LIST_ARGS = /* @__PURE__ */ new Set(["ls", "dir", "stat", "file", "test", "[", "[[", "wc", "realpath", "readlink", "basename", "dirname"]);
-var INTERPRETERS = /^(?:bash|sh|zsh|dash|ksh|fish|python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|pwsh|powershell)$/;
-var SHELLS = /^(?:bash|sh|zsh|dash|ksh)$/;
-var EVAL_COMMANDS = /* @__PURE__ */ new Set(["eval", "source", ".", "xargs", "parallel"]);
-var INTERPRETER_SPECS = [
-  { re: /^perl$/, inline: ["-e", "-E"], valued: [] },
-  { re: /^ruby$/, inline: ["-e"], valued: ["-r", "-I", "-C", "-E", "-W", "-x", "-F"] },
-  { re: /^python[0-9.]*$/, inline: ["-c"], valued: ["-W", "-X"], module: "-m" },
-  {
-    re: /^(?:node|nodejs|bun)$/,
-    inline: ["-e", "--eval", "-p", "--print"],
-    valued: ["-r", "--require", "--import", "--loader", "-C", "--conditions", "--input-type", "--title"]
-  },
-  { re: /^deno$/, inline: ["eval"], valued: [] },
-  { re: /^php$/, inline: ["-r"], valued: ["-d", "-c", "-B", "-R", "-E"] },
-  { re: /^(?:lua|osascript)$/, inline: ["-e"], valued: ["-l"] },
-  { re: /^(?:pwsh|powershell)$/, inline: ["-Command", "-c"], valued: ["-File", "-f"] }
-];
-var GIT_CONTENT = /* @__PURE__ */ new Set([
-  "diff",
-  "show",
-  "log",
-  "grep",
-  "blame",
-  "annotate",
-  "cat-file",
-  "archive",
-  "format-patch",
-  "whatchanged",
-  "stash",
-  "fast-export",
-  "reflog",
-  "range-diff",
-  "notes"
-]);
 function isGitContentCommand(command) {
   return command.startsWith("git ") && GIT_CONTENT.has(command.slice(4));
 }
@@ -2436,7 +2174,6 @@ function analyzeShell(command, opts) {
 function quoteArg(a) {
   return `'${String(a).replaceAll("'", `'\\''`)}'`;
 }
-var uniqueCwds = (c) => [...new Set(c)];
 function analyzeInto(command, cwds, ctx, depth, positional) {
   if (depth > 8) {
     ctx.out.dynamic.push("nested substitution");
@@ -2859,9 +2596,6 @@ function analyzeInterpreter(sc, k, cmd, push, out) {
   push(pos[0], "exec");
   for (const w of pos.slice(1)) push(w, "read");
 }
-var GIT_NAMES_ONLY = ["--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--quiet", "--no-patch", "-s", "--summary", "--dirstat"];
-var GIT_PATCH = /^(?:-p|-u|--patch|--patch-with-stat|--patch-with-raw|-U\d*|--unified(?:=.*)?|--full-diff|-L.*)$/;
-var GIT_GLOBAL_VALUED = /* @__PURE__ */ new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path", "--list-cmds"]);
 function analyzeGit(words, k, cwds, ctx) {
   const out = ctx.out;
   let j = k + 1;
@@ -2924,25 +2658,6 @@ function analyzeGit(words, k, cwds, ctx) {
   }
   for (const w of pathspecs) push(w, "search", here, true);
 }
-var JS_RUNTIMES = /^(?:node|nodejs|bun|deno)$/;
-var PACKAGE_MANAGERS = /^(?:npx|pnpx|bunx|pnpm|yarn|npm|bun)$/;
-var RUNNER_VALUED = /* @__PURE__ */ new Set([
-  "-p",
-  "--package",
-  "-c",
-  "--call",
-  "--filter",
-  "-F",
-  "-C",
-  "--dir",
-  "--cwd",
-  "--prefix",
-  "-w",
-  "--workspace",
-  "--userconfig",
-  "--registry",
-  "--cache"
-]);
 function secretgateInvocation(argv) {
   const words = argv.map((text) => ({ text, glob: false, brace: false }));
   const { index, script } = unwrap(words);
@@ -2956,7 +2671,7 @@ function secretgateInvocation(argv) {
     const verb = argv[k];
     if (verb === void 0) return void 0;
     const next = argv[skipFlags(k + 1)];
-    return verb === "vault" && next ? `vault ${next}` : verb;
+    return (verb === "vault" || verb === "verifier") && next ? `${verb} ${next}` : verb;
   };
   const first = argv[index];
   if (first === void 0) return void 0;
@@ -2993,12 +2708,346 @@ function secretgateInvocation(argv) {
   if (call !== void 0) return analyzeShell(call, { cwd: "/" }).commands.map(secretgateInvocation).find(Boolean);
   return isSelf(argv[j]) ? sub(j + 1) : void 0;
 }
-
-// src/vault/vault.ts
-import { randomBytes as randomBytes2 } from "crypto";
-import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync as statSync2, unlinkSync } from "fs";
-import { homedir as homedir2 } from "os";
-import { join as join2 } from "path";
+var DYN, SEP_CHARS, ANSI_ESCAPES, VAR_RE, BRACE_LIMIT, GLOB_LIMIT, optionValues, hasFlag, COMMAND_SPECS, WRAPPERS, KEYWORDS, ASSIGNMENT, NON_PATH_ARGS, WRITE_ARGS, LIST_ARGS, INTERPRETERS, SHELLS, EVAL_COMMANDS, INTERPRETER_SPECS, GIT_CONTENT, uniqueCwds, GIT_NAMES_ONLY, GIT_PATCH, GIT_GLOBAL_VALUED, JS_RUNTIMES, PACKAGE_MANAGERS, RUNNER_VALUED;
+var init_shell_paths = __esm({
+  "src/shell-paths.ts"() {
+    "use strict";
+    init_allowlist();
+    init_paths();
+    init_paths();
+    DYN = "\0";
+    SEP_CHARS = /* @__PURE__ */ new Set([";", "&", "|", "(", ")", "\n"]);
+    ANSI_ESCAPES = {
+      n: "\n",
+      t: "	",
+      r: "\r",
+      a: "\x07",
+      b: "\b",
+      e: "\x1B",
+      E: "\x1B",
+      f: "\f",
+      v: "\v",
+      "\\": "\\",
+      "'": "'",
+      '"': '"',
+      "?": "?"
+    };
+    VAR_RE = /^[A-Za-z_][A-Za-z0-9_]*/;
+    BRACE_LIMIT = 256;
+    GLOB_LIMIT = 2e3;
+    optionValues = (p, ...flags) => p.values.filter((v) => flags.includes(v.flag)).map((v) => v.word);
+    hasFlag = (flags, short, long) => flags.some((f) => long.includes(f.split("=")[0]) || /^-[A-Za-z]+$/.test(f) && short.some((s) => f.includes(s)));
+    COMMAND_SPECS = {
+      grep: {
+        valued: [
+          "-e",
+          "--regexp",
+          "-f",
+          "--file",
+          "-m",
+          "--max-count",
+          "-A",
+          "-B",
+          "-C",
+          "--after-context",
+          "--before-context",
+          "--include",
+          "--exclude",
+          "--exclude-dir",
+          "--exclude-from",
+          "--label",
+          "--binary-files",
+          "-d",
+          "--directories",
+          "-D",
+          "--devices",
+          "--group-separator"
+        ],
+        paths: ["-f", "--file", "--exclude-from"]
+      },
+      rg: {
+        valued: [
+          "-e",
+          "--regexp",
+          "-f",
+          "--file",
+          "-g",
+          "--glob",
+          "--iglob",
+          "-t",
+          "--type",
+          "-T",
+          "--type-not",
+          "--type-add",
+          "--type-clear",
+          "-m",
+          "--max-count",
+          "-A",
+          "-B",
+          "-C",
+          "--after-context",
+          "--before-context",
+          "--context",
+          "-M",
+          "--max-columns",
+          "--max-depth",
+          "-d",
+          "--max-filesize",
+          "-j",
+          "--threads",
+          "-E",
+          "--encoding",
+          "--sort",
+          "--sortr",
+          "-r",
+          "--replace",
+          "--pre",
+          "--pre-glob",
+          "--color",
+          "--colors",
+          "--context-separator",
+          "--path-separator",
+          "--engine",
+          "--ignore-file"
+        ],
+        paths: ["-f", "--file", "--ignore-file"]
+      },
+      ag: {
+        valued: [
+          "-G",
+          "--file-search-regex",
+          "-g",
+          "--ignore",
+          "--ignore-dir",
+          "-A",
+          "-B",
+          "-C",
+          "-m",
+          "--max-count",
+          "--depth",
+          "-p",
+          "--path-to-ignore",
+          "-W",
+          "--width"
+        ],
+        paths: ["-p", "--path-to-ignore"]
+      },
+      ack: { valued: ["--type", "--match", "--ignore-dir", "--ignore-file", "-A", "-B", "-C", "-m", "--max-count"] },
+      head: { valued: ["-n", "-c", "--lines", "--bytes"] },
+      tail: { valued: ["-n", "-c", "--lines", "--bytes", "-s", "--sleep-interval", "--pid"] },
+      sed: { valued: ["-e", "--expression", "-f", "--file"], paths: ["-f", "--file"] },
+      awk: {
+        valued: ["-f", "--file", "-v", "--assign", "-F", "--field-separator", "-i", "--include", "-l", "--load", "-E", "--exec"],
+        paths: ["-f", "--file", "-E", "--exec"]
+      },
+      xargs: {
+        valued: [
+          "-a",
+          "--arg-file",
+          "-n",
+          "--max-args",
+          "-L",
+          "--max-lines",
+          "-s",
+          "--max-chars",
+          "-P",
+          "--max-procs",
+          "-d",
+          "--delimiter",
+          "-E",
+          "--eof",
+          "-I",
+          "--replace",
+          "--process-slot-var"
+        ],
+        paths: ["-a", "--arg-file"],
+        stopAtPositional: true
+      },
+      tar: {
+        valued: [
+          "-f",
+          "--file",
+          "-C",
+          "--directory",
+          "-T",
+          "--files-from",
+          "-X",
+          "--exclude-from",
+          "--exclude",
+          "-b",
+          "--blocking-factor",
+          "-H",
+          "--format",
+          "--transform",
+          "-I",
+          "--use-compress-program",
+          "--owner",
+          "--group",
+          "--mode",
+          "--mtime"
+        ],
+        paths: ["-T", "--files-from"]
+      },
+      zip: { valued: ["-P", "--password", "-b", "-n", "-t", "-tt", "-O", "-Z"] },
+      openssl: { valued: ["-out", "-keyout", "-passout", "-passin", "-subj", "-days"] },
+      curl: {
+        valued: [
+          "-H",
+          "--header",
+          "-X",
+          "--request",
+          "-A",
+          "--user-agent",
+          "-e",
+          "--referer",
+          "-w",
+          "--write-out",
+          "-m",
+          "--max-time",
+          "--connect-timeout",
+          "-x",
+          "--proxy",
+          "-u",
+          "--user"
+        ]
+      },
+      find: {}
+    };
+    for (const cmd of ["cp", "mv", "ln", "install"]) COMMAND_SPECS[cmd] = { valued: ["-t", "--target-directory"] };
+    COMMAND_SPECS.egrep = COMMAND_SPECS.grep;
+    COMMAND_SPECS.fgrep = COMMAND_SPECS.grep;
+    COMMAND_SPECS.gawk = COMMAND_SPECS.awk;
+    WRAPPERS = {
+      sudo: {
+        valued: [
+          "-u",
+          "--user",
+          "-g",
+          "--group",
+          "-h",
+          "--host",
+          "-p",
+          "--prompt",
+          "-C",
+          "--close-from",
+          "-D",
+          "--chdir",
+          "-r",
+          "--role",
+          "-t",
+          "--type",
+          "-U",
+          "--other-user",
+          "-T",
+          "--command-timeout"
+        ]
+      },
+      doas: { valued: ["-u", "-C"] },
+      env: { valued: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-P"] },
+      nice: { valued: ["-n", "--adjustment"] },
+      timeout: { valued: ["-k", "--kill-after", "-s", "--signal"], positional: 1 },
+      flock: { valued: ["-w", "--wait", "--timeout", "-E", "--conflict-exit-code", "-c", "--command"], positional: 1 },
+      watch: { valued: ["-n", "--interval", "-q", "--equexit"] },
+      chrt: { positional: 1 },
+      ionice: { valued: ["-c", "--class", "-n", "--classdata", "-p", "--pid", "-P", "--pgid", "-u", "--uid"] },
+      stdbuf: { valued: ["-i", "--input", "-o", "--output", "-e", "--error"] },
+      time: { valued: ["-f", "--format", "-o", "--output"] },
+      nohup: {},
+      command: {},
+      builtin: {},
+      exec: { valued: ["-a"] },
+      caffeinate: { valued: ["-t", "-w"] }
+    };
+    KEYWORDS = /* @__PURE__ */ new Set(["if", "then", "else", "elif", "fi", "do", "done", "while", "until", "!", "{", "}"]);
+    ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+    NON_PATH_ARGS = /* @__PURE__ */ new Set([
+      "echo",
+      "printf",
+      "print",
+      "export",
+      "alias",
+      "unalias",
+      "true",
+      "false",
+      "sleep",
+      "kill",
+      "exit",
+      "return",
+      "set",
+      "unset",
+      "read",
+      "type",
+      "which",
+      "hash",
+      "jobs",
+      "wait",
+      "shift",
+      "trap",
+      "ulimit",
+      "umask",
+      "history"
+    ]);
+    WRITE_ARGS = /* @__PURE__ */ new Set(["touch", "mkdir", "rm", "rmdir", "tee", "truncate", "chmod", "chown", "chgrp", "unlink", "shred"]);
+    LIST_ARGS = /* @__PURE__ */ new Set(["ls", "dir", "stat", "file", "test", "[", "[[", "wc", "realpath", "readlink", "basename", "dirname"]);
+    INTERPRETERS = /^(?:bash|sh|zsh|dash|ksh|fish|python[0-9.]*|node|nodejs|deno|bun|perl|ruby|php|lua|osascript|pwsh|powershell)$/;
+    SHELLS = /^(?:bash|sh|zsh|dash|ksh)$/;
+    EVAL_COMMANDS = /* @__PURE__ */ new Set(["eval", "source", ".", "xargs", "parallel"]);
+    INTERPRETER_SPECS = [
+      { re: /^perl$/, inline: ["-e", "-E"], valued: [] },
+      { re: /^ruby$/, inline: ["-e"], valued: ["-r", "-I", "-C", "-E", "-W", "-x", "-F"] },
+      { re: /^python[0-9.]*$/, inline: ["-c"], valued: ["-W", "-X"], module: "-m" },
+      {
+        re: /^(?:node|nodejs|bun)$/,
+        inline: ["-e", "--eval", "-p", "--print"],
+        valued: ["-r", "--require", "--import", "--loader", "-C", "--conditions", "--input-type", "--title"]
+      },
+      { re: /^deno$/, inline: ["eval"], valued: [] },
+      { re: /^php$/, inline: ["-r"], valued: ["-d", "-c", "-B", "-R", "-E"] },
+      { re: /^(?:lua|osascript)$/, inline: ["-e"], valued: ["-l"] },
+      { re: /^(?:pwsh|powershell)$/, inline: ["-Command", "-c"], valued: ["-File", "-f"] }
+    ];
+    GIT_CONTENT = /* @__PURE__ */ new Set([
+      "diff",
+      "show",
+      "log",
+      "grep",
+      "blame",
+      "annotate",
+      "cat-file",
+      "archive",
+      "format-patch",
+      "whatchanged",
+      "stash",
+      "fast-export",
+      "reflog",
+      "range-diff",
+      "notes"
+    ]);
+    uniqueCwds = (c) => [...new Set(c)];
+    GIT_NAMES_ONLY = ["--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--quiet", "--no-patch", "-s", "--summary", "--dirstat"];
+    GIT_PATCH = /^(?:-p|-u|--patch|--patch-with-stat|--patch-with-raw|-U\d*|--unified(?:=.*)?|--full-diff|-L.*)$/;
+    GIT_GLOBAL_VALUED = /* @__PURE__ */ new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path", "--list-cmds"]);
+    JS_RUNTIMES = /^(?:node|nodejs|bun|deno)$/;
+    PACKAGE_MANAGERS = /^(?:npx|pnpx|bunx|pnpm|yarn|npm|bun)$/;
+    RUNNER_VALUED = /* @__PURE__ */ new Set([
+      "-p",
+      "--package",
+      "-c",
+      "--call",
+      "--filter",
+      "-F",
+      "-C",
+      "--dir",
+      "--cwd",
+      "--prefix",
+      "-w",
+      "--workspace",
+      "--userconfig",
+      "--registry",
+      "--cache"
+    ]);
+  }
+});
 
 // src/vault/placeholder.ts
 import { createHmac } from "crypto";
@@ -3006,17 +3055,24 @@ function placeholderFor(secret, salt, hexLen = 12) {
   const digest = createHmac("sha256", salt).update(secret).digest("hex");
   return `${PLACEHOLDER_PREFIX}${digest.slice(0, hexLen)}`;
 }
-var PLACEHOLDER_PREFIX = "SECRETGATE_";
-var PLACEHOLDER_LENGTHS = [16, 12];
-var PLACEHOLDER_RE = /SECRETGATE_[0-9a-f]{12,16}/g;
+var PLACEHOLDER_PREFIX, PLACEHOLDER_LENGTHS, PLACEHOLDER_RE;
+var init_placeholder = __esm({
+  "src/vault/placeholder.ts"() {
+    "use strict";
+    PLACEHOLDER_PREFIX = "SECRETGATE_";
+    PLACEHOLDER_LENGTHS = [16, 12];
+    PLACEHOLDER_RE = /SECRETGATE_[0-9a-f]{12,16}/g;
+  }
+});
 
 // src/vault/vault.ts
+import { randomBytes as randomBytes2 } from "crypto";
+import { chmodSync, closeSync as closeSync2, mkdirSync, openSync as openSync2, readFileSync, renameSync as renameSync2, statSync as statSync2, unlinkSync } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join2 } from "path";
 function defaultVaultHome() {
   return process.env.SECRETGATE_HOME ?? join2(homedir2(), ".secretgate");
 }
-var LOCK_WAIT_MS = 3e3;
-var LOCK_STALE_MS = 1e4;
-var sleeper = new Int32Array(new SharedArrayBuffer(4));
 function withLock(lockPath, fn) {
   const deadline = Date.now() + LOCK_WAIT_MS;
   let fd;
@@ -3043,118 +3099,132 @@ function withLock(lockPath, fn) {
     }
   }
 }
-var Vault = class {
-  home;
-  vaultPath;
-  saltValue;
-  constructor(home = defaultVaultHome()) {
-    this.home = home;
-    this.vaultPath = join2(home, "vault.json");
-  }
-  ensureHome() {
-    mkdirSync(this.home, { recursive: true, mode: 448 });
-  }
-  salt() {
-    if (this.saltValue) return this.saltValue;
-    this.ensureHome();
-    const saltPath = join2(this.home, "salt");
-    try {
-      this.saltValue = readFileSync(saltPath, "utf8").trim();
-    } catch {
-      this.saltValue = randomBytes2(32).toString("hex");
-      writeFileAtomic(saltPath, this.saltValue, 384);
-    }
-    if (!this.saltValue) throw new Error(`empty salt file: ${saltPath}`);
-    return this.saltValue;
-  }
-  // A missing vault is an empty one. An unreadable or malformed one is too —
-  // a corrupt vault must never break a hook — but it is reported, so the next
-  // write can set it aside instead of silently replacing every mapping in it.
-  read() {
-    let raw;
-    try {
-      raw = readFileSync(this.vaultPath, "utf8");
-    } catch {
-      return { file: { version: 1, entries: {} }, corrupt: false };
-    }
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.version === 1 && parsed.entries && typeof parsed.entries === "object") return { file: parsed, corrupt: false };
-    } catch {
-    }
-    return { file: { version: 1, entries: {} }, corrupt: true };
-  }
-  // Keep the unreadable file (it may hold the only copy of mappings still in
-  // use) under a name nothing reads, before a fresh vault takes its place.
-  setAside() {
-    const aside = `${this.vaultPath}.corrupt-${(/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-")}-${randomBytes2(2).toString("hex")}`;
-    renameSync2(this.vaultPath, aside);
-    chmodSync(aside, 384);
-  }
-  // A read-merge-write cycle under the vault lock, so concurrent hook
-  // processes (tool calls in flight) never drop each other's entries.
-  recordSecret(secret, ruleId, source) {
-    return this.recordSecrets([{ secret, ruleId, source }])[0];
-  }
-  /** Record many secrets in ONE locked read-merge-write cycle (a tool output
-   *  can carry thousands); returns their placeholders, in order. */
-  recordSecrets(items) {
-    if (items.length === 0) return [];
-    this.ensureHome();
-    return withLock(`${this.vaultPath}.lock`, () => {
-      const salt = this.salt();
-      const { file, corrupt } = this.read();
-      let dirty = false;
-      const placeholders = items.map(({ secret, ruleId, source }) => {
-        let placeholder = "";
-        for (const hexLen of [12, 16]) {
-          placeholder = placeholderFor(secret, salt, hexLen);
-          const existing = file.entries[placeholder];
-          if (!existing || existing.secret === secret) break;
-        }
-        const entry = file.entries[placeholder];
-        if (entry && entry.secret === secret) {
-          if (!entry.sources.includes(source)) {
-            entry.sources.push(source);
-            dirty = true;
-          }
-        } else {
-          file.entries[placeholder] = { secret, ruleId, firstSeen: (/* @__PURE__ */ new Date()).toISOString(), sources: [source] };
-          dirty = true;
-        }
-        return placeholder;
-      });
-      if (dirty) {
-        if (corrupt) this.setAside();
-        writeFileAtomic(this.vaultPath, JSON.stringify(file, null, 2), 384);
+var LOCK_WAIT_MS, LOCK_STALE_MS, sleeper, Vault;
+var init_vault = __esm({
+  "src/vault/vault.ts"() {
+    "use strict";
+    init_fs_atomic();
+    init_placeholder();
+    LOCK_WAIT_MS = 3e3;
+    LOCK_STALE_MS = 1e4;
+    sleeper = new Int32Array(new SharedArrayBuffer(4));
+    Vault = class {
+      home;
+      vaultPath;
+      saltValue;
+      constructor(home = defaultVaultHome()) {
+        this.home = home;
+        this.vaultPath = join2(home, "vault.json");
       }
-      return placeholders;
-    });
+      ensureHome() {
+        mkdirSync(this.home, { recursive: true, mode: 448 });
+      }
+      salt() {
+        if (this.saltValue) return this.saltValue;
+        this.ensureHome();
+        const saltPath = join2(this.home, "salt");
+        try {
+          this.saltValue = readFileSync(saltPath, "utf8").trim();
+        } catch {
+          this.saltValue = randomBytes2(32).toString("hex");
+          writeFileAtomic(saltPath, this.saltValue, 384);
+        }
+        if (!this.saltValue) throw new Error(`empty salt file: ${saltPath}`);
+        return this.saltValue;
+      }
+      // A missing vault is an empty one. An unreadable or malformed one is too —
+      // a corrupt vault must never break a hook — but it is reported, so the next
+      // write can set it aside instead of silently replacing every mapping in it.
+      read() {
+        let raw;
+        try {
+          raw = readFileSync(this.vaultPath, "utf8");
+        } catch {
+          return { file: { version: 1, entries: {} }, corrupt: false };
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.version === 1 && parsed.entries && typeof parsed.entries === "object") return { file: parsed, corrupt: false };
+        } catch {
+        }
+        return { file: { version: 1, entries: {} }, corrupt: true };
+      }
+      // Keep the unreadable file (it may hold the only copy of mappings still in
+      // use) under a name nothing reads, before a fresh vault takes its place.
+      setAside() {
+        const aside = `${this.vaultPath}.corrupt-${(/* @__PURE__ */ new Date()).toISOString().replaceAll(/[:.]/g, "-")}-${randomBytes2(2).toString("hex")}`;
+        renameSync2(this.vaultPath, aside);
+        chmodSync(aside, 384);
+      }
+      // A read-merge-write cycle under the vault lock, so concurrent hook
+      // processes (tool calls in flight) never drop each other's entries.
+      recordSecret(secret, ruleId, source) {
+        return this.recordSecrets([{ secret, ruleId, source }])[0];
+      }
+      /** Record many secrets in ONE locked read-merge-write cycle (a tool output
+       *  can carry thousands); returns their placeholders, in order. */
+      recordSecrets(items) {
+        if (items.length === 0) return [];
+        this.ensureHome();
+        return withLock(`${this.vaultPath}.lock`, () => {
+          const salt = this.salt();
+          const { file, corrupt } = this.read();
+          let dirty = false;
+          const placeholders = items.map(({ secret, ruleId, source }) => {
+            let placeholder = "";
+            for (const hexLen of [12, 16]) {
+              placeholder = placeholderFor(secret, salt, hexLen);
+              const existing = file.entries[placeholder];
+              if (!existing || existing.secret === secret) break;
+            }
+            const entry = file.entries[placeholder];
+            if (entry && entry.secret === secret) {
+              if (!entry.sources.includes(source)) {
+                entry.sources.push(source);
+                dirty = true;
+              }
+            } else {
+              file.entries[placeholder] = { secret, ruleId, firstSeen: (/* @__PURE__ */ new Date()).toISOString(), sources: [source] };
+              dirty = true;
+            }
+            return placeholder;
+          });
+          if (dirty) {
+            if (corrupt) this.setAside();
+            writeFileAtomic(this.vaultPath, JSON.stringify(file, null, 2), 384);
+          }
+          return placeholders;
+        });
+      }
+      secretFor(placeholder) {
+        return this.lookup()(placeholder);
+      }
+      /** A placeholder → secret resolver over ONE read of the vault, for callers
+       *  that resolve many placeholders at once. */
+      lookup() {
+        const { entries } = this.read().file;
+        return (placeholder) => Object.hasOwn(entries, placeholder) ? entries[placeholder]?.secret : void 0;
+      }
+      list() {
+        return Object.entries(this.read().file.entries).map(([placeholder, e]) => ({
+          placeholder,
+          ruleId: e.ruleId,
+          firstSeen: e.firstSeen,
+          sources: e.sources
+        }));
+      }
+      clear() {
+        this.ensureHome();
+        withLock(`${this.vaultPath}.lock`, () => writeFileAtomic(this.vaultPath, JSON.stringify({ version: 1, entries: {} }, null, 2), 384));
+      }
+    };
   }
-  secretFor(placeholder) {
-    return this.lookup()(placeholder);
-  }
-  /** A placeholder → secret resolver over ONE read of the vault, for callers
-   *  that resolve many placeholders at once. */
-  lookup() {
-    const { entries } = this.read().file;
-    return (placeholder) => Object.hasOwn(entries, placeholder) ? entries[placeholder]?.secret : void 0;
-  }
-  list() {
-    return Object.entries(this.read().file.entries).map(([placeholder, e]) => ({
-      placeholder,
-      ruleId: e.ruleId,
-      firstSeen: e.firstSeen,
-      sources: e.sources
-    }));
-  }
-  clear() {
-    this.ensureHome();
-    withLock(`${this.vaultPath}.lock`, () => writeFileAtomic(this.vaultPath, JSON.stringify({ version: 1, entries: {} }, null, 2), 384));
-  }
-};
+});
 
 // src/paths.ts
+import { lstatSync, readdirSync as readdirSync2, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync3 } from "fs";
+import { homedir as homedir3 } from "os";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
 function expandHome(p) {
   if (p === "~") return homedir3();
   if (p.startsWith("~/")) return join3(homedir3(), p.slice(2));
@@ -3179,50 +3249,6 @@ function globStaticDir(glob) {
   const idx = glob.search(/[*?[{]/);
   return idx === -1 ? glob : dirname2(`${glob.slice(0, idx)}x`);
 }
-var SENSITIVE_GLOBS = [
-  "**/.env",
-  "**/.env.*",
-  "**/*.pem",
-  "**/*.key",
-  "**/id_rsa*",
-  "**/id_ed25519*",
-  "**/id_ecdsa*",
-  "**/.aws/**",
-  "**/.ssh/**",
-  "**/.kube/config",
-  "**/.npmrc",
-  "**/.netrc",
-  "**/.docker/config.json",
-  "**/credentials.json",
-  "**/.envrc",
-  "**/.dev.vars",
-  "**/.git-credentials",
-  "**/.pgpass",
-  "**/.pypirc",
-  "**/*.p12",
-  "**/*.pfx",
-  "**/*.tfstate",
-  "**/*.tfstate.backup"
-];
-var FIXTURE_DIRS = /* @__PURE__ */ new Set([
-  "test",
-  "tests",
-  "__tests__",
-  "spec",
-  "specs",
-  "fixture",
-  "fixtures",
-  "__fixtures__",
-  "testdata",
-  "test-data",
-  "test_data",
-  "mocks",
-  "__mocks__",
-  "examples",
-  "samples"
-]);
-var EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
-var CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
 function canonical(p) {
   const abs = resolve2(expandHome(p));
   const memo = pathMemo?.get(abs);
@@ -3247,7 +3273,6 @@ function canonical(p) {
   pathMemo?.set(abs, out);
   return out;
 }
-var pathMemo;
 function withPathCache(fn) {
   if (pathMemo) return fn();
   pathMemo = /* @__PURE__ */ new Map();
@@ -3284,98 +3309,9 @@ function sensitivePathMatch(path, allowlist, cwd = process.cwd(), opts = {}) {
   }
   return void 0;
 }
-var CONTENT_COMMANDS = /* @__PURE__ */ new Set([
-  "cat",
-  "head",
-  "tail",
-  "less",
-  "more",
-  "bat",
-  "batcat",
-  "xxd",
-  "od",
-  "strings",
-  "hexdump",
-  "nl",
-  "tac",
-  "base64",
-  "base32",
-  "sed",
-  "awk",
-  "gawk",
-  "grep",
-  "egrep",
-  "fgrep",
-  "rg",
-  "ag",
-  "ack",
-  "printf",
-  "print",
-  "sort",
-  "uniq",
-  "cut",
-  "tr",
-  "jq",
-  "yq",
-  "diff",
-  "cmp",
-  "comm",
-  "paste",
-  "fold",
-  "fmt",
-  "column",
-  "rev",
-  "expand",
-  "unexpand",
-  "iconv",
-  "split",
-  "look",
-  "cp",
-  "ditto",
-  "install",
-  "dd",
-  "rsync",
-  "scp",
-  "tar",
-  "zip",
-  "gzip",
-  "bzip2",
-  "xz",
-  "zstd",
-  "source",
-  ".",
-  "curl",
-  "wget",
-  "http",
-  "https",
-  "xh",
-  "nc",
-  "ncat",
-  "openssl",
-  "gpg",
-  "vim",
-  "vi",
-  "nano",
-  "emacs",
-  // Interpreters run their program and hand it the other files to read
-  // (`perl -pe1 .env`, `python3 tool.py .env`); `xargs -a FILE` reads FILE.
-  "perl",
-  "ruby",
-  "node",
-  "nodejs",
-  "deno",
-  "bun",
-  "php",
-  "lua",
-  "xargs"
-]);
-var PYTHON = /^python[0-9.]*$/;
-var INTERPRETER_CONTENT = /^(?:perl|ruby|node|nodejs|deno|bun|php|lua|python[0-9.]*)$/;
-var ALIASING = /* @__PURE__ */ new Set(["ln", "mv"]);
 function isContentCommand(command) {
   return CONTENT_COMMANDS.has(command) || PYTHON.test(command) || isGitContentCommand(command);
 }
-var staysSensitive = (name, allowlist, cwd) => sensitivePathMatch(name, allowlist, cwd, { asIfPresent: true }) !== void 0;
 function sensitiveShellRead(analysis, allowlist, cwd) {
   for (const ref of analysis.refs) {
     if (ref.kind === "write" || ref.kind === "list" || ref.kind === "exec") continue;
@@ -3394,7 +3330,6 @@ function sensitiveShellRead(analysis, allowlist, cwd) {
   }
   return void 0;
 }
-var TREE_LIMIT = 2e4;
 function walkTree(root, visit2, limit = TREE_LIMIT) {
   let seen = 0;
   const stack = [root];
@@ -3488,8 +3423,176 @@ function sensitiveFileBelow(dir, spec, allowlist, cwd) {
   if (result === "overflow" && spec.aliasTo && staysSensitive(aliasOf(spec.aliasTo, join3(canonical(dir), ".env")), allowlist, cwd)) return void 0;
   return result === "overflow" ? "overflow" : hit;
 }
+var SENSITIVE_GLOBS, FIXTURE_DIRS, EXEMPT_GLOBS, CASE_INSENSITIVE_FS, pathMemo, CONTENT_COMMANDS, PYTHON, INTERPRETER_CONTENT, ALIASING, staysSensitive, TREE_LIMIT;
+var init_paths = __esm({
+  "src/paths.ts"() {
+    "use strict";
+    init_allowlist();
+    init_shell_paths();
+    init_vault();
+    SENSITIVE_GLOBS = [
+      "**/.env",
+      "**/.env.*",
+      "**/*.pem",
+      "**/*.key",
+      "**/id_rsa*",
+      "**/id_ed25519*",
+      "**/id_ecdsa*",
+      "**/.aws/**",
+      "**/.ssh/**",
+      "**/.kube/config",
+      "**/.npmrc",
+      "**/.netrc",
+      "**/.docker/config.json",
+      "**/credentials.json",
+      "**/.envrc",
+      "**/.dev.vars",
+      "**/.git-credentials",
+      "**/.pgpass",
+      "**/.pypirc",
+      "**/*.p12",
+      "**/*.pfx",
+      "**/*.tfstate",
+      "**/*.tfstate.backup"
+    ];
+    FIXTURE_DIRS = /* @__PURE__ */ new Set([
+      "test",
+      "tests",
+      "__tests__",
+      "spec",
+      "specs",
+      "fixture",
+      "fixtures",
+      "__fixtures__",
+      "testdata",
+      "test-data",
+      "test_data",
+      "mocks",
+      "__mocks__",
+      "examples",
+      "samples"
+    ]);
+    EXEMPT_GLOBS = ["**/.env.example", "**/.env.sample", "**/.env.template", "**/.env.dist", "**/.env.defaults", "**/*.pub"];
+    CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+    CONTENT_COMMANDS = /* @__PURE__ */ new Set([
+      "cat",
+      "head",
+      "tail",
+      "less",
+      "more",
+      "bat",
+      "batcat",
+      "xxd",
+      "od",
+      "strings",
+      "hexdump",
+      "nl",
+      "tac",
+      "base64",
+      "base32",
+      "sed",
+      "awk",
+      "gawk",
+      "grep",
+      "egrep",
+      "fgrep",
+      "rg",
+      "ag",
+      "ack",
+      "printf",
+      "print",
+      "sort",
+      "uniq",
+      "cut",
+      "tr",
+      "jq",
+      "yq",
+      "diff",
+      "cmp",
+      "comm",
+      "paste",
+      "fold",
+      "fmt",
+      "column",
+      "rev",
+      "expand",
+      "unexpand",
+      "iconv",
+      "split",
+      "look",
+      "cp",
+      "ditto",
+      "install",
+      "dd",
+      "rsync",
+      "scp",
+      "tar",
+      "zip",
+      "gzip",
+      "bzip2",
+      "xz",
+      "zstd",
+      "source",
+      ".",
+      "curl",
+      "wget",
+      "http",
+      "https",
+      "xh",
+      "nc",
+      "ncat",
+      "openssl",
+      "gpg",
+      "vim",
+      "vi",
+      "nano",
+      "emacs",
+      // Interpreters run their program and hand it the other files to read
+      // (`perl -pe1 .env`, `python3 tool.py .env`); `xargs -a FILE` reads FILE.
+      "perl",
+      "ruby",
+      "node",
+      "nodejs",
+      "deno",
+      "bun",
+      "php",
+      "lua",
+      "xargs"
+    ]);
+    PYTHON = /^python[0-9.]*$/;
+    INTERPRETER_CONTENT = /^(?:perl|ruby|node|nodejs|deno|bun|php|lua|python[0-9.]*)$/;
+    ALIASING = /* @__PURE__ */ new Set(["ln", "mv"]);
+    staysSensitive = (name, allowlist, cwd) => sensitivePathMatch(name, allowlist, cwd, { asIfPresent: true }) !== void 0;
+    TREE_LIMIT = 2e4;
+  }
+});
+
+// src/verifier/config.ts
+function readVerifierConfig(raw) {
+  if (raw === void 0) return VERIFIER_OFF;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { ...VERIFIER_OFF, invalid: "verifier must be an object" };
+  const v = raw;
+  const unknown = Object.keys(v).find((k) => k !== "enabled" && k !== "threshold");
+  if (unknown !== void 0) return { ...VERIFIER_OFF, invalid: `verifier.${unknown} is not a known key (enabled, threshold)` };
+  if (v.enabled !== void 0 && typeof v.enabled !== "boolean") return { ...VERIFIER_OFF, invalid: "verifier.enabled must be true or false" };
+  if (v.threshold !== void 0 && !THRESHOLD_PRESETS.includes(v.threshold))
+    return { ...VERIFIER_OFF, invalid: 'verifier.threshold must be "f1", "f05" or "f2"' };
+  return { enabled: v.enabled === true, threshold: v.threshold ?? "f1" };
+}
+var THRESHOLD_PRESETS, VERIFIER_OFF;
+var init_config = __esm({
+  "src/verifier/config.ts"() {
+    "use strict";
+    THRESHOLD_PRESETS = ["f1", "f05", "f2"];
+    VERIFIER_OFF = { enabled: false, threshold: "f1" };
+  }
+});
 
 // src/config.ts
+import { createHash as createHash2 } from "crypto";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync as statSync4 } from "fs";
+import { homedir as homedir4 } from "os";
+import { dirname as dirname3, join as join4, resolve as resolve3 } from "path";
 function readJsonFile(path) {
   let bytes;
   try {
@@ -3507,7 +3610,6 @@ function readJsonFile(path) {
   }
   return { ok: true, value, hash: sha256Bytes(bytes) };
 }
-var sha256Bytes = (bytes) => createHash2("sha256").update(bytes).digest("hex");
 function ownedByCurrentUser(file) {
   if (typeof process.getuid !== "function") return true;
   try {
@@ -3516,7 +3618,6 @@ function ownedByCurrentUser(file) {
     return false;
   }
 }
-var isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
 function strings(v) {
   return Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.length > 0) : [];
 }
@@ -3602,6 +3703,8 @@ function loadConfig(cwd) {
   return {
     restoreBash: base.restoreBash === true,
     hybrid: base.hybrid === "off" ? "off" : "auto",
+    // Only the user's own config.json: a repository cannot switch it on or off.
+    verifier: readVerifierConfig(base.verifier),
     allowlist: merged,
     scanAllowlist: forScan,
     untrusted,
@@ -3639,8 +3742,5802 @@ function setTrust(files, revoke = false) {
 function allowlistPath() {
   return join4(defaultVaultHome(), "allowlist.json");
 }
+var sha256Bytes, isStringArray;
+var init_config2 = __esm({
+  "src/config.ts"() {
+    "use strict";
+    init_main();
+    init_fs_atomic();
+    init_paths();
+    init_vault();
+    init_config();
+    sha256Bytes = (bytes) => createHash2("sha256").update(bytes).digest("hex");
+    isStringArray = (v) => Array.isArray(v) && v.every((x) => typeof x === "string" && x.trim().length > 0);
+  }
+});
+
+// src/engine/entropy.ts
+function shannonEntropy(s) {
+  if (s.length === 0) return 0;
+  const freq = /* @__PURE__ */ new Map();
+  for (const ch of s) {
+    freq.set(ch, (freq.get(ch) ?? 0) + 1);
+  }
+  let entropy = 0;
+  const len = s.length;
+  for (const count of freq.values()) {
+    const p = count / len;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+var init_entropy = __esm({
+  "src/engine/entropy.ts"() {
+    "use strict";
+  }
+});
+
+// src/verifier/assets.ts
+import { createHash as createHash4 } from "crypto";
+import { mkdirSync as mkdirSync5, readFileSync as readFileSync6, statSync as statSync5 } from "fs";
+import { join as join9 } from "path";
+function assetDir() {
+  return join9(defaultVaultHome(), "verifier", `${MODEL_NAME}-${MODEL_COMMIT.slice(0, 12)}`);
+}
+function matchesPin(file, bytes) {
+  const pin = pinOf(file);
+  return bytes.length === pin.bytes && sha2562(bytes) === pin.sha256;
+}
+function readAsset(file, dir = assetDir()) {
+  const path = join9(dir, file);
+  const st = statSync5(path, { throwIfNoEntry: false });
+  if (st === void 0 || !st.isFile()) return { state: "missing" };
+  if (st.size !== pinOf(file).bytes) return { state: "mismatch" };
+  const bytes = readFileSync6(path);
+  return matchesPin(file, bytes) ? { bytes } : { state: "mismatch" };
+}
+function assetStates(dir = assetDir()) {
+  return ASSETS.map((pin) => {
+    const read = readAsset(pin.file, dir);
+    return { pin, state: "bytes" in read ? "verified" : read.state };
+  });
+}
+async function fetchAssets(log, fetcher = globalThis.fetch, dir = assetDir()) {
+  mkdirSync5(dir, { recursive: true, mode: 448 });
+  const failures = [];
+  for (const pin of ASSETS) {
+    if ("bytes" in readAsset(pin.file, dir)) {
+      log(`${pin.file}: already there, sha256 verified`);
+      continue;
+    }
+    const url = ASSET_BASE_URL + pin.file;
+    try {
+      const res = await fetcher(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (res.url !== void 0 && res.url !== "" && !res.url.startsWith("https://")) throw new Error("redirected off HTTPS");
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.length !== pin.bytes) throw new Error(`${bytes.length} bytes, expected ${pin.bytes}`);
+      const got = sha2562(bytes);
+      if (got !== pin.sha256) throw new Error(`sha256 ${got}, expected ${pin.sha256}`);
+      writeFileAtomic(join9(dir, pin.file), bytes, 420);
+      log(`${pin.file}: downloaded, ${pin.bytes} bytes, sha256 verified`);
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      failures.push(pin.file);
+      log(`${pin.file}: REFUSED (${why}) \u2014 nothing written`);
+    }
+  }
+  if (failures.length > 0) throw new Error(`could not fetch and verify ${failures.join(", ")}`);
+}
+var MODEL_NAME, MODEL_COMMIT, ASSET_BASE_URL, ASSETS, pinOf, sha2562;
+var init_assets = __esm({
+  "src/verifier/assets.ts"() {
+    "use strict";
+    init_fs_atomic();
+    init_vault();
+    MODEL_NAME = "s6-secrets-verify-pico";
+    MODEL_COMMIT = "9d44c27848bc13ea6015aab13b019710070737a5";
+    ASSET_BASE_URL = `https://huggingface.co/maxgfr/${MODEL_NAME}/resolve/${MODEL_COMMIT}/engine/`;
+    ASSETS = [
+      {
+        file: "sky_web_bg.wasm",
+        bytes: 1222078,
+        sha256: "2ccf6fe227e9a773a19701283f938bded6258be951d879b684da8f23b4f78311",
+        what: "the engine, SIMD128 build"
+      },
+      {
+        file: "sky_web_relaxed_bg.wasm",
+        bytes: 1219957,
+        sha256: "d09fc19362993dc90c7e3c1f2bfe18147060599397c6ee2a759c9f7d12b86236",
+        what: "the engine, relaxed-SIMD build"
+      },
+      {
+        file: "s6-secrets-verify-pico.gguf",
+        bytes: 249984,
+        sha256: "01e6db3fa71cc2c5563dea222c68e040d3994ee2abbb02b25491a51b8cb54f27",
+        what: "the model (ternary, full depth, with its three thresholds)"
+      },
+      {
+        file: "dictionary.txt",
+        bytes: 1706770,
+        sha256: "83f3f32b0df5fc92418dac25b8d1317ec537c0d4c6405961c9c06f31159c21e9",
+        what: "the word list of the model's `word` feature"
+      }
+    ];
+    pinOf = (file) => ASSETS.find((a) => a.file === file);
+    sha2562 = (bytes) => createHash4("sha256").update(bytes).digest("hex");
+  }
+});
+
+// src/verifier/sg-cand-1/allowlist.ts
+import { createHash as createHash5 } from "crypto";
+function sha2563(value) {
+  return createHash5("sha256").update(value).digest("hex");
+}
+function isAllowedValue2(secret, allowlist) {
+  if (!allowlist?.sha256?.length) return false;
+  const h = sha2563(secret);
+  return allowlist.sha256.includes(h);
+}
+function isDisabledRule2(ruleId, allowlist) {
+  return allowlist?.rules?.includes(ruleId) ?? false;
+}
+function sequence2(inner, limit) {
+  const m = SEQUENCE2.exec(inner);
+  if (!m) return void 0;
+  const numeric = m[1] !== void 0;
+  const from = numeric ? Number(m[1]) : m[3].charCodeAt(0);
+  const to = numeric ? Number(m[2]) : m[4].charCodeAt(0);
+  const step = Math.abs(Number(m[5] ?? 1)) || 1;
+  const dir = from <= to ? 1 : -1;
+  const out = [];
+  for (let v = from; dir > 0 ? v <= to : v >= to; v += dir * step) {
+    out.push(numeric ? String(v) : String.fromCharCode(v));
+    if (out.length > limit) break;
+  }
+  return out;
+}
+function expandBraces2(text, opts = {}) {
+  const limit = opts.limit ?? 64;
+  const open = text.indexOf("{");
+  if (open === -1) return [text];
+  let depth = 0;
+  const commas = [];
+  let close = -1;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i];
+    if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) {
+      close = i;
+      break;
+    } else if (c === "," && depth === 1) commas.push(i);
+  }
+  if (close === -1) return [text];
+  const head = text.slice(0, open);
+  const tail = text.slice(close + 1);
+  let alternatives;
+  if (commas.length > 0) {
+    const bounds = [open, ...commas, close];
+    alternatives = bounds.slice(0, -1).map((b, k) => text.slice(b + 1, bounds[k + 1]));
+  } else {
+    const seq = opts.sequences ? sequence2(text.slice(open + 1, close), limit) : void 0;
+    if (!seq) return expandBraces2(tail, opts).map((t) => text.slice(0, close + 1) + t);
+    alternatives = seq;
+  }
+  const out = [];
+  for (const alt of alternatives) {
+    for (const t of expandBraces2(`${head}${alt}${tail}`, opts)) {
+      out.push(t);
+      if (out.length > limit) return out;
+    }
+  }
+  return out;
+}
+function tokenizeGlob2(glob) {
+  const tokens = [];
+  for (let i = 0; i < glob.length; ) {
+    const c = glob[i];
+    if (c === "*" && glob[i + 1] === "*") {
+      if (glob[i + 2] === "/") {
+        tokens.push({ t: "segments" });
+        i += 3;
+      } else {
+        tokens.push({ t: "any" });
+        i += 2;
+      }
+    } else if (c === "*") {
+      tokens.push({ t: "star" });
+      i++;
+    } else if (c === "?") {
+      tokens.push({ t: "one" });
+      i++;
+    } else {
+      tokens.push({ t: "lit", c });
+      i++;
+    }
+  }
+  return tokens;
+}
+function matchTokens2(tokens, path) {
+  const n = path.length;
+  let next = new Uint8Array(n + 2);
+  let cur = new Uint8Array(n + 2);
+  next[n] = 1;
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const tok = tokens[i];
+    cur.fill(0);
+    let slashAhead = 0;
+    for (let j = n; j >= 0; j--) {
+      const ch = path[j];
+      switch (tok.t) {
+        case "lit":
+          cur[j] = j < n && ch === tok.c ? next[j + 1] : 0;
+          break;
+        case "one":
+          cur[j] = j < n && ch !== "/" ? next[j + 1] : 0;
+          break;
+        case "star":
+          cur[j] = next[j] || (j < n && ch !== "/" ? cur[j + 1] : 0);
+          break;
+        case "any":
+          cur[j] = next[j] || (j < n ? cur[j + 1] : 0);
+          break;
+        case "segments":
+          if (j < n && ch === "/" && next[j + 1]) slashAhead = 1;
+          cur[j] = next[j] || slashAhead;
+          break;
+      }
+    }
+    [next, cur] = [cur, next];
+  }
+  return next[0] === 1;
+}
+function pathMatchesGlob2(path, glob, caseInsensitive = false) {
+  const key = `${caseInsensitive ? "i" : "s"}${glob}`;
+  let alternatives = GLOB_CACHE2.get(key);
+  if (!alternatives) {
+    const expanded = expandBraces2(caseInsensitive ? glob.toLowerCase() : glob).slice(0, 64).flatMap((g) => g.endsWith("/**") ? [g, g.slice(0, -3)] : [g]);
+    alternatives = expanded.map(tokenizeGlob2);
+    if (GLOB_CACHE2.size > 512) GLOB_CACHE2.clear();
+    GLOB_CACHE2.set(key, alternatives);
+  }
+  const subject = caseInsensitive ? path.toLowerCase() : path;
+  return alternatives.some((tokens) => matchTokens2(tokens, subject));
+}
+function isAllowedPath2(path, allowlist) {
+  if (!path || !allowlist?.paths?.length) return false;
+  return allowlist.paths.some((g) => pathMatchesGlob2(path, g));
+}
+var SEQUENCE2, GLOB_CACHE2;
+var init_allowlist2 = __esm({
+  "src/verifier/sg-cand-1/allowlist.ts"() {
+    "use strict";
+    SEQUENCE2 = /^(?:(-?\d+)\.\.(-?\d+)|([A-Za-z])\.\.([A-Za-z]))(?:\.\.(-?\d+))?$/;
+    GLOB_CACHE2 = /* @__PURE__ */ new Map();
+  }
+});
+
+// src/verifier/sg-cand-1/entropy.ts
+function shannonEntropy2(s) {
+  if (s.length === 0) return 0;
+  const freq = /* @__PURE__ */ new Map();
+  for (const ch of s) {
+    freq.set(ch, (freq.get(ch) ?? 0) + 1);
+  }
+  let entropy = 0;
+  const len = s.length;
+  for (const count of freq.values()) {
+    const p = count / len;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+var init_entropy2 = __esm({
+  "src/verifier/sg-cand-1/entropy.ts"() {
+    "use strict";
+  }
+});
+
+// src/verifier/sg-cand-1/luhn.ts
+function luhnValid2(input, options = {}) {
+  const s = options.stripSeparators ? input.replace(/[ -]/g, "") : input;
+  if (s.length === 0 || !/^\d+$/.test(s)) return false;
+  let sum = 0;
+  let double = false;
+  for (let i = s.length - 1; i >= 0; i--) {
+    let digit = s.charCodeAt(i) - 48;
+    if (double) {
+      digit *= 2;
+      if (digit > 9) digit -= 9;
+    }
+    sum += digit;
+    double = !double;
+  }
+  return sum % 10 === 0;
+}
+var init_luhn = __esm({
+  "src/verifier/sg-cand-1/luhn.ts"() {
+    "use strict";
+  }
+});
+
+// src/verifier/sg-cand-1/pragma.ts
+function pragmaAllowedLines2(text) {
+  const allowed = /* @__PURE__ */ new Set();
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (NEXT_LINE2.test(line)) {
+      allowed.add(i + 1);
+    } else if (SAME_LINE2.test(line)) {
+      allowed.add(i);
+    }
+  }
+  return allowed;
+}
+var SAME_LINE2, NEXT_LINE2;
+var init_pragma = __esm({
+  "src/verifier/sg-cand-1/pragma.ts"() {
+    "use strict";
+    SAME_LINE2 = /pragma:\s*allowlist\s+secret|gitleaks:allow/;
+    NEXT_LINE2 = /pragma:\s*allowlist\s+nextline\s+secret/;
+  }
+});
+
+// src/verifier/sg-cand-1/rules.gen.ts
+var RULES2, PATH_RULES2, GLOBAL_ALLOWLIST2;
+var init_rules_gen = __esm({
+  "src/verifier/sg-cand-1/rules.gen.ts"() {
+    "use strict";
+    RULES2 = [
+      {
+        "id": "1password-secret-key",
+        "regex": {
+          "source": "\\bA3-[A-Z0-9]{6}-(?:(?:[A-Z0-9]{11})|(?:[A-Z0-9]{6}-[A-Z0-9]{5}))-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}\\b",
+          "flags": ""
+        },
+        "keywords": [
+          "a3-"
+        ],
+        "entropy": 3.8
+      },
+      {
+        "id": "1password-service-account-token",
+        "regex": {
+          "source": "ops_eyJ[a-zA-Z0-9+/]{250,}={0,3}",
+          "flags": ""
+        },
+        "keywords": [
+          "ops_"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "adafruit-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:adafruit)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "adafruit"
+        ]
+      },
+      {
+        "id": "adobe-client-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:adobe)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "adobe"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "adobe-client-secret",
+        "regex": {
+          "source": `\\b(p8e-[a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "p8e-"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "age-secret-key",
+        "regex": {
+          "source": "AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}",
+          "flags": ""
+        },
+        "keywords": [
+          "age-secret-key-1"
+        ]
+      },
+      {
+        "id": "airtable-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:airtable)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{17})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "airtable"
+        ]
+      },
+      {
+        "id": "airtable-personnal-access-token",
+        "regex": {
+          "source": "\\b(pat[[:alnum:]]{14}\\.[a-f0-9]{64})\\b",
+          "flags": ""
+        },
+        "keywords": [
+          "airtable"
+        ]
+      },
+      {
+        "id": "algolia-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:algolia)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "algolia"
+        ]
+      },
+      {
+        "id": "alibaba-access-key-id",
+        "regex": {
+          "source": `\\b(LTAI[a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "ltai"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "alibaba-secret-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:alibaba)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "alibaba"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "anthropic-admin-api-key",
+        "regex": {
+          "source": `\\b(sk-ant-admin01-[a-zA-Z0-9_\\-]{93}AA)(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "sk-ant-admin01"
+        ]
+      },
+      {
+        "id": "anthropic-api-key",
+        "regex": {
+          "source": `\\b(sk-ant-api03-[a-zA-Z0-9_\\-]{93}AA)(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "sk-ant-api03"
+        ]
+      },
+      {
+        "id": "artifactory-api-key",
+        "regex": {
+          "source": "\\bAKCp[A-Za-z0-9]{69}\\b",
+          "flags": ""
+        },
+        "keywords": [
+          "akcp"
+        ],
+        "entropy": 4.5
+      },
+      {
+        "id": "artifactory-reference-token",
+        "regex": {
+          "source": "\\bcmVmd[A-Za-z0-9]{59}\\b",
+          "flags": ""
+        },
+        "keywords": [
+          "cmvmd"
+        ],
+        "entropy": 4.5
+      },
+      {
+        "id": "asana-client-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:asana)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "asana"
+        ]
+      },
+      {
+        "id": "asana-client-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:asana)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "asana"
+        ]
+      },
+      {
+        "id": "atlassian-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:(?:ATLASSIAN|[Aa]tlassian)|(?:CONFLUENCE|[Cc]onfluence)|(?:JIRA|[Jj]ira))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20}[a-f0-9]{4})(?:[\\x60'"\\s;]|\\\\[nr]|$)|\\b(ATATT3[A-Za-z0-9_\\-=]{186})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "atlassian",
+          "confluence",
+          "jira",
+          "atatt3"
+        ],
+        "entropy": 3.5
+      },
+      {
+        "id": "authress-service-client-access-key",
+        "regex": {
+          "source": `\\b((?:sc|ext|scauth|authress)_[a-z0-9]{5,30}\\.[a-z0-9]{4,6}\\.(?:acc)[_-][a-z0-9-]{10,32}\\.[a-z0-9+/_=-]{30,120})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sc_",
+          "ext_",
+          "scauth_",
+          "authress_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "aws-access-token",
+        "regex": {
+          "source": "\\b((?:A3T[A-Z0-9]|AKIA|ASIA|ABIA|ACCA)[A-Z2-7]{16})\\b",
+          "flags": ""
+        },
+        "keywords": [
+          "a3t",
+          "akia",
+          "asia",
+          "abia",
+          "acca"
+        ],
+        "entropy": 3,
+        "allowlists": [
+          {
+            "regexes": [
+              {
+                "source": ".+EXAMPLE$",
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "aws-amazon-bedrock-api-key-long-lived",
+        "regex": {
+          "source": `\\b(ABSK[A-Za-z0-9+/]{109,269}={0,2})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "absk"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "aws-amazon-bedrock-api-key-short-lived",
+        "regex": {
+          "source": "bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t",
+          "flags": ""
+        },
+        "keywords": [
+          "bedrock-api-key-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "azure-ad-client-secret",
+        "regex": {
+          "source": `(?:^|[\\\\'"\\x60\\s>=:(,)])([a-zA-Z0-9_~.]{3}\\dQ~[a-zA-Z0-9_~.-]{31,34})(?:$|[\\\\'"\\x60\\s<),])`,
+          "flags": ""
+        },
+        "keywords": [
+          "q~"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "beamer-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:beamer)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(b_[a-z0-9=_\\-]{44})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "beamer"
+        ]
+      },
+      {
+        "id": "bitbucket-client-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:bitbucket)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "bitbucket"
+        ]
+      },
+      {
+        "id": "bitbucket-client-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:bitbucket)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "bitbucket"
+        ]
+      },
+      {
+        "id": "bittrex-access-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:bittrex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "bittrex"
+        ]
+      },
+      {
+        "id": "bittrex-secret-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:bittrex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "bittrex"
+        ]
+      },
+      {
+        "id": "cisco-meraki-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Mm]eraki|MERAKI))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "meraki"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "clickhouse-cloud-api-secret-key",
+        "regex": {
+          "source": "\\b(4b1d[A-Za-z0-9]{38})\\b",
+          "flags": ""
+        },
+        "keywords": [
+          "4b1d"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "clojars-api-token",
+        "regex": {
+          "source": "CLOJARS_[a-z0-9]{60}",
+          "flags": "i"
+        },
+        "keywords": [
+          "clojars_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "cloudflare-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:cloudflare)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "cloudflare"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "cloudflare-global-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:cloudflare)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{37})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "cloudflare"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "cloudflare-origin-ca-key",
+        "regex": {
+          "source": `\\b(v1\\.0-[a-f0-9]{24}-[a-f0-9]{146})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "cloudflare",
+          "v1.0-"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "codecov-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:codecov)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "codecov"
+        ]
+      },
+      {
+        "id": "cohere-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:cohere|CO_API_KEY)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-zA-Z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "cohere",
+          "co_api_key"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "coinbase-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:coinbase)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "coinbase"
+        ]
+      },
+      {
+        "id": "confluent-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:confluent)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "confluent"
+        ]
+      },
+      {
+        "id": "confluent-secret-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:confluent)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "confluent"
+        ]
+      },
+      {
+        "id": "contentful-delivery-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:contentful)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{43})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "contentful"
+        ]
+      },
+      {
+        "id": "curl-auth-header",
+        "regex": {
+          "source": `\\bcurl\\b(?:.*?|.*?(?:[\\r\\n]{1,2}.*?){1,5})[ \\t\\n\\r](?:-H|--header)(?:=|[ \\t]{0,5})(?:"(?:Authorization:[ \\t]{0,5}(?:Basic[ \\t]([a-z0-9+/]{8,}={0,3})|(?:Bearer|(?:Api-)?Token)[ \\t]([\\w=~@.+/-]{8,})|([\\w=~@.+/-]{8,}))|(?:(?:X-(?:[a-z]+-)?)?(?:Api-?)?(?:Key|Token)):[ \\t]{0,5}([\\w=~@.+/-]{8,}))"|'(?:Authorization:[ \\t]{0,5}(?:Basic[ \\t]([a-z0-9+/]{8,}={0,3})|(?:Bearer|(?:Api-)?Token)[ \\t]([\\w=~@.+/-]{8,})|([\\w=~@.+/-]{8,}))|(?:(?:X-(?:[a-z]+-)?)?(?:Api-?)?(?:Key|Token)):[ \\t]{0,5}([\\w=~@.+/-]{8,}))')(?:\\B|\\s|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "curl"
+        ],
+        "entropy": 2.75
+      },
+      {
+        "id": "curl-auth-user",
+        "regex": {
+          "source": `\\bcurl\\b(?:.*|.*(?:[\\r\\n]{1,2}.*){1,5})[ \\t\\n\\r](?:-u|--user)(?:=|[ \\t]{0,5})("(:[^"]{3,}|[^:"]{3,}:|[^:"]{3,}:[^"]{3,})"|'([^:']{3,}:[^']{3,})'|((?:"[^"]{3,}"|'[^']{3,}'|[\\w$@.-]+):(?:"[^"]{3,}"|'[^']{3,}'|[\\w\${}@.-]+)))(?:\\s|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "curl"
+        ],
+        "entropy": 2,
+        "allowlists": [
+          {
+            "regexes": [
+              {
+                "source": "[^:]+:(?:change(?:it|me)|pass(?:word)?|pwd|test|token|\\*+|x+)",
+                "flags": ""
+              },
+              {
+                "source": `['"]?<[^>]+>['"]?:['"]?<[^>]+>|<[^:]+:[^>]+>['"]?`,
+                "flags": ""
+              },
+              {
+                "source": "[^:]+:\\[[^]]+]",
+                "flags": ""
+              },
+              {
+                "source": `['"]?[^:]+['"]?:['"]?\\$(?:\\d|\\w+|\\{(?:\\d|\\w+)})['"]?`,
+                "flags": ""
+              },
+              {
+                "source": "\\$\\([^)]+\\):\\$\\([^)]+\\)",
+                "flags": ""
+              },
+              {
+                "source": `['"]?\\$?{{[^}]+}}['"]?:['"]?\\$?{{[^}]+}}['"]?`,
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "databricks-api-token",
+        "regex": {
+          "source": `\\b(dapi[a-f0-9]{32}(?:-\\d)?)(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "dapi"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "datadog-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:datadog)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "datadog"
+        ]
+      },
+      {
+        "id": "defined-networking-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:dnkey)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(dnkey-[a-z0-9=_\\-]{26}-[a-z0-9=_\\-]{52})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "dnkey"
+        ]
+      },
+      {
+        "id": "digitalocean-access-token",
+        "regex": {
+          "source": `\\b(doo_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "doo_v1_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "digitalocean-pat",
+        "regex": {
+          "source": `\\b(dop_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "dop_v1_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "digitalocean-refresh-token",
+        "regex": {
+          "source": `\\b(dor_v1_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "dor_v1_"
+        ]
+      },
+      {
+        "id": "discord-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "discord"
+        ]
+      },
+      {
+        "id": "discord-client-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{18})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "discord"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "discord-client-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:discord)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "discord"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "doppler-api-token",
+        "regex": {
+          "source": "dp\\.pt\\.[a-z0-9]{43}",
+          "flags": "i"
+        },
+        "keywords": [
+          "dp.pt."
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "droneci-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:droneci)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "droneci"
+        ]
+      },
+      {
+        "id": "dropbox-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{15})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "dropbox"
+        ]
+      },
+      {
+        "id": "dropbox-long-lived-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{11}(AAAAAAAAAA)[a-z0-9\\-_=]{43})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "dropbox"
+        ]
+      },
+      {
+        "id": "dropbox-short-lived-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:dropbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(sl\\.[a-z0-9\\-=_]{135})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "dropbox"
+        ]
+      },
+      {
+        "id": "duffel-api-token",
+        "regex": {
+          "source": "duffel_(?:test|live)_[a-z0-9_\\-=]{43}",
+          "flags": "i"
+        },
+        "keywords": [
+          "duffel_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "dynatrace-api-token",
+        "regex": {
+          "source": "dt0c01\\.[a-z0-9]{24}\\.[a-z0-9]{64}",
+          "flags": "i"
+        },
+        "keywords": [
+          "dt0c01."
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "easypost-api-token",
+        "regex": {
+          "source": "\\bEZAK[a-z0-9]{54}\\b",
+          "flags": "i"
+        },
+        "keywords": [
+          "ezak"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "easypost-test-api-token",
+        "regex": {
+          "source": "\\bEZTK[a-z0-9]{54}\\b",
+          "flags": "i"
+        },
+        "keywords": [
+          "eztk"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "etsy-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:(?:ETSY|[Ee]tsy))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "etsy"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "facebook-access-token",
+        "regex": {
+          "source": `\\b(\\d{15,16}(\\||%)[0-9a-z\\-_]{27,40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "facebook"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "facebook-page-access-token",
+        "regex": {
+          "source": `\\b(EAA[MC][a-z0-9]{100,})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "eaam",
+          "eaac"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "facebook-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:facebook)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "facebook"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "fastly-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:fastly)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "fastly"
+        ]
+      },
+      {
+        "id": "finicity-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:finicity)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "finicity"
+        ]
+      },
+      {
+        "id": "finicity-client-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:finicity)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "finicity"
+        ]
+      },
+      {
+        "id": "finnhub-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:finnhub)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "finnhub"
+        ]
+      },
+      {
+        "id": "flickr-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:flickr)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "flickr"
+        ]
+      },
+      {
+        "id": "flutterwave-encryption-key",
+        "regex": {
+          "source": "FLWSECK_TEST-[a-h0-9]{12}",
+          "flags": "i"
+        },
+        "keywords": [
+          "flwseck_test"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "flutterwave-public-key",
+        "regex": {
+          "source": "FLWPUBK_TEST-[a-h0-9]{32}-X",
+          "flags": "i"
+        },
+        "keywords": [
+          "flwpubk_test"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "flutterwave-secret-key",
+        "regex": {
+          "source": "FLWSECK_TEST-[a-h0-9]{32}-X",
+          "flags": "i"
+        },
+        "keywords": [
+          "flwseck_test"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "flyio-access-token",
+        "regex": {
+          "source": `\\b((?:fo1_[\\w-]{43}|fm1[ar]_[a-zA-Z0-9+\\/]{100,}={0,3}|fm2_[a-zA-Z0-9+\\/]{100,}={0,3}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "fo1_",
+          "fm1",
+          "fm2_"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "frameio-api-token",
+        "regex": {
+          "source": "fio-u-[a-z0-9\\-_=]{64}",
+          "flags": "i"
+        },
+        "keywords": [
+          "fio-u-"
+        ]
+      },
+      {
+        "id": "freemius-secret-key",
+        "regex": {
+          "source": `["']secret_key["']\\s*=>\\s*["'](sk_[\\S]{29})["']`,
+          "flags": "i"
+        },
+        "keywords": [
+          "secret_key"
+        ],
+        "scopePath": {
+          "source": "\\.php$",
+          "flags": "i"
+        }
+      },
+      {
+        "id": "freshbooks-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:freshbooks)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "freshbooks"
+        ]
+      },
+      {
+        "id": "gcp-api-key",
+        "regex": {
+          "source": `\\b(AIza[\\w-]{35})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "aiza"
+        ],
+        "entropy": 4,
+        "allowlists": [
+          {
+            "regexes": [
+              {
+                "source": "AIzaSyabcdefghijklmnopqrstuvwxyz1234567",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyAnLA7NfeLquW1tJFpx_eQCxoX-oo6YyIs",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyCkEhVjf3pduRDt6d1yKOMitrUEke8agEM",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyDMAScliyLx7F0NPDEJi1QmyCgHIAODrlU",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyD3asb-2pEZVqMkmL6M9N6nHZRR_znhrh0",
+                "flags": ""
+              },
+              {
+                "source": "AIzayDNSXIbFmlXbIE6mCzDLQAqITYefhixbX4A",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyAdOS2zB6NCsk1pCdZ4-P6GBdi_UUPwX7c",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyASWm6HmTMdYWpgMnjRBjxcQ9CKctWmLd4",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyANUvH9H9BsUccjsu2pCmEkOPjjaXeDQgY",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyA5_iVawFQ8ABuTZNUdcwERLJv_a_p4wtM",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyA4UrcGxgwQFTfaI3no3t7Lt1sjmdnP5sQ",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyDSb51JiIcB6OJpwwMicseKRhhrOq1cS7g",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyBF2RrAIm4a0mO64EShQfqfd2AFnzAvvuU",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyBcE-OOIbhjyR83gm4r2MFCu4MJmprNXsw",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyB8qGxt4ec15vitgn44duC5ucxaOi4FmqE",
+                "flags": ""
+              },
+              {
+                "source": "AIzaSyA8vmApnrHNFE0bApF4hoZ11srVL_n0nvY",
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "generic-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:access|auth|(?:[Aa]pi|API)|credential|creds|key|passw(?:or)?d|secret|token)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([\\w.=-]{10,150}|[a-z0-9][a-z0-9+/]{11,}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "access",
+          "api",
+          "auth",
+          "key",
+          "credential",
+          "creds",
+          "passwd",
+          "password",
+          "secret",
+          "token"
+        ],
+        "entropy": 3.5,
+        "allowlists": [
+          {
+            "regexes": [
+              {
+                "source": "^[a-zA-Z_.-]+$",
+                "flags": ""
+              }
+            ]
+          },
+          {
+            "regexTarget": "match",
+            "regexes": [
+              {
+                "source": "(?:access(?:ibility|or)|access[_.-]?id|random[_.-]?access|api[_.-]?(?:id|name|version)|rapid|capital|[a-z0-9-]*?api[a-z0-9-]*?:jar:|author|X-MS-Exchange-Organization-Auth|Authentication-Results|(?:credentials?[_.-]?id|withCredentials)|(?:bucket|foreign|hot|idx|natural|primary|pub(?:lic)?|schema|sequence)[_.-]?key|(?:turkey)|key[_.-]?(?:alias|board|code|frame|id|length|mesh|name|pair|press(?:ed)?|ring|selector|signature|size|stone|storetype|word|up|down|left|right)|key[_.-]?vault[_.-]?(?:id|name)|keyVaultToStoreSecrets|key(?:store|tab)[_.-]?(?:file|path)|issuerkeyhash|(?:[DdMm]onkey|[DM]ONKEY)|keying|(?:secret)[_.-]?(?:length|name|size)|UserSecretsId|(?:csrf)[_.-]?token|(?:io\\.jsonwebtoken[ \\t]?:[ \\t]?[\\w-]+)|(?:api|credentials|token)[_.-]?(?:endpoint|ur[il])|public[_.-]?token|(?:key|token)[_.-]?file|(?:(?:[A-Z_]+=\\n[A-Z_]+=|[a-z_]+=\\n[a-z_]+=)(?:\\n|$))|(?:(?:[A-Z.]+=\\n[A-Z.]+=|[a-z.]+=\\n[a-z.]+=)(?:\\n|$)))",
+                "flags": "i"
+              }
+            ],
+            "stopwords": [
+              "000000",
+              "6fe4476ee5a1832882e326b506d14126",
+              "_ec2_",
+              "aaaaaa",
+              "about",
+              "abstract",
+              "academy",
+              "acces",
+              "account",
+              "act-",
+              "act.",
+              "act_",
+              "action",
+              "active",
+              "actively",
+              "activity",
+              "adapter",
+              "add-",
+              "add-on",
+              "add.",
+              "add_",
+              "addon",
+              "addres",
+              "admin",
+              "adobe",
+              "advanced",
+              "adventure",
+              "agent",
+              "agile",
+              "air-",
+              "air.",
+              "air_",
+              "ajax",
+              "akka",
+              "alert",
+              "alfred",
+              "algorithm",
+              "all-",
+              "all.",
+              "all_",
+              "alloy",
+              "alpha",
+              "amazon",
+              "amqp",
+              "analysi",
+              "analytic",
+              "analyzer",
+              "android",
+              "angular",
+              "angularj",
+              "animate",
+              "animation",
+              "another",
+              "ansible",
+              "answer",
+              "ant-",
+              "ant.",
+              "ant_",
+              "any-",
+              "any.",
+              "any_",
+              "apache",
+              "app-",
+              "app.",
+              "app_",
+              "apple",
+              "arch",
+              "archive",
+              "archived",
+              "arduino",
+              "array",
+              "art-",
+              "art.",
+              "art_",
+              "article",
+              "asp-",
+              "asp.",
+              "asp_",
+              "asset",
+              "async",
+              "atom",
+              "attention",
+              "audio",
+              "audit",
+              "aura",
+              "auth",
+              "author",
+              "authorize",
+              "auto",
+              "automated",
+              "automatic",
+              "awesome",
+              "aws_",
+              "azure",
+              "back",
+              "backbone",
+              "backend",
+              "backup",
+              "bar-",
+              "bar.",
+              "bar_",
+              "base",
+              "based",
+              "bash",
+              "basic",
+              "batch",
+              "been",
+              "beer",
+              "behavior",
+              "being",
+              "benchmark",
+              "best",
+              "beta",
+              "better",
+              "big-",
+              "big.",
+              "big_",
+              "binary",
+              "binding",
+              "bit-",
+              "bit.",
+              "bit_",
+              "bitcoin",
+              "block",
+              "blog",
+              "board",
+              "book",
+              "bookmark",
+              "boost",
+              "boot",
+              "bootstrap",
+              "bosh",
+              "bot-",
+              "bot.",
+              "bot_",
+              "bower",
+              "box-",
+              "box.",
+              "box_",
+              "boxen",
+              "bracket",
+              "branch",
+              "bridge",
+              "browser",
+              "brunch",
+              "buffer",
+              "bug-",
+              "bug.",
+              "bug_",
+              "build",
+              "builder",
+              "building",
+              "buildout",
+              "buildpack",
+              "built",
+              "bundle",
+              "busines",
+              "but-",
+              "but.",
+              "but_",
+              "button",
+              "cache",
+              "caching",
+              "cakephp",
+              "calendar",
+              "call",
+              "camera",
+              "campfire",
+              "can-",
+              "can.",
+              "can_",
+              "canva",
+              "captcha",
+              "capture",
+              "card",
+              "carousel",
+              "case",
+              "cassandra",
+              "cat-",
+              "cat.",
+              "cat_",
+              "category",
+              "center",
+              "cento",
+              "challenge",
+              "change",
+              "changelog",
+              "channel",
+              "chart",
+              "chat",
+              "cheat",
+              "check",
+              "checker",
+              "chef",
+              "ches",
+              "chinese",
+              "chosen",
+              "chrome",
+              "ckeditor",
+              "clas",
+              "classe",
+              "classic",
+              "clean",
+              "cli-",
+              "cli.",
+              "cli_",
+              "client",
+              "clojure",
+              "clone",
+              "closure",
+              "cloud",
+              "club",
+              "cluster",
+              "cms-",
+              "cms_",
+              "coco",
+              "code",
+              "coding",
+              "coffee",
+              "color",
+              "combination",
+              "combo",
+              "command",
+              "commander",
+              "comment",
+              "commit",
+              "common",
+              "community",
+              "compas",
+              "compiler",
+              "complete",
+              "component",
+              "composer",
+              "computer",
+              "computing",
+              "con-",
+              "con.",
+              "con_",
+              "concept",
+              "conf",
+              "config",
+              "connect",
+              "connector",
+              "console",
+              "contact",
+              "container",
+              "contao",
+              "content",
+              "contest",
+              "context",
+              "control",
+              "convert",
+              "converter",
+              "conway'",
+              "cookbook",
+              "cookie",
+              "cool",
+              "copy",
+              "cordova",
+              "core",
+              "couchbase",
+              "couchdb",
+              "countdown",
+              "counter",
+              "course",
+              "craft",
+              "crawler",
+              "create",
+              "creating",
+              "creator",
+              "credential",
+              "crm-",
+              "crm.",
+              "crm_",
+              "cros",
+              "crud",
+              "csv-",
+              "csv.",
+              "csv_",
+              "cube",
+              "cucumber",
+              "cuda",
+              "current",
+              "currently",
+              "custom",
+              "daemon",
+              "dark",
+              "dart",
+              "dash",
+              "dashboard",
+              "data",
+              "database",
+              "date",
+              "day-",
+              "day.",
+              "day_",
+              "dead",
+              "debian",
+              "debug",
+              "debugger",
+              "deck",
+              "define",
+              "del-",
+              "del.",
+              "del_",
+              "delete",
+              "demo",
+              "deploy",
+              "design",
+              "designer",
+              "desktop",
+              "detection",
+              "detector",
+              "dev-",
+              "dev.",
+              "dev_",
+              "develop",
+              "developer",
+              "device",
+              "devise",
+              "diff",
+              "digital",
+              "directive",
+              "directory",
+              "discovery",
+              "display",
+              "django",
+              "dns-",
+              "dns_",
+              "doc-",
+              "doc.",
+              "doc_",
+              "docker",
+              "docpad",
+              "doctrine",
+              "document",
+              "doe-",
+              "doe.",
+              "doe_",
+              "dojo",
+              "dom-",
+              "dom.",
+              "dom_",
+              "domain",
+              "don't",
+              "done",
+              "dot-",
+              "dot.",
+              "dot_",
+              "dotfile",
+              "download",
+              "draft",
+              "drag",
+              "drill",
+              "drive",
+              "driven",
+              "driver",
+              "drop",
+              "dropbox",
+              "drupal",
+              "dsl-",
+              "dsl.",
+              "dsl_",
+              "dynamic",
+              "easy",
+              "ecdsa",
+              "eclipse",
+              "edit",
+              "editing",
+              "edition",
+              "editor",
+              "element",
+              "emac",
+              "email",
+              "embed",
+              "embedded",
+              "ember",
+              "emitter",
+              "emulator",
+              "encoding",
+              "endpoint",
+              "engine",
+              "english",
+              "enhanced",
+              "entity",
+              "entry",
+              "env_",
+              "episode",
+              "erlang",
+              "error",
+              "espresso",
+              "event",
+              "evented",
+              "example",
+              "exchange",
+              "exercise",
+              "experiment",
+              "expire",
+              "exploit",
+              "explorer",
+              "export",
+              "exporter",
+              "expres",
+              "ext-",
+              "ext.",
+              "ext_",
+              "extended",
+              "extension",
+              "external",
+              "extra",
+              "extractor",
+              "fabric",
+              "facebook",
+              "factory",
+              "fake",
+              "fast",
+              "feature",
+              "feed",
+              "fewfwef",
+              "ffmpeg",
+              "field",
+              "file",
+              "filter",
+              "find",
+              "finder",
+              "firefox",
+              "firmware",
+              "first",
+              "fish",
+              "fix-",
+              "fix_",
+              "flash",
+              "flask",
+              "flat",
+              "flex",
+              "flexible",
+              "flickr",
+              "flow",
+              "fluent",
+              "fluentd",
+              "fluid",
+              "folder",
+              "font",
+              "force",
+              "foreman",
+              "fork",
+              "form",
+              "format",
+              "formatter",
+              "forum",
+              "foundry",
+              "framework",
+              "free",
+              "friend",
+              "friendly",
+              "front-end",
+              "frontend",
+              "ftp-",
+              "ftp.",
+              "ftp_",
+              "fuel",
+              "full",
+              "fun-",
+              "fun.",
+              "fun_",
+              "func",
+              "future",
+              "gaia",
+              "gallery",
+              "game",
+              "gateway",
+              "gem-",
+              "gem.",
+              "gem_",
+              "gen-",
+              "gen.",
+              "gen_",
+              "general",
+              "generator",
+              "generic",
+              "genetic",
+              "get-",
+              "get.",
+              "get_",
+              "getenv",
+              "getting",
+              "ghost",
+              "gist",
+              "git-",
+              "git.",
+              "git_",
+              "github",
+              "gitignore",
+              "gitlab",
+              "glas",
+              "gmail",
+              "gnome",
+              "gnu-",
+              "gnu.",
+              "gnu_",
+              "goal",
+              "golang",
+              "gollum",
+              "good",
+              "google",
+              "gpu-",
+              "gpu.",
+              "gpu_",
+              "gradle",
+              "grail",
+              "graph",
+              "graphic",
+              "great",
+              "grid",
+              "groovy",
+              "group",
+              "grunt",
+              "guard",
+              "gui-",
+              "gui.",
+              "gui_",
+              "guide",
+              "guideline",
+              "gulp",
+              "gwt-",
+              "gwt.",
+              "gwt_",
+              "hack",
+              "hackathon",
+              "hacker",
+              "hacking",
+              "hadoop",
+              "haml",
+              "handler",
+              "hardware",
+              "has-",
+              "has_",
+              "hash",
+              "haskell",
+              "have",
+              "haxe",
+              "hello",
+              "help",
+              "helper",
+              "here",
+              "hero",
+              "heroku",
+              "high",
+              "hipchat",
+              "history",
+              "home",
+              "homebrew",
+              "homepage",
+              "hook",
+              "host",
+              "hosting",
+              "hot-",
+              "hot.",
+              "hot_",
+              "house",
+              "how-",
+              "how.",
+              "how_",
+              "html",
+              "http",
+              "hub-",
+              "hub.",
+              "hub_",
+              "hubot",
+              "human",
+              "icon",
+              "ide-",
+              "ide.",
+              "ide_",
+              "idea",
+              "identity",
+              "idiomatic",
+              "image",
+              "impact",
+              "import",
+              "important",
+              "importer",
+              "impres",
+              "index",
+              "infinite",
+              "info",
+              "injection",
+              "inline",
+              "input",
+              "inside",
+              "inspector",
+              "instagram",
+              "install",
+              "installer",
+              "instant",
+              "intellij",
+              "interface",
+              "internet",
+              "interview",
+              "into",
+              "intro",
+              "ionic",
+              "iphone",
+              "ipython",
+              "irc-",
+              "irc_",
+              "iso-",
+              "iso.",
+              "iso_",
+              "issue",
+              "jade",
+              "jasmine",
+              "java",
+              "jbos",
+              "jekyll",
+              "jenkin",
+              "jetbrains",
+              "job-",
+              "job.",
+              "job_",
+              "joomla",
+              "jpa-",
+              "jpa.",
+              "jpa_",
+              "jquery",
+              "json",
+              "just",
+              "kafka",
+              "karma",
+              "kata",
+              "kernel",
+              "keyboard",
+              "kindle",
+              "kit-",
+              "kit.",
+              "kit_",
+              "kitchen",
+              "knife",
+              "koan",
+              "kohana",
+              "lab-",
+              "lab.",
+              "lab_",
+              "lambda",
+              "lamp",
+              "language",
+              "laravel",
+              "last",
+              "latest",
+              "latex",
+              "launcher",
+              "layer",
+              "layout",
+              "lazy",
+              "ldap",
+              "leaflet",
+              "league",
+              "learn",
+              "learning",
+              "led-",
+              "led.",
+              "led_",
+              "leetcode",
+              "les-",
+              "les.",
+              "les_",
+              "level",
+              "leveldb",
+              "lib-",
+              "lib.",
+              "lib_",
+              "librarie",
+              "library",
+              "license",
+              "life",
+              "liferay",
+              "light",
+              "lightbox",
+              "like",
+              "line",
+              "link",
+              "linked",
+              "linkedin",
+              "linux",
+              "lisp",
+              "list",
+              "lite",
+              "little",
+              "load",
+              "loader",
+              "local",
+              "location",
+              "lock",
+              "log-",
+              "log.",
+              "log_",
+              "logger",
+              "logging",
+              "logic",
+              "login",
+              "logstash",
+              "longer",
+              "look",
+              "love",
+              "lua-",
+              "lua.",
+              "lua_",
+              "mac-",
+              "mac.",
+              "mac_",
+              "machine",
+              "made",
+              "magento",
+              "magic",
+              "mail",
+              "make",
+              "maker",
+              "making",
+              "man-",
+              "man.",
+              "man_",
+              "manage",
+              "manager",
+              "manifest",
+              "manual",
+              "map-",
+              "map.",
+              "map_",
+              "mapper",
+              "mapping",
+              "markdown",
+              "markup",
+              "master",
+              "math",
+              "matrix",
+              "maven",
+              "md5",
+              "mean",
+              "media",
+              "mediawiki",
+              "meetup",
+              "memcached",
+              "memory",
+              "menu",
+              "merchant",
+              "message",
+              "messaging",
+              "meta",
+              "metadata",
+              "meteor",
+              "method",
+              "metric",
+              "micro",
+              "middleman",
+              "migration",
+              "minecraft",
+              "miner",
+              "mini",
+              "minimal",
+              "mirror",
+              "mit-",
+              "mit.",
+              "mit_",
+              "mobile",
+              "mocha",
+              "mock",
+              "mod-",
+              "mod.",
+              "mod_",
+              "mode",
+              "model",
+              "modern",
+              "modular",
+              "module",
+              "modx",
+              "money",
+              "mongo",
+              "mongodb",
+              "mongoid",
+              "mongoose",
+              "monitor",
+              "monkey",
+              "more",
+              "motion",
+              "moved",
+              "movie",
+              "mozilla",
+              "mqtt",
+              "mule",
+              "multi",
+              "multiple",
+              "music",
+              "mustache",
+              "mvc-",
+              "mvc.",
+              "mvc_",
+              "mysql",
+              "nagio",
+              "name",
+              "native",
+              "need",
+              "neo-",
+              "neo.",
+              "neo_",
+              "nest",
+              "nested",
+              "net-",
+              "net.",
+              "net_",
+              "nette",
+              "network",
+              "new-",
+              "new.",
+              "new_",
+              "next",
+              "nginx",
+              "ninja",
+              "nlp-",
+              "nlp.",
+              "nlp_",
+              "node",
+              "nodej",
+              "nosql",
+              "not-",
+              "not.",
+              "not_",
+              "note",
+              "notebook",
+              "notepad",
+              "notice",
+              "notifier",
+              "now-",
+              "now.",
+              "now_",
+              "number",
+              "oauth",
+              "object",
+              "objective",
+              "obsolete",
+              "ocaml",
+              "octopres",
+              "official",
+              "old-",
+              "old.",
+              "old_",
+              "onboard",
+              "online",
+              "only",
+              "open",
+              "opencv",
+              "opengl",
+              "openshift",
+              "openwrt",
+              "option",
+              "oracle",
+              "org-",
+              "org.",
+              "org_",
+              "origin",
+              "original",
+              "orm-",
+              "orm.",
+              "orm_",
+              "osx-",
+              "osx_",
+              "our-",
+              "our.",
+              "our_",
+              "out-",
+              "out.",
+              "out_",
+              "output",
+              "over",
+              "overview",
+              "own-",
+              "own.",
+              "own_",
+              "pack",
+              "package",
+              "packet",
+              "page",
+              "panel",
+              "paper",
+              "paperclip",
+              "para",
+              "parallax",
+              "parallel",
+              "parse",
+              "parser",
+              "parsing",
+              "particle",
+              "party",
+              "password",
+              "patch",
+              "path",
+              "pattern",
+              "payment",
+              "paypal",
+              "pdf-",
+              "pdf.",
+              "pdf_",
+              "pebble",
+              "people",
+              "perl",
+              "personal",
+              "phalcon",
+              "phoenix",
+              "phone",
+              "phonegap",
+              "photo",
+              "php-",
+              "php.",
+              "php_",
+              "physic",
+              "picker",
+              "pipeline",
+              "platform",
+              "play",
+              "player",
+              "please",
+              "plu-",
+              "plu.",
+              "plu_",
+              "plug-in",
+              "plugin",
+              "plupload",
+              "png-",
+              "png.",
+              "png_",
+              "poker",
+              "polyfill",
+              "polymer",
+              "pool",
+              "pop-",
+              "pop.",
+              "pop_",
+              "popcorn",
+              "popup",
+              "port",
+              "portable",
+              "portal",
+              "portfolio",
+              "post",
+              "power",
+              "powered",
+              "powerful",
+              "prelude",
+              "pretty",
+              "preview",
+              "principle",
+              "print",
+              "pro-",
+              "pro.",
+              "pro_",
+              "problem",
+              "proc",
+              "product",
+              "profile",
+              "profiler",
+              "program",
+              "progres",
+              "project",
+              "protocol",
+              "prototype",
+              "provider",
+              "proxy",
+              "public",
+              "pull",
+              "puppet",
+              "pure",
+              "purpose",
+              "push",
+              "pusher",
+              "pyramid",
+              "python",
+              "quality",
+              "query",
+              "queue",
+              "quick",
+              "rabbitmq",
+              "rack",
+              "radio",
+              "rail",
+              "railscast",
+              "random",
+              "range",
+              "raspberry",
+              "rdf-",
+              "rdf.",
+              "rdf_",
+              "react",
+              "reactive",
+              "read",
+              "reader",
+              "readme",
+              "ready",
+              "real",
+              "real-time",
+              "reality",
+              "realtime",
+              "recipe",
+              "recorder",
+              "red-",
+              "red.",
+              "red_",
+              "reddit",
+              "redi",
+              "redmine",
+              "reference",
+              "refinery",
+              "refresh",
+              "registry",
+              "related",
+              "release",
+              "remote",
+              "rendering",
+              "repo",
+              "report",
+              "request",
+              "require",
+              "required",
+              "requirej",
+              "research",
+              "resource",
+              "response",
+              "resque",
+              "rest",
+              "restful",
+              "resume",
+              "reveal",
+              "reverse",
+              "review",
+              "riak",
+              "rich",
+              "right",
+              "ring",
+              "robot",
+              "role",
+              "room",
+              "router",
+              "routing",
+              "rpc-",
+              "rpc.",
+              "rpc_",
+              "rpg-",
+              "rpg.",
+              "rpg_",
+              "rspec",
+              "ruby-",
+              "ruby.",
+              "ruby_",
+              "rule",
+              "run-",
+              "run.",
+              "run_",
+              "runner",
+              "running",
+              "runtime",
+              "rust",
+              "rvm-",
+              "rvm.",
+              "rvm_",
+              "salt",
+              "sample",
+              "sandbox",
+              "sas-",
+              "sas.",
+              "sas_",
+              "sbt-",
+              "sbt.",
+              "sbt_",
+              "scala",
+              "scalable",
+              "scanner",
+              "schema",
+              "scheme",
+              "school",
+              "science",
+              "scraper",
+              "scratch",
+              "screen",
+              "script",
+              "scroll",
+              "scs-",
+              "scs.",
+              "scs_",
+              "sdk-",
+              "sdk.",
+              "sdk_",
+              "sdl-",
+              "sdl.",
+              "sdl_",
+              "search",
+              "secure",
+              "security",
+              "see-",
+              "see.",
+              "see_",
+              "seed",
+              "select",
+              "selector",
+              "selenium",
+              "semantic",
+              "sencha",
+              "send",
+              "sentiment",
+              "serie",
+              "server",
+              "service",
+              "session",
+              "set-",
+              "set.",
+              "set_",
+              "setting",
+              "setup",
+              "sha1",
+              "sha2",
+              "sha256",
+              "share",
+              "shared",
+              "sharing",
+              "sheet",
+              "shell",
+              "shield",
+              "shipping",
+              "shop",
+              "shopify",
+              "shortener",
+              "should",
+              "show",
+              "showcase",
+              "side",
+              "silex",
+              "simple",
+              "simulator",
+              "single",
+              "site",
+              "skeleton",
+              "sketch",
+              "skin",
+              "slack",
+              "slide",
+              "slider",
+              "slim",
+              "small",
+              "smart",
+              "smtp",
+              "snake",
+              "snapshot",
+              "snippet",
+              "soap",
+              "social",
+              "socket",
+              "software",
+              "solarized",
+              "solr",
+              "solution",
+              "solver",
+              "some",
+              "soon",
+              "source",
+              "space",
+              "spark",
+              "spatial",
+              "spec",
+              "sphinx",
+              "spine",
+              "spotify",
+              "spree",
+              "spring",
+              "sprite",
+              "sql-",
+              "sql.",
+              "sql_",
+              "sqlite",
+              "ssh-",
+              "ssh.",
+              "ssh_",
+              "stack",
+              "staging",
+              "standard",
+              "stanford",
+              "start",
+              "started",
+              "starter",
+              "startup",
+              "stat",
+              "statamic",
+              "state",
+              "static",
+              "statistic",
+              "statsd",
+              "statu",
+              "steam",
+              "step",
+              "still",
+              "stm-",
+              "stm.",
+              "stm_",
+              "storage",
+              "store",
+              "storm",
+              "story",
+              "strategy",
+              "stream",
+              "streaming",
+              "string",
+              "stripe",
+              "structure",
+              "studio",
+              "study",
+              "stuff",
+              "style",
+              "sublime",
+              "sugar",
+              "suite",
+              "summary",
+              "super",
+              "support",
+              "supported",
+              "svg-",
+              "svg.",
+              "svg_",
+              "svn-",
+              "svn.",
+              "svn_",
+              "swagger",
+              "swift",
+              "switch",
+              "switcher",
+              "symfony",
+              "symphony",
+              "sync",
+              "synopsi",
+              "syntax",
+              "system",
+              "tab-",
+              "tab.",
+              "tab_",
+              "table",
+              "tag-",
+              "tag.",
+              "tag_",
+              "talk",
+              "target",
+              "task",
+              "tcp-",
+              "tcp.",
+              "tcp_",
+              "tdd-",
+              "tdd.",
+              "tdd_",
+              "team",
+              "tech",
+              "template",
+              "term",
+              "terminal",
+              "testing",
+              "tetri",
+              "text",
+              "textmate",
+              "theme",
+              "theory",
+              "three",
+              "thrift",
+              "time",
+              "timeline",
+              "timer",
+              "tiny",
+              "tinymce",
+              "tip-",
+              "tip.",
+              "tip_",
+              "title",
+              "todo",
+              "todomvc",
+              "token",
+              "tool",
+              "toolbox",
+              "toolkit",
+              "top-",
+              "top.",
+              "top_",
+              "tornado",
+              "touch",
+              "tower",
+              "tracker",
+              "tracking",
+              "traffic",
+              "training",
+              "transfer",
+              "translate",
+              "transport",
+              "tree",
+              "trello",
+              "try-",
+              "try.",
+              "try_",
+              "tumblr",
+              "tut-",
+              "tut.",
+              "tut_",
+              "tutorial",
+              "tweet",
+              "twig",
+              "twitter",
+              "type",
+              "typo",
+              "ubuntu",
+              "uiview",
+              "ultimate",
+              "under",
+              "unit",
+              "unity",
+              "universal",
+              "unix",
+              "update",
+              "updated",
+              "upgrade",
+              "upload",
+              "uploader",
+              "uri-",
+              "uri.",
+              "uri_",
+              "url-",
+              "url.",
+              "url_",
+              "usage",
+              "usb-",
+              "usb.",
+              "usb_",
+              "use-",
+              "use.",
+              "use_",
+              "used",
+              "useful",
+              "user",
+              "using",
+              "util",
+              "utilitie",
+              "utility",
+              "vagrant",
+              "validator",
+              "value",
+              "variou",
+              "varnish",
+              "version",
+              "via-",
+              "via.",
+              "via_",
+              "video",
+              "view",
+              "viewer",
+              "vim-",
+              "vim.",
+              "vim_",
+              "vimrc",
+              "virtual",
+              "vision",
+              "visual",
+              "vpn",
+              "want",
+              "warning",
+              "watch",
+              "watcher",
+              "wave",
+              "way-",
+              "way.",
+              "way_",
+              "weather",
+              "web-",
+              "web_",
+              "webapp",
+              "webgl",
+              "webhook",
+              "webkit",
+              "webrtc",
+              "website",
+              "websocket",
+              "welcome",
+              "what",
+              "what'",
+              "when",
+              "where",
+              "which",
+              "why-",
+              "why.",
+              "why_",
+              "widget",
+              "wifi",
+              "wiki",
+              "win-",
+              "win.",
+              "win_",
+              "window",
+              "wip-",
+              "wip.",
+              "wip_",
+              "within",
+              "without",
+              "wizard",
+              "word",
+              "wordpres",
+              "work",
+              "worker",
+              "workflow",
+              "working",
+              "workshop",
+              "world",
+              "wrapper",
+              "write",
+              "writer",
+              "writing",
+              "written",
+              "www-",
+              "www.",
+              "www_",
+              "xamarin",
+              "xcode",
+              "xml-",
+              "xml.",
+              "xml_",
+              "xmpp",
+              "xxxxxx",
+              "yahoo",
+              "yaml",
+              "yandex",
+              "yeoman",
+              "yet-",
+              "yet.",
+              "yet_",
+              "yii-",
+              "yii.",
+              "yii_",
+              "youtube",
+              "yui-",
+              "yui.",
+              "yui_",
+              "zend",
+              "zero",
+              "zip-",
+              "zip.",
+              "zip_",
+              "zsh-",
+              "zsh.",
+              "zsh_"
+            ]
+          },
+          {
+            "regexTarget": "line",
+            "regexes": [
+              {
+                "source": "--mount=type=secret,",
+                "flags": ""
+              },
+              {
+                "source": `import[ \\t]+{[ \\t\\w,]+}[ \\t]+from[ \\t]+['"][^'"]+['"]`,
+                "flags": ""
+              }
+            ]
+          },
+          {
+            "condition": "AND",
+            "regexTarget": "line",
+            "regexes": [
+              {
+                "source": 'LICENSE[^=]*=\\s*"[^"]+',
+                "flags": ""
+              },
+              {
+                "source": 'LIC_FILES_CHKSUM[^=]*=\\s*"[^"]+',
+                "flags": ""
+              },
+              {
+                "source": 'SRC[^=]*=\\s*"[a-zA-Z0-9]+',
+                "flags": ""
+              }
+            ],
+            "paths": [
+              {
+                "source": "\\.bb$",
+                "flags": ""
+              },
+              {
+                "source": "\\.bbappend$",
+                "flags": ""
+              },
+              {
+                "source": "\\.bbclass$",
+                "flags": ""
+              },
+              {
+                "source": "\\.inc$",
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "github-app-token",
+        "regex": {
+          "source": "(?:ghu|ghs)_[0-9a-zA-Z]{36}",
+          "flags": ""
+        },
+        "keywords": [
+          "ghu_",
+          "ghs_"
+        ],
+        "entropy": 3,
+        "allowlists": [
+          {
+            "paths": [
+              {
+                "source": "(?:^|/)@octokit/auth-token/README\\.md$",
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "github-fine-grained-pat",
+        "regex": {
+          "source": "github_pat_\\w{82}",
+          "flags": ""
+        },
+        "keywords": [
+          "github_pat_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "github-oauth",
+        "regex": {
+          "source": "gho_[0-9a-zA-Z]{36}",
+          "flags": ""
+        },
+        "keywords": [
+          "gho_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "github-pat",
+        "regex": {
+          "source": "ghp_[0-9a-zA-Z]{36}",
+          "flags": ""
+        },
+        "keywords": [
+          "ghp_"
+        ],
+        "entropy": 3,
+        "allowlists": [
+          {
+            "paths": [
+              {
+                "source": "(?:^|/)@octokit/auth-token/README\\.md$",
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "github-refresh-token",
+        "regex": {
+          "source": "ghr_[0-9a-zA-Z]{36}",
+          "flags": ""
+        },
+        "keywords": [
+          "ghr_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-cicd-job-token",
+        "regex": {
+          "source": "glcbt-[0-9a-zA-Z]{1,5}_[0-9a-zA-Z_-]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "glcbt-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-deploy-token",
+        "regex": {
+          "source": "gldt-[0-9a-zA-Z_\\-]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "gldt-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-feature-flag-client-token",
+        "regex": {
+          "source": "glffct-[0-9a-zA-Z_\\-]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "glffct-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-feed-token",
+        "regex": {
+          "source": "glft-[0-9a-zA-Z_\\-]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "glft-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-incoming-mail-token",
+        "regex": {
+          "source": "glimt-[0-9a-zA-Z_\\-]{25}",
+          "flags": ""
+        },
+        "keywords": [
+          "glimt-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-kubernetes-agent-token",
+        "regex": {
+          "source": "glagent-[0-9a-zA-Z_\\-]{50}",
+          "flags": ""
+        },
+        "keywords": [
+          "glagent-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-oauth-app-secret",
+        "regex": {
+          "source": "gloas-[0-9a-zA-Z_\\-]{64}",
+          "flags": ""
+        },
+        "keywords": [
+          "gloas-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-pat",
+        "regex": {
+          "source": "glpat-[\\w-]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "glpat-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-pat-routable",
+        "regex": {
+          "source": "\\bglpat-[0-9a-zA-Z_-]{27,300}\\.[0-9a-z]{2}[0-9a-z]{7}\\b",
+          "flags": ""
+        },
+        "keywords": [
+          "glpat-"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "gitlab-ptt",
+        "regex": {
+          "source": "glptt-[0-9a-f]{40}",
+          "flags": ""
+        },
+        "keywords": [
+          "glptt-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-rrt",
+        "regex": {
+          "source": "GR1348941[\\w-]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "gr1348941"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-runner-authentication-token",
+        "regex": {
+          "source": "glrt-[0-9a-zA-Z_\\-]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "glrt-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-runner-authentication-token-routable",
+        "regex": {
+          "source": "\\bglrt-t\\d_[0-9a-zA-Z_\\-]{27,300}\\.[0-9a-z]{2}[0-9a-z]{7}\\b",
+          "flags": ""
+        },
+        "keywords": [
+          "glrt-"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "gitlab-scim-token",
+        "regex": {
+          "source": "glsoat-[0-9a-zA-Z_\\-]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "glsoat-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitlab-session-cookie",
+        "regex": {
+          "source": "_gitlab_session=[0-9a-z]{32}",
+          "flags": ""
+        },
+        "keywords": [
+          "_gitlab_session="
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "gitter-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:gitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "gitter"
+        ]
+      },
+      {
+        "id": "gocardless-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:gocardless)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(live_[a-z0-9\\-_=]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "live_",
+          "gocardless"
+        ]
+      },
+      {
+        "id": "grafana-api-key",
+        "regex": {
+          "source": `\\b(eyJrIjoi[A-Za-z0-9]{70,400}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "eyjrijoi"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "grafana-cloud-api-token",
+        "regex": {
+          "source": `\\b(glc_[A-Za-z0-9+/]{32,400}={0,3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "glc_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "grafana-service-account-token",
+        "regex": {
+          "source": `\\b(glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "glsa_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "harness-api-key",
+        "regex": {
+          "source": "(?:pat|sat)\\.[a-zA-Z0-9_-]{22}\\.[a-zA-Z0-9]{24}\\.[a-zA-Z0-9]{20}",
+          "flags": ""
+        },
+        "keywords": [
+          "pat.",
+          "sat."
+        ]
+      },
+      {
+        "id": "hashicorp-tf-api-token",
+        "regex": {
+          "source": "[a-z0-9]{14}\\.(?:atlasv1)\\.[a-z0-9\\-_=]{60,70}",
+          "flags": "i"
+        },
+        "keywords": [
+          "atlasv1"
+        ],
+        "entropy": 3.5
+      },
+      {
+        "id": "hashicorp-tf-password",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:administrator_login_password|password)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}("[a-z0-9=_\\-]{8,20}")(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "administrator_login_password",
+          "password"
+        ],
+        "entropy": 2,
+        "scopePath": {
+          "source": "\\.(?:tf|hcl)$",
+          "flags": "i"
+        }
+      },
+      {
+        "id": "heroku-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:heroku)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "heroku"
+        ]
+      },
+      {
+        "id": "heroku-api-key-v2",
+        "regex": {
+          "source": `\\b((HRKU-AA[0-9a-zA-Z_-]{58}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "hrku-aa"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "hubspot-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:hubspot)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "hubspot"
+        ]
+      },
+      {
+        "id": "huggingface-access-token",
+        "regex": {
+          "source": `\\b(hf_(?:[a-z]{34}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "hf_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "huggingface-organization-api-token",
+        "regex": {
+          "source": `\\b(api_org_(?:[a-z]{34}))(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "api_org_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "infracost-api-token",
+        "regex": {
+          "source": `\\b(ico-[a-zA-Z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "ico-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "intercom-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:intercom)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{60})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "intercom"
+        ]
+      },
+      {
+        "id": "intra42-client-secret",
+        "regex": {
+          "source": `\\b(s-s4t2(?:ud|af)-[abcdef0123456789]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "intra",
+          "s-s4t2ud-",
+          "s-s4t2af-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "jfrog-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:jfrog|artifactory|bintray|xray)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{73})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "jfrog",
+          "artifactory",
+          "bintray",
+          "xray"
+        ]
+      },
+      {
+        "id": "jfrog-identity-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:jfrog|artifactory|bintray|xray)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "jfrog",
+          "artifactory",
+          "bintray",
+          "xray"
+        ]
+      },
+      {
+        "id": "jwt",
+        "regex": {
+          "source": `\\b(ey[a-zA-Z0-9]{17,}\\.ey[a-zA-Z0-9\\/\\\\_-]{17,}\\.(?:[a-zA-Z0-9\\/\\\\_-]{10,}={0,2})?)(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "ey"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "jwt-base64",
+        "regex": {
+          "source": "\\bZXlK(?:(?<alg>aGJHY2lPaU)|(?<apu>aGNIVWlPaU)|(?<apv>aGNIWWlPaU)|(?<aud>aGRXUWlPaU)|(?<b64>aU5qUWlP)|(?<crit>amNtbDBJanBi)|(?<cty>amRIa2lPaU)|(?<epk>bGNHc2lPbn)|(?<enc>bGJtTWlPaU)|(?<jku>cWEzVWlPaU)|(?<jwk>cWQyc2lPb)|(?<iss>cGMzTWlPaU)|(?<iv>cGRpSTZJ)|(?<kid>cmFXUWlP)|(?<key_ops>clpYbGZiM0J6SWpwY)|(?<kty>cmRIa2lPaUp)|(?<nonce>dWIyNWpaU0k2)|(?<p2c>d01tTWlP)|(?<p2s>d01uTWlPaU)|(?<ppt>d2NIUWlPaU)|(?<sub>emRXSWlPaU)|(?<svt>emRuUWlP)|(?<tag>MFlXY2lPaU)|(?<typ>MGVYQWlPaUp)|(?<url>MWNtd2l)|(?<use>MWMyVWlPaUp)|(?<ver>MlpYSWlPaU)|(?<version>MlpYSnphVzl1SWpv)|(?<x>NElqb2)|(?<x5c>NE5XTWlP)|(?<x5t>NE5YUWlPaU)|(?<x5ts256>NE5YUWpVekkxTmlJNkl)|(?<x5u>NE5YVWlPaU)|(?<zip>NmFYQWlPaU))[a-zA-Z0-9\\/\\\\_+\\-\\r\\n]{40,}={0,2}",
+          "flags": ""
+        },
+        "keywords": [
+          "zxlk"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "kraken-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:kraken)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9\\/=_\\+\\-]{80,90})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "kraken"
+        ]
+      },
+      {
+        "id": "kubernetes-secret-yaml",
+        "regex": {
+          "source": `(?:\\bkind:[ \\t]*["']?\\bsecret\\b["']?(?:[\\s\\S]){0,200}?\\bdata:(?:[\\s\\S]){0,100}?\\s+([\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:["']?[a-z0-9+/]{10,}={0,3}["']?|\\{\\{[ \\t\\w"|$:=,.-]+}}|""|''))|\\bdata:(?:[\\s\\S]){0,100}?\\s+([\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:["']?[a-z0-9+/]{10,}={0,3}["']?|\\{\\{[ \\t\\w"|$:=,.-]+}}|""|''))(?:[\\s\\S]){0,200}?\\bkind:[ \\t]*["']?\\bsecret\\b["']?)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "secret"
+        ],
+        "scopePath": {
+          "source": "\\.ya?ml$",
+          "flags": "i"
+        },
+        "allowlists": [
+          {
+            "regexes": [
+              {
+                "source": `[\\w.-]+:(?:[ \\t]*(?:\\||>[-+]?)\\s+)?[ \\t]*(?:\\{\\{[ \\t\\w"|$:=,.-]+}}|""|'')`,
+                "flags": ""
+              }
+            ]
+          },
+          {
+            "regexTarget": "match",
+            "regexes": [
+              {
+                "source": "(kind:(?:[\\s\\S])+\\n---\\n(?:[\\s\\S])+\\bdata:|data:(?:[\\s\\S])+\\n---\\n(?:[\\s\\S])+\\bkind:)",
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "kucoin-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:kucoin)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "kucoin"
+        ]
+      },
+      {
+        "id": "kucoin-secret-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:kucoin)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "kucoin"
+        ]
+      },
+      {
+        "id": "launchdarkly-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:launchdarkly)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "launchdarkly"
+        ]
+      },
+      {
+        "id": "linear-api-key",
+        "regex": {
+          "source": "lin_api_[a-z0-9]{40}",
+          "flags": "i"
+        },
+        "keywords": [
+          "lin_api_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "linear-client-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:linear)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "linear"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "linkedin-client-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:linked[_-]?in)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{14})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "linkedin",
+          "linked_in",
+          "linked-in"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "linkedin-client-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:linked[_-]?in)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "linkedin",
+          "linked_in",
+          "linked-in"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "lob-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:lob)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((live|test)_[a-f0-9]{35})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "test_",
+          "live_"
+        ]
+      },
+      {
+        "id": "lob-pub-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:lob)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((test|live)_pub_[a-f0-9]{31})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "test_pub",
+          "live_pub",
+          "_pub"
+        ]
+      },
+      {
+        "id": "looker-client-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:looker)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "looker"
+        ]
+      },
+      {
+        "id": "looker-client-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:looker)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "looker"
+        ]
+      },
+      {
+        "id": "mailchimp-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:MailchimpSDK.initialize|mailchimp)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{32}-us\\d\\d)(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "mailchimp"
+        ]
+      },
+      {
+        "id": "mailgun-private-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(key-[a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "mailgun"
+        ]
+      },
+      {
+        "id": "mailgun-pub-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(pubkey-[a-f0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "mailgun"
+        ]
+      },
+      {
+        "id": "mailgun-signing-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:mailgun)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-h0-9]{32}-[a-h0-9]{8}-[a-h0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "mailgun"
+        ]
+      },
+      {
+        "id": "mapbox-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:mapbox)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(pk\\.[a-z0-9]{60}\\.[a-z0-9]{22})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "mapbox"
+        ]
+      },
+      {
+        "id": "mattermost-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:mattermost)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{26})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "mattermost"
+        ]
+      },
+      {
+        "id": "maxmind-license-key",
+        "regex": {
+          "source": `\\b([A-Za-z0-9]{6}_[A-Za-z0-9]{29}_mmk)(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "_mmk"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "messagebird-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:message[_-]?bird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{25})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "messagebird",
+          "message-bird",
+          "message_bird"
+        ]
+      },
+      {
+        "id": "messagebird-client-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:message[_-]?bird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "messagebird",
+          "message-bird",
+          "message_bird"
+        ]
+      },
+      {
+        "id": "microsoft-teams-webhook",
+        "regex": {
+          "source": "https://[a-z0-9]+\\.webhook\\.office\\.com/webhookb2/[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}@[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}/IncomingWebhook/[a-z0-9]{32}/[a-z0-9]{8}-([a-z0-9]{4}-){3}[a-z0-9]{12}",
+          "flags": ""
+        },
+        "keywords": [
+          "webhook.office.com",
+          "webhookb2",
+          "incomingwebhook"
+        ]
+      },
+      {
+        "id": "netlify-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:netlify)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{40,46})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "netlify"
+        ]
+      },
+      {
+        "id": "new-relic-browser-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRJS-[a-f0-9]{19})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "nrjs-"
+        ]
+      },
+      {
+        "id": "new-relic-insert-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRII-[a-z0-9-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "nrii-"
+        ]
+      },
+      {
+        "id": "new-relic-user-api-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "new-relic",
+          "newrelic",
+          "new_relic"
+        ]
+      },
+      {
+        "id": "new-relic-user-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:new-relic|newrelic|new_relic)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(NRAK-[a-z0-9]{27})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "nrak"
+        ]
+      },
+      {
+        "id": "notion-api-token",
+        "regex": {
+          "source": `\\b(ntn_[0-9]{11}[A-Za-z0-9]{32}[A-Za-z0-9]{3})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "ntn_"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "npm-access-token",
+        "regex": {
+          "source": `\\b(npm_[a-z0-9]{36})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "npm_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "nuget-config-password",
+        "regex": {
+          "source": '<add key=\\"(?:(?:ClearText)?Password)\\"\\s*value=\\"(.{8,})\\"\\s*/>',
+          "flags": "i"
+        },
+        "keywords": [
+          "<add key="
+        ],
+        "entropy": 1,
+        "scopePath": {
+          "source": "nuget\\.config$",
+          "flags": "i"
+        },
+        "allowlists": [
+          {
+            "regexes": [
+              {
+                "source": "33f!!lloppa",
+                "flags": ""
+              },
+              {
+                "source": "hal\\+9ooo_da!sY",
+                "flags": ""
+              },
+              {
+                "source": "^\\%\\S.*\\%$",
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "nytimes-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:nytimes|new-york-times,|newyorktimes)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9=_\\-]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "nytimes",
+          "new-york-times",
+          "newyorktimes"
+        ]
+      },
+      {
+        "id": "octopus-deploy-api-key",
+        "regex": {
+          "source": `\\b(API-[A-Z0-9]{26})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "api-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "okta-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Oo]kta|OKTA))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(00[\\w=\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "okta"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "openai-api-key",
+        "regex": {
+          "source": `\\b(sk-(?:proj|svcacct|admin)-(?:[A-Za-z0-9_-]{74}|[A-Za-z0-9_-]{58})T3BlbkFJ(?:[A-Za-z0-9_-]{74}|[A-Za-z0-9_-]{58})\\b|sk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "t3blbkfj"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "openshift-user-token",
+        "regex": {
+          "source": "\\b(sha256~[\\w-]{43})(?:[^\\w-]|$)",
+          "flags": ""
+        },
+        "keywords": [
+          "sha256~"
+        ],
+        "entropy": 3.5
+      },
+      {
+        "id": "perplexity-api-key",
+        "regex": {
+          "source": `\\b(pplx-[a-zA-Z0-9]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$|\\b)`,
+          "flags": ""
+        },
+        "keywords": [
+          "pplx-"
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "plaid-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(access-(?:sandbox|development|production)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "plaid"
+        ]
+      },
+      {
+        "id": "plaid-client-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{24})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "plaid"
+        ],
+        "entropy": 3.5
+      },
+      {
+        "id": "plaid-secret-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:plaid)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "plaid"
+        ],
+        "entropy": 3.5
+      },
+      {
+        "id": "planetscale-api-token",
+        "regex": {
+          "source": `\\b(pscale_tkn_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "pscale_tkn_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "planetscale-oauth-token",
+        "regex": {
+          "source": `\\b(pscale_oauth_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "pscale_oauth_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "planetscale-password",
+        "regex": {
+          "source": `\\b(pscale_pw_[\\w=\\.-]{32,64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "pscale_pw_"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "postman-api-token",
+        "regex": {
+          "source": `\\b(PMAK-[a-f0-9]{24}\\-[a-f0-9]{34})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "pmak-"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "prefect-api-token",
+        "regex": {
+          "source": `\\b(pnu_[a-zA-Z0-9]{36})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "pnu_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "private-key",
+        "regex": {
+          "source": "-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[\\s\\S-]{64,}?KEY(?: BLOCK)?-----",
+          "flags": "i"
+        },
+        "keywords": [
+          "-----begin"
+        ]
+      },
+      {
+        "id": "privateai-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:private[_-]?ai)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{32})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "privateai",
+          "private_ai",
+          "private-ai"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "pulumi-api-token",
+        "regex": {
+          "source": `\\b(pul-[a-f0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "pul-"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "pypi-upload-token",
+        "regex": {
+          "source": "pypi-AgEIcHlwaS5vcmc[\\w-]{50,1000}",
+          "flags": ""
+        },
+        "keywords": [
+          "pypi-ageichlwas5vcmc"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "rapidapi-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:rapidapi)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9_-]{50})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "rapidapi"
+        ]
+      },
+      {
+        "id": "readme-api-token",
+        "regex": {
+          "source": `\\b(rdme_[a-z0-9]{70})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "rdme_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "rubygems-api-token",
+        "regex": {
+          "source": `\\b(rubygems_[a-f0-9]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "rubygems_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "scalingo-api-token",
+        "regex": {
+          "source": `\\b(tk-us-[\\w-]{48})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "tk-us-"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "sendbird-access-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:sendbird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sendbird"
+        ]
+      },
+      {
+        "id": "sendbird-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:sendbird)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sendbird"
+        ]
+      },
+      {
+        "id": "sendgrid-api-token",
+        "regex": {
+          "source": `\\b(SG\\.[a-z0-9=_\\-\\.]{66})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sg."
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "sendinblue-api-token",
+        "regex": {
+          "source": `\\b(xkeysib-[a-f0-9]{64}\\-[a-z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "xkeysib-"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "sentry-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:sentry)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sentry"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "sentry-org-token",
+        "regex": {
+          "source": "\\bsntrys_eyJpYXQiO[a-zA-Z0-9+/]{10,200}(?:LCJyZWdpb25fdXJs|InJlZ2lvbl91cmwi|cmVnaW9uX3VybCI6)[a-zA-Z0-9+/]{10,200}={0,2}_[a-zA-Z0-9+/]{43}(?:[^a-zA-Z0-9+/]|$)",
+          "flags": ""
+        },
+        "keywords": [
+          "sntrys_eyjpyxqio"
+        ],
+        "entropy": 4.5
+      },
+      {
+        "id": "sentry-user-token",
+        "regex": {
+          "source": `\\b(sntryu_[a-f0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "sntryu_"
+        ],
+        "entropy": 3.5
+      },
+      {
+        "id": "settlemint-application-access-token",
+        "regex": {
+          "source": `\\b(sm_aat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "sm_aat"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "settlemint-personal-access-token",
+        "regex": {
+          "source": `\\b(sm_pat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "sm_pat"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "settlemint-service-access-token",
+        "regex": {
+          "source": `\\b(sm_sat_[a-zA-Z0-9]{16})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "sm_sat"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "shippo-api-token",
+        "regex": {
+          "source": `\\b(shippo_(?:live|test)_[a-fA-F0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "shippo_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "shopify-access-token",
+        "regex": {
+          "source": "shpat_[a-fA-F0-9]{32}",
+          "flags": ""
+        },
+        "keywords": [
+          "shpat_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "shopify-custom-access-token",
+        "regex": {
+          "source": "shpca_[a-fA-F0-9]{32}",
+          "flags": ""
+        },
+        "keywords": [
+          "shpca_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "shopify-private-app-access-token",
+        "regex": {
+          "source": "shppa_[a-fA-F0-9]{32}",
+          "flags": ""
+        },
+        "keywords": [
+          "shppa_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "shopify-shared-secret",
+        "regex": {
+          "source": "shpss_[a-fA-F0-9]{32}",
+          "flags": ""
+        },
+        "keywords": [
+          "shpss_"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "sidekiq-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:BUNDLE_ENTERPRISE__CONTRIBSYS__COM|BUNDLE_GEMS__CONTRIBSYS__COM)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-f0-9]{8}:[a-f0-9]{8})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "bundle_enterprise__contribsys__com",
+          "bundle_gems__contribsys__com"
+        ]
+      },
+      {
+        "id": "sidekiq-sensitive-url",
+        "regex": {
+          "source": "\\bhttps?://([a-f0-9]{8}:[a-f0-9]{8})@(?:gems.contribsys.com|enterprise.contribsys.com)(?:[\\/|\\#|\\?|:]|$)",
+          "flags": "i"
+        },
+        "keywords": [
+          "gems.contribsys.com",
+          "enterprise.contribsys.com"
+        ]
+      },
+      {
+        "id": "slack-app-token",
+        "regex": {
+          "source": "xapp-\\d-[A-Z0-9]+-\\d+-[a-z0-9]+",
+          "flags": "i"
+        },
+        "keywords": [
+          "xapp"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "slack-bot-token",
+        "regex": {
+          "source": "xoxb-[0-9]{10,13}-[0-9]{10,13}[a-zA-Z0-9-]*",
+          "flags": ""
+        },
+        "keywords": [
+          "xoxb"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "slack-config-access-token",
+        "regex": {
+          "source": "xoxe.xox[bp]-\\d-[A-Z0-9]{163,166}",
+          "flags": "i"
+        },
+        "keywords": [
+          "xoxe.xoxb-",
+          "xoxe.xoxp-"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "slack-config-refresh-token",
+        "regex": {
+          "source": "xoxe-\\d-[A-Z0-9]{146}",
+          "flags": "i"
+        },
+        "keywords": [
+          "xoxe-"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "slack-legacy-bot-token",
+        "regex": {
+          "source": "xoxb-[0-9]{8,14}-[a-zA-Z0-9]{18,26}",
+          "flags": ""
+        },
+        "keywords": [
+          "xoxb"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "slack-legacy-token",
+        "regex": {
+          "source": "xox[os]-\\d+-\\d+-\\d+-[a-fA-F\\d]+",
+          "flags": ""
+        },
+        "keywords": [
+          "xoxo",
+          "xoxs"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "slack-legacy-workspace-token",
+        "regex": {
+          "source": "xox[ar]-(?:\\d-)?[0-9a-zA-Z]{8,48}",
+          "flags": ""
+        },
+        "keywords": [
+          "xoxa",
+          "xoxr"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "slack-user-token",
+        "regex": {
+          "source": "xox[pe](?:-[0-9]{10,13}){3}-[a-zA-Z0-9-]{28,34}",
+          "flags": ""
+        },
+        "keywords": [
+          "xoxp-",
+          "xoxe-"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "slack-webhook-url",
+        "regex": {
+          "source": "(?:https?://)?hooks.slack.com/(?:services|workflows|triggers)/[A-Za-z0-9+/]{43,56}",
+          "flags": ""
+        },
+        "keywords": [
+          "hooks.slack.com"
+        ]
+      },
+      {
+        "id": "snyk-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:snyk[_.-]?(?:(?:api|oauth)[_.-]?)?(?:key|token))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "snyk"
+        ]
+      },
+      {
+        "id": "sonar-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:sonar[_.-]?(login|token))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}((?:squ_|sqp_|sqa_)?[a-z0-9=_\\-]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sonar"
+        ],
+        "secretGroup": 2
+      },
+      {
+        "id": "sourcegraph-access-token",
+        "regex": {
+          "source": `\\b(\\b(sgp_(?:[a-fA-F0-9]{16}|local)_[a-fA-F0-9]{40}|sgp_[a-fA-F0-9]{40}|[a-fA-F0-9]{40})\\b)(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sgp_",
+          "sourcegraph"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "square-access-token",
+        "regex": {
+          "source": `\\b((?:EAAA|sq0atp-)[\\w-]{22,60})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "sq0atp-",
+          "eaaa"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "squarespace-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:squarespace)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "squarespace"
+        ]
+      },
+      {
+        "id": "stripe-access-token",
+        "regex": {
+          "source": `\\b((?:sk|rk)_(?:test|live|prod)_[a-zA-Z0-9]{10,99})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "sk_test",
+          "sk_live",
+          "sk_prod",
+          "rk_test",
+          "rk_live",
+          "rk_prod"
+        ],
+        "entropy": 2
+      },
+      {
+        "id": "sumologic-access-id",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:[\\w.-]{0,50}?(?:(?:[Ss]umo|SUMO))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3})(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(su[a-zA-Z0-9]{12})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sumo"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "sumologic-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:(?:[Ss]umo|SUMO))(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{64})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "sumo"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "telegram-bot-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:telegr)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{5,16}:(?:A)[a-z0-9_\\-]{34})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "telegr"
+        ]
+      },
+      {
+        "id": "travisci-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:travis)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{22})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "travis"
+        ]
+      },
+      {
+        "id": "twilio-api-key",
+        "regex": {
+          "source": "SK[0-9a-fA-F]{32}",
+          "flags": ""
+        },
+        "keywords": [
+          "sk"
+        ],
+        "entropy": 3
+      },
+      {
+        "id": "twitch-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:twitch)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{30})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "twitch"
+        ]
+      },
+      {
+        "id": "twitter-access-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{45})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "twitter"
+        ]
+      },
+      {
+        "id": "twitter-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([0-9]{15,25}-[a-zA-Z0-9]{20,40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "twitter"
+        ]
+      },
+      {
+        "id": "twitter-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{25})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "twitter"
+        ]
+      },
+      {
+        "id": "twitter-api-secret",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{50})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "twitter"
+        ]
+      },
+      {
+        "id": "twitter-bearer-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:twitter)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(A{22}[a-zA-Z0-9%]{80,100})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "twitter"
+        ]
+      },
+      {
+        "id": "typeform-api-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:typeform)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(tfp_[a-z0-9\\-_\\.=]{59})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "tfp_"
+        ]
+      },
+      {
+        "id": "vault-batch-token",
+        "regex": {
+          "source": `\\b(hvb\\.[\\w-]{138,300})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": ""
+        },
+        "keywords": [
+          "hvb."
+        ],
+        "entropy": 4
+      },
+      {
+        "id": "vault-service-token",
+        "regex": {
+          "source": `\\b((?:hvs\\.[\\w-]{90,120}|s\\.(?:[a-z0-9]{24})))(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "hvs.",
+          "s."
+        ],
+        "entropy": 3.5,
+        "allowlists": [
+          {
+            "regexes": [
+              {
+                "source": "s\\.[A-Za-z]{24}",
+                "flags": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "yandex-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(t1\\.[A-Z0-9a-z_-]+[=]{0,2}\\.[A-Z0-9a-z_-]{86}[=]{0,2})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "yandex"
+        ]
+      },
+      {
+        "id": "yandex-api-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(AQVN[A-Za-z0-9_\\-]{35,38})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "yandex"
+        ]
+      },
+      {
+        "id": "yandex-aws-access-token",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:yandex)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}(YC[a-zA-Z0-9_\\-]{38})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "yandex"
+        ]
+      },
+      {
+        "id": "zendesk-secret-key",
+        "regex": {
+          "source": `[\\w.-]{0,50}?(?:zendesk)(?:[ \\t\\w.-]{0,20})[\\s'"]{0,3}(?:=|>|:{1,3}=|\\|\\||:|=>|\\?=|,)[\\x60'"\\s=]{0,5}([a-z0-9]{40})(?:[\\x60'"\\s;]|\\\\[nr]|$)`,
+          "flags": "i"
+        },
+        "keywords": [
+          "zendesk"
+        ]
+      }
+    ];
+    PATH_RULES2 = [
+      {
+        "id": "pkcs12-file",
+        "path": {
+          "source": "(?:^|\\/)[^\\/]+\\.p(?:12|fx)$",
+          "flags": "i"
+        }
+      }
+    ];
+    GLOBAL_ALLOWLIST2 = {
+      "paths": [
+        "gitleaks\\.toml",
+        "\\.(?:bmp|gif|jpe?g|png|svg|tiff?)$",
+        "\\.(?:eot|[ot]tf|woff2?)$",
+        "\\.(?:docx?|xlsx?|pdf|bin|socket|vsidx|v2|suo|wsuo|.dll|pdb|exe|gltf)$",
+        "go\\.(?:mod|sum|work(?:\\.sum)?)$",
+        "(?:^|/)vendor/modules\\.txt$",
+        "(?:^|/)vendor/(?:github\\.com|golang\\.org/x|google\\.golang\\.org|gopkg\\.in|istio\\.io|k8s\\.io|sigs\\.k8s\\.io)(?:/.*)?$",
+        "(?:^|/)gradlew(?:\\.bat)?$",
+        "(?:^|/)gradle\\.lockfile$",
+        "(?:^|/)mvnw(?:\\.cmd)?$",
+        "(?:^|/)\\.mvn/wrapper/MavenWrapperDownloader\\.java$",
+        "(?:^|/)node_modules(?:/.*)?$",
+        "(?:^|/)(?:deno\\.lock|npm-shrinkwrap\\.json|package-lock\\.json|pnpm-lock\\.yaml|yarn\\.lock)$",
+        "(?:^|/)bower_components(?:/.*)?$",
+        "(?:^|/)(?:angular|bootstrap|jquery(?:-?ui)?|plotly|swagger-?ui)[a-zA-Z0-9.-]*(?:\\.min)?\\.js(?:\\.map)?$",
+        "(?:^|/)javascript\\.json$",
+        "(?:^|/)(?:Pipfile|poetry)\\.lock$",
+        "(?:^|/)(?:v?env|virtualenv)/lib(?:64)?(?:/.*)?$",
+        "(?:^|/)(?:lib(?:64)?/python[23](?:\\.\\d{1,2})+|python/[23](?:\\.\\d{1,2})+/lib(?:64)?)(?:/.*)?$",
+        "(?:^|/)[a-z0-9_.]+-[0-9.]+\\.dist-info(?:/.+)?$",
+        "(?:^|/)vendor/(?:bundle|ruby)(?:/.*?)?$",
+        "\\.gem$",
+        "verification-metadata\\.xml",
+        "Database.refactorlog",
+        "(?:^|/)\\.git$"
+      ],
+      "regexes": [
+        {
+          "source": "^true|false|null$",
+          "flags": "i"
+        },
+        {
+          "source": "^(?:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\\*+|\\.+)$",
+          "flags": "i"
+        },
+        {
+          "source": "^\\$(?:\\d+|{\\d+})$",
+          "flags": ""
+        },
+        {
+          "source": "^\\$(?:[A-Z_]+|[a-z_]+)$",
+          "flags": ""
+        },
+        {
+          "source": "^\\${(?:[A-Z_]+|[a-z_]+)}$",
+          "flags": ""
+        },
+        {
+          "source": "^\\{\\{[ \\t]*[\\w ().|]+[ \\t]*}}$",
+          "flags": ""
+        },
+        {
+          "source": `^\\$\\{\\{[ \\t]*(?:(?:env|github|secrets|vars)(?:\\.[A-Za-z]\\w+)+[\\w "'&./=|]*)[ \\t]*}}$`,
+          "flags": ""
+        },
+        {
+          "source": "^%(?:[A-Z_]+|[a-z_]+)%$",
+          "flags": ""
+        },
+        {
+          "source": "^%[+\\-# 0]?[bcdeEfFgGoOpqstTUvxX]$",
+          "flags": ""
+        },
+        {
+          "source": "^\\{\\d{0,2}}$",
+          "flags": ""
+        },
+        {
+          "source": "^@(?:[A-Z_]+|[a-z_]+)@$",
+          "flags": ""
+        },
+        {
+          "source": "^/Users/[a-z0-9]+/[\\w .-/]+$",
+          "flags": "i"
+        },
+        {
+          "source": "^/(?:bin|etc|home|opt|tmp|usr|var)/[\\w ./-]+$",
+          "flags": ""
+        }
+      ],
+      "stopwords": [
+        "014df517-39d1-4453-b7b3-9930c563627c",
+        "abcdefghijklmnopqrstuvwxyz"
+      ]
+    };
+  }
+});
+
+// src/verifier/sg-cand-1/scanner.ts
+function alreadyRedacted2(secret) {
+  if (!secret.includes("SECRETGATE_")) return false;
+  const rest = secret.replace(PLACEHOLDER2, "");
+  return rest.length < secret.length && rest.length < MIN_REMAINDER;
+}
+function compileAllowlist2(a) {
+  return {
+    condition: a.condition === "AND" ? "AND" : "OR",
+    regexTarget: a.regexTarget ?? "secret",
+    regexes: (a.regexes ?? []).map((r) => new RegExp(r.source, r.flags)),
+    stopwords: a.stopwords ?? [],
+    paths: (a.paths ?? []).map((r) => new RegExp(r.source, r.flags))
+  };
+}
+function unquote2(v) {
+  const first = v[0];
+  if ((first === '"' || first === "'" || first === "`") && v.length >= 2 && v[v.length - 1] === first) {
+    return v.slice(1, -1);
+  }
+  return v;
+}
+function looksLikeInterpolation2(v) {
+  return /^\$\{[^{}]*\}$/.test(v) || // ${VAR}, ${this.key}, ${env:DB_PASSWORD}
+  /^\$\([^()]*\)$/.test(v) || // $(cat /run/secrets/db)
+  /^#\{.*\}$/.test(v) || // Ruby / CoffeeScript #{...}
+  /^\{\{.*\}\}$/.test(v) || // Jinja / Go / Handlebars {{ ... }}
+  /^\{[A-Za-z_][\w.]*\}$/.test(v) || // Python str.format {settings.api_key}
+  /^%\([A-Za-z_]\w*\)[a-z]$/.test(v) || // printf mapping %(db_password)s
+  /^<%=?[\s\S]*%>$/.test(v);
+}
+function onlyDescribesItself(v) {
+  if (v.length > 64 || !/^[A-Za-z][A-Za-z _.-]*$/.test(v)) return false;
+  const words = v.split(/[ _.-]+|(?<=[a-z])(?=[A-Z])/).filter((w) => w !== "");
+  return words.length >= 2 && words.every((w) => DESCRIBING_WORDS.has(w.toLowerCase()));
+}
+function looksLikePlaceholder2(raw) {
+  const v = unquote2(raw);
+  const low = v.toLowerCase();
+  if (PLACEHOLDER_WORDS2.has(low)) return true;
+  if (/^[*x•.\-_]+$/.test(v)) return true;
+  if (/[*•]{4,}/.test(v)) return true;
+  if (/[A-Z0-9]EXAMPLE$/.test(v)) return true;
+  if (onlyDescribesItself(v)) return true;
+  if (/^\$\{?[a-z_][\w]*\}?$/i.test(v)) return true;
+  if (looksLikeInterpolation2(v.trim())) return true;
+  if (/^%[a-z_]+%$/i.test(v)) return true;
+  if (/^<[^>]+>$/.test(v)) return true;
+  if (/^[a-z]+$/.test(low) && new Set(low).size <= 3) return true;
+  return false;
+}
+function looksLikeFilesystemPath2(raw) {
+  const v = unquote2(raw);
+  if (!/^(?:\/|\.\.?\/|~\/|[A-Za-z]:[\\/])/.test(v)) return false;
+  const separators = (v.match(/[\\/]/g) ?? []).length;
+  if (separators < 2) return false;
+  return /^[A-Za-z0-9._\-\\/: ]+$/.test(v);
+}
+function assignedName2(text, lineStart, valueStart) {
+  const before = text.slice(Math.max(lineStart, valueStart - 160), valueStart);
+  const head = before.replace(/[\s"'`=:>,|?]+$/, "");
+  const phrase = /[\w.\- \t]*$/.exec(head)[0];
+  return phrase.split(/[ \t]+/).filter((w) => w !== "");
+}
+function namedPublic2(name) {
+  const label = name.slice(-3).join(" ");
+  const m = PUBLIC_NAME2.exec(label);
+  return m !== null && !CREDENTIAL_WORD.test(label.slice(m.index + m[0].length));
+}
+function notASecretInContext2(secret, name) {
+  const last = name[name.length - 1];
+  if (last !== void 0 && alnum2(last).length >= 6 && alnum2(last) === alnum2(unquote2(secret))) return true;
+  if (/^pk_(?:test|live)_/.test(unquote2(secret))) return true;
+  if (/(?:gpg|pgp)[ _.-]?key/i.test(name.slice(-3).join(" ")) && !/^[0-9A-Fa-f \t]+$/.test(unquote2(secret))) return false;
+  return namedPublic2(name);
+}
+function isRuleSourceText2(secret) {
+  RULE_SOURCE_BLOB2 ??= COMPILED2.flatMap((r) => [r.re.source, JSON.stringify(r.re.source).slice(1, -1)]).join("\0");
+  return !secret.includes("\0") && RULE_SOURCE_BLOB2.includes(secret);
+}
+function lineStarts2(text) {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n") starts.push(i + 1);
+  }
+  return starts;
+}
+function lineAt2(starts, offset) {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi + 1 >> 1;
+    if (starts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+function lineText2(text, starts, line) {
+  const start = starts[line];
+  const end = line + 1 < starts.length ? starts[line + 1] - 1 : text.length;
+  return text.slice(start, end);
+}
+function allowlistMatches2(a, secret, target, sourcePath) {
+  const checks = [];
+  if (a.regexes.length > 0) checks.push(a.regexes.some((re) => re.test(target)));
+  if (a.stopwords.length > 0) {
+    const lowerSecret = secret.toLowerCase();
+    checks.push(a.stopwords.some((s) => lowerSecret.includes(s)));
+  }
+  if (a.paths.length > 0) checks.push(sourcePath !== void 0 && a.paths.some((re) => re.test(sourcePath)));
+  if (checks.length === 0) return false;
+  return a.condition === "AND" ? checks.every(Boolean) : checks.some(Boolean);
+}
+function pickSecret2(match, secretGroup) {
+  const indices = match.indices;
+  if (secretGroup && secretGroup > 0 && match[secretGroup] !== void 0) {
+    const [s2, e2] = indices[secretGroup];
+    return { secret: match[secretGroup], start: s2, end: e2 };
+  }
+  for (let g = 1; g < match.length; g++) {
+    if (match[g] !== void 0 && match[g].length > 0) {
+      const [s2, e2] = indices[g];
+      return { secret: match[g], start: s2, end: e2 };
+    }
+  }
+  const [s, e] = indices[0];
+  return { secret: match[0], start: s, end: e };
+}
+function scan2(text, cfg = {}) {
+  if (text.length === 0) return [];
+  if (cfg.sourcePath) {
+    if (GLOBAL_PATHS2.some((re) => re.test(cfg.sourcePath))) return [];
+    if (isAllowedPath2(cfg.sourcePath, cfg.allowlist)) return [];
+  }
+  const lower = text.toLowerCase();
+  const starts = lineStarts2(text);
+  const pragmaLines = cfg.pragmas === false ? /* @__PURE__ */ new Set() : pragmaAllowedLines2(text);
+  const findings = [];
+  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
+  for (const rule of COMPILED2) {
+    if (performance.now() > deadline) throw new ScanBudgetError2(cfg.deadlineMs);
+    if (isDisabledRule2(rule.id, cfg.allowlist)) continue;
+    if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
+    if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
+    rule.re.lastIndex = 0;
+    for (const match of text.matchAll(rule.re)) {
+      const { secret, start, end } = pickSecret2(match, rule.secretGroup);
+      if (secret.length === 0) continue;
+      if (alreadyRedacted2(secret)) continue;
+      if (rule.post && !rule.post(secret)) continue;
+      if (rule.postMatch && !rule.postMatch(secret, match[0])) continue;
+      if (isRuleSourceText2(secret)) continue;
+      if (looksLikePlaceholder2(secret)) continue;
+      if (GITHUB_TOKEN_RULES2.has(rule.id) && EIGHT_IN_A_ROW2.test(secret)) continue;
+      const entropy = shannonEntropy2(secret);
+      if (rule.entropy !== void 0 && entropy <= rule.entropy) continue;
+      const line = lineAt2(starts, start);
+      if (pragmaLines.has(line)) continue;
+      if (NAME_TRUSTING_RULES2.has(rule.id) && notASecretInContext2(secret, assignedName2(text, starts[line], start))) continue;
+      const fullMatch = match[0];
+      let allowed = false;
+      for (const a of rule.allowlists) {
+        const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText2(text, starts, line) : secret;
+        if (allowlistMatches2(a, secret, target, cfg.sourcePath)) {
+          allowed = true;
+          break;
+        }
+      }
+      if (allowed) continue;
+      if (GLOBAL_REGEXES2.length > 0 && GLOBAL_REGEXES2.some((re) => re.test(secret))) continue;
+      if (GLOBAL_STOPWORDS2.length > 0 && GLOBAL_STOPWORDS2.some((s) => secret.toLowerCase().includes(s))) continue;
+      if (isAllowedValue2(secret, cfg.allowlist)) continue;
+      findings.push({ ruleId: rule.id, match: fullMatch, secret, start, end, entropy, line });
+    }
+  }
+  return dedupe2(findings, text);
+}
+function isGloballyAllowedPath(path) {
+  return GLOBAL_PATHS2.some((re) => re.test(path));
+}
+function traceMatches(text, cfg = {}, extraRules = []) {
+  if (text.length === 0) return [];
+  if (cfg.sourcePath) {
+    if (isGloballyAllowedPath(cfg.sourcePath)) return [];
+    if (isAllowedPath2(cfg.sourcePath, cfg.allowlist)) return [];
+  }
+  const lower = text.toLowerCase();
+  const starts = lineStarts2(text);
+  const pragmaLines = cfg.pragmas === false ? /* @__PURE__ */ new Set() : pragmaAllowedLines2(text);
+  const nameTrusting = /* @__PURE__ */ new Set([...NAME_TRUSTING_RULES2, ...extraRules.filter((r) => r.nameTrusting).map((r) => r.id)]);
+  const extra = extraRules.map((r) => ({
+    id: r.id,
+    re: new RegExp(r.re.source, [...new Set(`${r.re.flags}dg`)].join("")),
+    entropy: r.entropy,
+    secretGroup: r.secretGroup,
+    keywords: r.keywords,
+    allowlists: []
+  }));
+  const out = [];
+  for (const rule of [...COMPILED2, ...extra]) {
+    if (isDisabledRule2(rule.id, cfg.allowlist)) continue;
+    if (rule.scope && cfg.sourcePath && !rule.scope.test(cfg.sourcePath)) continue;
+    if (rule.keywords.length > 0 && !rule.keywords.some((k) => lower.includes(k))) continue;
+    const postRest = POST_BESIDES_PLACEHOLDER[rule.id];
+    for (const match of text.matchAll(rule.re)) {
+      const { secret, start, end } = pickSecret2(match, rule.secretGroup);
+      if (secret.length === 0) continue;
+      const gates = /* @__PURE__ */ new Set();
+      const placeholder = looksLikePlaceholder2(secret);
+      if (alreadyRedacted2(secret)) gates.add("redacted");
+      if (rule.post) {
+        const passes = rule.post(secret);
+        if (postRest === void 0) {
+          if (!passes) gates.add("post");
+        } else {
+          const rest = postRest(secret);
+          if (passes !== (rest && !placeholder))
+            throw new Error(`traceMatches: the post gate of ${rule.id} is no longer its placeholder test and POST_BESIDES_PLACEHOLDER`);
+          if (!rest) gates.add("post");
+        }
+      }
+      if (rule.postMatch && !rule.postMatch(secret, match[0])) gates.add("post-match");
+      if (isRuleSourceText2(secret)) gates.add("rule-source");
+      if (placeholder) gates.add("placeholder");
+      if (GITHUB_TOKEN_RULES2.has(rule.id) && EIGHT_IN_A_ROW2.test(secret)) gates.add("repeated-character");
+      const entropy = shannonEntropy2(secret);
+      if (rule.entropy !== void 0 && entropy <= rule.entropy) gates.add("entropy");
+      const line = lineAt2(starts, start);
+      if (pragmaLines.has(line)) gates.add("pragma");
+      if (nameTrusting.has(rule.id) && notASecretInContext2(secret, assignedName2(text, starts[line], start))) gates.add("name-context");
+      const fullMatch = match[0];
+      const lowerSecret = secret.toLowerCase();
+      for (const a of rule.allowlists) {
+        const target = a.regexTarget === "match" ? fullMatch : a.regexTarget === "line" ? lineText2(text, starts, line) : secret;
+        if (!allowlistMatches2(a, secret, target, cfg.sourcePath)) continue;
+        if (a.stopwords.some((s) => lowerSecret.includes(s))) gates.add("rule-stopword");
+        if (a.regexes.some((re) => re.test(target)) || cfg.sourcePath !== void 0 && a.paths.some((re) => re.test(cfg.sourcePath)))
+          gates.add("rule-allowlist");
+      }
+      if (GLOBAL_REGEXES2.some((re) => re.test(secret))) gates.add("global-regex");
+      if (GLOBAL_STOPWORDS2.some((s) => lowerSecret.includes(s))) gates.add("global-stopword");
+      if (isAllowedValue2(secret, cfg.allowlist)) gates.add("user-value");
+      out.push({ ruleId: rule.id, match: fullMatch, secret, start, end, entropy, line, gates: [...gates] });
+    }
+  }
+  return out;
+}
+function dedupeFindings(findings, text) {
+  return dedupe2(findings, text);
+}
+function dedupe2(findings, text) {
+  const sorted = [...findings].sort((a, b) => a.start - b.start || b.end - a.end);
+  const kept = [];
+  for (const f of sorted) {
+    const other = kept[kept.length - 1];
+    if (other === void 0 || f.start >= other.end) {
+      kept.push(f);
+      continue;
+    }
+    const preferF = specificity2(f.ruleId) > specificity2(other.ruleId);
+    if (f.end <= other.end) {
+      const remainder = other.end - other.start - (f.end - f.start);
+      if (preferF && remainder < MIN_REMAINDER) kept[kept.length - 1] = f;
+      continue;
+    }
+    const named = preferF ? f : other;
+    const secret = text.slice(other.start, f.end);
+    kept[kept.length - 1] = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy2(secret), line: other.line };
+  }
+  return kept;
+}
+var ScanBudgetError2, PLACEHOLDER2, MIN_REMAINDER, IIN2, PLACEHOLDER_WORDS2, DESCRIBING_WORDS, NAME_TRUSTING_RULES2, alnum2, PUBLIC_NAME2, CREDENTIAL_WORD, GITHUB_TOKEN_RULES2, EIGHT_IN_A_ROW2, BUILTIN_RULES2, COMPILED2, RULE_SOURCE_BLOB2, PATH_RULES_COMPILED2, GLOBAL_PATHS2, GLOBAL_REGEXES2, GLOBAL_STOPWORDS2, POST_BESIDES_PLACEHOLDER, specificity2;
+var init_scanner2 = __esm({
+  "src/verifier/sg-cand-1/scanner.ts"() {
+    "use strict";
+    init_allowlist2();
+    init_entropy2();
+    init_luhn();
+    init_pragma();
+    init_rules_gen();
+    ScanBudgetError2 = class extends Error {
+      constructor(ms) {
+        super(`scan exceeded its ${ms}ms budget`);
+        this.name = "ScanBudgetError";
+      }
+    };
+    PLACEHOLDER2 = /SECRETGATE_[0-9a-f]{12,16}/g;
+    MIN_REMAINDER = 6;
+    IIN2 = /^(?:4\d{12}(?:\d{3})?|5[1-5]\d{14}|2(?:22[1-9]|2[3-9]\d|[3-6]\d{2}|7[01]\d|720)\d{12}|3[47]\d{13}|6(?:011|5\d{2})\d{12})$/;
+    PLACEHOLDER_WORDS2 = /* @__PURE__ */ new Set([
+      "password",
+      "passwd",
+      "pass",
+      "secret",
+      "changeme",
+      "change-me",
+      "example",
+      "examplepassword",
+      "test",
+      "testpassword",
+      "token",
+      "your_password",
+      "yourpassword",
+      "admin",
+      "root",
+      "user",
+      "username",
+      "guest",
+      "none",
+      "null",
+      "redacted",
+      "hunter2",
+      "placeholder"
+    ]);
+    DESCRIBING_WORDS = /* @__PURE__ */ new Set([
+      ...["a", "an", "the", "my", "your", "our", "this", "that", "is", "not", "no", "real", "super", "very", "top", "some", "any"],
+      ...["secret", "secrets", "token", "tokens", "key", "keys", "api", "apikey", "password", "passwd", "pass", "pwd", "passphrase"],
+      ...["credential", "credentials", "auth", "access", "private", "client", "user", "admin", "service", "account", "bearer"],
+      ...["test", "testing", "example", "sample", "demo", "dummy", "fake", "mock", "foo", "bar", "baz", "value", "string", "text"],
+      ...["here", "goes", "change", "me", "changeme", "replace", "insert", "enter", "put", "with", "placeholder", "todo", "default"]
+    ]);
+    NAME_TRUSTING_RULES2 = /* @__PURE__ */ new Set(["generic-api-key", "password-assignment"]);
+    alnum2 = (v) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+    PUBLIC_NAME2 = /(?:pub(?:lic)?[ _.-]?key|(?:gpg|pgp)[ _.-]?key|cache[ _.-]?key|fingerprint)(s?)(?![a-z])/i;
+    CREDENTIAL_WORD = /key|api|secret|token|passw|passphrase|private|credential|auth/i;
+    GITHUB_TOKEN_RULES2 = /* @__PURE__ */ new Set(["github-pat", "github-fine-grained-pat", "github-oauth", "github-app-token", "github-refresh-token"]);
+    EIGHT_IN_A_ROW2 = /(.)\1{7}/;
+    BUILTIN_RULES2 = [
+      {
+        id: "credit-card-number",
+        // The lookarounds exclude a DECIMAL context, not just an adjacent digit. On
+        // a 42k-file corpus, 231 of 250 card findings were SVG path/ellipse
+        // coordinates and the rest geo fixtures: a long fraction satisfies Luhn
+        // roughly one time in ten, and vector art emits thousands of them. A PAN is
+        // never written immediately after a decimal point, nor immediately before
+        // one followed by digits.
+        re: /(?<![\d.-])(\d(?:[ -]?\d){12,18})(?![\d-])(?!\.\d)/dg,
+        keywords: [],
+        allowlists: [],
+        post: (secret) => {
+          const digits = secret.replace(/[ -]/g, "");
+          return IIN2.test(digits) && luhnValid2(digits);
+        }
+      },
+      // Credentials embedded in a URL / connection string: scheme://[user]:PASSWORD@host
+      // (postgres, mysql, mongodb+srv, redis, amqp, https basic-auth, …). gitleaks
+      // ships no generic rule for this and it is an extremely common leak. The
+      // captured group is the PASSWORD; a placeholder-ish value is skipped.
+      {
+        id: "url-credentials",
+        // The scheme is bounded and anchored on a non-scheme character: `\b` fired
+        // after every `.`/`-`, making `x://a.a.a.…` quadratic (6 s on 160 KB), and
+        // the scan deadline is only checked between rules.
+        re: /(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:/@]{0,256}:([^\s:/@]{3,256})@[^\s]+/dgi,
+        keywords: ["://"],
+        allowlists: [],
+        post: (secret) => !looksLikePlaceholder2(secret),
+        // The username and the scheme are only knowable from the whole match, so
+        // this gate can't live in `post`. 44 of 196 URL-credential findings on the
+        // corpus repeated one or the other — the canonical docker-compose and
+        // tutorial string, where the password IS `postgres`, `root` or `mongodb`.
+        // EQUALITY, never containment: a password that merely BEGINS with the
+        // username still fires. (Spelling that counter-example out as a real URL
+        // here would trip the repo's own self-scan, which reads this comment.)
+        postMatch: (secret, match) => {
+          const m = /^([a-z][a-z0-9+.-]*):\/\/([^\s:/@]*):/i.exec(match);
+          if (!m) return true;
+          const low = secret.toLowerCase();
+          const scheme = m[1].toLowerCase().split("+")[0];
+          return low !== m[2].toLowerCase() && low !== scheme;
+        }
+      },
+      // QUOTED password / secret assignment with a BROADER value charset than
+      // gitleaks' generic-api-key (which stops at `[\w.=-]`, missing `$!@#…`).
+      // Quoted-only on purpose: an unquoted value can't be told apart from ordinary
+      // code (`secret === undefined`, `apiKey = getKey()`), which floods false
+      // positives — quoted values after a secret keyword are almost always literals.
+      // Entropy-gated and placeholder-filtered.
+      {
+        id: "password-assignment",
+        re: /(?:password|passwd|pwd|secret|access[_-]?key|api[_-]?key|auth[_-]?token)["']?\s*(?:[:=]|:=|=>)\s*(?:"([^"\n]{6,200})"|'([^'\n]{6,200})'|`([^`\n]{6,200})`)/dgi,
+        keywords: ["password", "passwd", "pwd", "secret", "key", "token"],
+        entropy: 3,
+        allowlists: [],
+        // Whitespace disqualifies the value. gitleaks' generic-api-key stops at
+        // `[\w.=-]`, so upstream never matches a spaced value at all; this rule
+        // widened the charset to catch punctuation-heavy passwords, and that
+        // widening is exactly what let prose in. 155 of 649 findings on the corpus
+        // held a space, and every sampled one was a UI label or a sentence
+        // (`"password": "Client Secret"` in Airflow's connection-form metadata).
+        // The cost is a spaced passphrase, which this rule now leaves to a real
+        // password manager — the same trade-off the README already states.
+        post: (secret) => !/\s/.test(secret) && !looksLikePlaceholder2(secret) && !looksLikeFilesystemPath2(secret) && !alreadyRedacted2(secret)
+      },
+      // Credentials a coding agent's .env commonly holds and gitleaks ships no rule
+      // for (fed one by one to both engines, gitleaks 8.30 missed all four). The
+      // vendor prefix carries the confidence, so no keyword context is required;
+      // the length ranges absorb a format revision, the entropy gate a dummy.
+      {
+        id: "groq-api-key",
+        re: /(?<![A-Za-z0-9_])(gsk_[A-Za-z0-9]{48,60})(?![A-Za-z0-9])/dg,
+        keywords: ["gsk_"],
+        entropy: 3,
+        allowlists: []
+      },
+      {
+        id: "replicate-api-token",
+        re: /(?<![A-Za-z0-9_])(r8_[A-Za-z0-9]{35,40})(?![A-Za-z0-9])/dg,
+        keywords: ["r8_"],
+        entropy: 3,
+        allowlists: []
+      },
+      {
+        id: "xai-api-key",
+        re: /(?<![A-Za-z0-9_-])(xai-[A-Za-z0-9]{70,100})(?![A-Za-z0-9])/dg,
+        keywords: ["xai-"],
+        entropy: 3,
+        allowlists: []
+      },
+      // Anyone holding the URL can post as the webhook; the token is its last part.
+      {
+        id: "discord-webhook-url",
+        re: /https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api\/(?:v\d{1,2}\/)?webhooks\/\d{17,20}\/([\w-]{60,80})(?![\w-])/dgi,
+        keywords: ["discord"],
+        entropy: 3,
+        allowlists: []
+      }
+    ];
+    COMPILED2 = [
+      ...RULES2.map((r) => ({
+        id: r.id,
+        re: new RegExp(r.regex.source, r.regex.flags.includes("g") ? r.regex.flags + "d" : r.regex.flags + "dg"),
+        entropy: r.entropy,
+        secretGroup: r.secretGroup,
+        keywords: r.keywords,
+        allowlists: (r.allowlists ?? []).map(compileAllowlist2),
+        scope: r.scopePath ? new RegExp(r.scopePath.source, r.scopePath.flags) : void 0
+      })),
+      ...BUILTIN_RULES2
+    ];
+    PATH_RULES_COMPILED2 = PATH_RULES2.map((r) => ({ id: r.id, re: new RegExp(r.path.source, r.path.flags.replaceAll(/[gy]/g, "")) }));
+    GLOBAL_PATHS2 = GLOBAL_ALLOWLIST2.paths.map((p) => new RegExp(p));
+    GLOBAL_REGEXES2 = GLOBAL_ALLOWLIST2.regexes.map((r) => new RegExp(r.source, r.flags));
+    GLOBAL_STOPWORDS2 = GLOBAL_ALLOWLIST2.stopwords;
+    POST_BESIDES_PLACEHOLDER = {
+      "url-credentials": () => true,
+      "password-assignment": (secret) => !/\s/.test(secret) && !looksLikeFilesystemPath2(secret) && !alreadyRedacted2(secret)
+    };
+    specificity2 = (ruleId) => ruleId === "generic-api-key" ? 0 : ruleId === "password-assignment" ? 1 : 2;
+  }
+});
+
+// src/verifier/generator.ts
+import { posix } from "path";
+function assignedName3(text, valueStart) {
+  const lineStart = text.lastIndexOf("\n", valueStart - 1) + 1;
+  const before = text.slice(Math.max(lineStart, valueStart - 200), valueStart);
+  const operator = /[\s"'`]*(?:=>|:=|\?=|\|\||[=:>,])[\s"'`=]*(?:(?:bearer|basic|token)[ \t]+)?$/i.exec(before);
+  if (!operator) return void 0;
+  const left = before.slice(0, operator.index);
+  const url = /(?:([\w.$-]+)["'`]?[ \t]*(?:=>|:=|\?=|=|:)[ \t]*["'`]?)?[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/@]*$/.exec(left);
+  if (url) return url[1];
+  const name = /[\w.$-]+$/.exec(left);
+  return name ? name[0] : void 0;
+}
+function lineStartsOf(text) {
+  const starts = [0];
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) starts.push(i + 1);
+  return starts;
+}
+function lineIndexAt(starts, offset) {
+  let lo = 0;
+  let hi = starts.length - 1;
+  while (lo < hi) {
+    const mid = lo + hi + 1 >> 1;
+    if (starts[mid] <= offset) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+function codePoints(text, from, to) {
+  let n = to - from;
+  for (let i = from; i < to - 1; i++) {
+    const c = text.charCodeAt(i);
+    if (c >= 55296 && c <= 56319) {
+      const d = text.charCodeAt(i + 1);
+      if (d >= 56320 && d <= 57343) {
+        n--;
+        i++;
+      }
+    }
+  }
+  return n;
+}
+function deadlineAllowlist(deadline) {
+  const rules = {
+    includes: () => {
+      if (performance.now() > deadline) throw new ScanBudgetError2(0);
+      return false;
+    }
+  };
+  return { rules };
+}
+function candidateRecords(text, opts = {}) {
+  const maxLine = opts.maxLine ?? 1e3;
+  const cfg = opts.sourcePath ? { sourcePath: opts.sourcePath } : {};
+  const traceCfg = opts.deadline !== void 0 ? { ...cfg, allowlist: deadlineAllowlist(opts.deadline) } : cfg;
+  const starts = lineStartsOf(text);
+  const lineEnd = (i) => {
+    const end = i + 1 < starts.length ? starts[i + 1] - 1 : text.length;
+    return end > starts[i] && text[end - 1] === "\r" ? end - 1 : end;
+  };
+  const live = [];
+  for (const m of traceMatches(text, traceCfg, EXTRA_RULES)) {
+    const gate = m.gates.find((g) => KEPT_GATES.has(g));
+    if (gate === void 0) live.push(m);
+  }
+  const own = dedupeFindings(
+    live.filter((m) => !EXTRA_IDS.has(m.ruleId)),
+    text
+  );
+  const extra = EXTRA_RULES.flatMap((rule) => live.filter((m) => m.ruleId === rule.id)).map(
+    (m) => m.ruleId === GENERIC_KEYWORD.id ? { ...m, name: /^[\w.$-]+/.exec(m.match)?.[0] } : m
+  );
+  const kept = dedupeFindings(
+    [...own.map((m) => ({ ...m, rule: m.ruleId, ruleId: TOP_RANK_ID })), ...extra.map((m) => ({ ...m, rule: m.ruleId, ruleId: LOWEST_RANK_ID }))],
+    text
+  ).sort((a, b) => a.start - b.start);
+  const reported = opts.reported === false ? void 0 : scan2(text, cfg);
+  const show = (from, to) => text.slice(from, to);
+  const cut = (i) => i < 0 || i >= starts.length ? null : show(starts[i], Math.min(lineEnd(i), starts[i] + maxLine));
+  const place = (m) => {
+    const line = lineIndexAt(starts, m.start);
+    const endLine = lineIndexAt(starts, Math.max(m.start, m.end - 1));
+    return { line, endLine, start: m.start - starts[line], end: m.end - starts[endLine] };
+  };
+  return kept.map((m) => {
+    const at = place(m);
+    const filters = { entropy: false, placeholder: false, allowlist: false, stopword: false, context: false, pragma: false };
+    for (const g of m.gates) {
+      const flag = FLAG_OF_GATE[g];
+      if (flag) filters[flag] = true;
+    }
+    const lineLength = lineEnd(at.line) - starts[at.line];
+    const inLine = Math.min(m.end - m.start, lineLength - at.start);
+    const lineFrom = lineLength <= maxLine ? 0 : Math.max(0, Math.min(at.start - Math.floor((maxLine - Math.min(inLine, maxLine)) / 2), lineLength - maxLine));
+    const from = starts[at.line] + lineFrom;
+    const name = m.name ?? assignedName3(text, m.start);
+    const record = {
+      generator: GENERATOR,
+      revision: REVISION,
+      file: opts.sourcePath ?? null,
+      ext: opts.sourcePath ? posix.extname(opts.sourcePath).toLowerCase() : "",
+      rule: m.rule,
+      line: at.line + 1,
+      start: at.start,
+      end: at.end,
+      cpStart: codePoints(text, starts[at.line], m.start),
+      cpEnd: codePoints(text, starts[at.endLine], m.end),
+      endLine: at.endLine + 1,
+      offset: m.start,
+      length: m.end - m.start,
+      value: show(m.start, m.end),
+      name: name === void 0 || name === null ? null : name,
+      lineText: show(from, Math.min(lineEnd(at.line), from + maxLine)),
+      lineFrom,
+      prevLine: cut(at.line - 1),
+      nextLine: cut(at.endLine + 1),
+      entropy: Number(m.entropy.toFixed(4)),
+      filters,
+      ...reported !== void 0 ? { reported: reported.some((f) => overlaps(f, m)) } : {},
+      masked: false
+    };
+    return record;
+  });
+}
+function genericKeywordCost(text) {
+  const lower = text.toLowerCase();
+  const n = lower.length;
+  const runEnd = new Int32Array(n + 1);
+  runEnd[n] = n;
+  for (let i = n - 1; i >= 0; i--) {
+    const c = lower.charCodeAt(i);
+    const name = c >= 97 && c <= 122 || c >= 48 && c <= 57 || c === 95 || c === 46 || c === 36 || c === 45 || c >= 65 && c <= 90;
+    runEnd[i] = name ? i + 1 < n && runEnd[i + 1] > i + 1 ? runEnd[i + 1] : i + 1 : i;
+  }
+  let cost = n;
+  for (const k of KEYWORDS2) {
+    for (let at = lower.indexOf(k); at !== -1; at = lower.indexOf(k, at + 1)) cost += runEnd[at] - at + PER_KEYWORD_STEPS;
+  }
+  return cost;
+}
+var GENERATOR, REVISION, KEYWORDS2, NAME_CHAR, QUOTES, SEPARATOR, SCHEME_WORDS, SCHEME, VALUE, GENERIC_KEYWORD, AUTH_VALUE_CHAR, AUTH_SCHEME, EXTRA_RULES, EXTRA_IDS, KEPT_GATES, FLAG_OF_GATE, LOWEST_RANK_ID, TOP_RANK_ID, overlaps, PER_KEYWORD_STEPS;
+var init_generator = __esm({
+  "src/verifier/generator.ts"() {
+    "use strict";
+    init_scanner2();
+    GENERATOR = "sg-cand-1";
+    REVISION = 1;
+    KEYWORDS2 = ["password", "passwd", "pwd", "pass", "secret", "token", "key", "api", "auth", "credential", "cred", "nonce", "salt"];
+    NAME_CHAR = String.raw`[\w.$-]`;
+    QUOTES = ['"', "'", "`"];
+    SEPARATOR = "(?::=|=>|==|!=|:|=)";
+    SCHEME_WORDS = "(?:bearer|basic|token|digest|negotiate|apikey) +";
+    SCHEME = `(?:${SCHEME_WORDS}|(?!${SCHEME_WORDS}))`;
+    VALUE = [
+      ...QUOTES.map((q) => `${q}${SCHEME}([^${q}\\r\\n]{4,256})${q}`),
+      ...QUOTES.map((q) => `\\\\${q}${SCHEME}([^${q}\\r\\n]{4,256})\\\\${q}`),
+      String.raw`(?!\\?["'\x60])${SCHEME}(?!\\?["'\x60])([^\s;,]{4,256})(?![^\s;,])`
+    ].join("|");
+    GENERIC_KEYWORD = Object.freeze({
+      id: "generic-keyword",
+      keywords: KEYWORDS2,
+      // Judged like the engine's two rules that trust a name, for the `context` flag.
+      nameTrusting: true,
+      re: new RegExp(
+        [
+          // biome-ignore lint/complexity/noUselessStringRaw: as the frozen generator writes it
+          String.raw`(?<!${NAME_CHAR})${NAME_CHAR}*?(?:${KEYWORDS2.join("|")})${NAME_CHAR}*`,
+          String.raw`(?:\\?["'\x60])?[\])]?`,
+          `[ \\t]*${SEPARATOR}[ \\t]*`,
+          String.raw`(?:\[|(?!\[))`,
+          `(?:${VALUE})`
+        ].join(""),
+        "i"
+      )
+    });
+    AUTH_VALUE_CHAR = "[A-Za-z0-9._~+/=-]";
+    AUTH_SCHEME = Object.freeze({
+      id: "auth-scheme",
+      keywords: ["bearer", "basic"],
+      re: new RegExp(`\\b(?:bearer|basic) +(${AUTH_VALUE_CHAR}{16,512})(?!${AUTH_VALUE_CHAR})`, "i")
+    });
+    EXTRA_RULES = [GENERIC_KEYWORD, AUTH_SCHEME];
+    EXTRA_IDS = new Set(EXTRA_RULES.map((r) => r.id));
+    KEPT_GATES = /* @__PURE__ */ new Set(["redacted", "post", "post-match", "rule-source", "user-value"]);
+    FLAG_OF_GATE = {
+      entropy: "entropy",
+      placeholder: "placeholder",
+      "rule-allowlist": "allowlist",
+      "global-regex": "allowlist",
+      "rule-stopword": "stopword",
+      "global-stopword": "stopword",
+      "name-context": "context",
+      "repeated-character": "context",
+      pragma: "pragma"
+    };
+    LOWEST_RANK_ID = "generic-api-key";
+    TOP_RANK_ID = "sg-cand-1:engine-rule";
+    overlaps = (a, b) => a.start < b.end && b.start < a.end;
+    PER_KEYWORD_STEPS = 1500;
+  }
+});
+
+// src/verifier/host.ts
+function webAssembly() {
+  const api = globalThis.WebAssembly;
+  if (api === void 0) throw new Error("this runtime has no WebAssembly");
+  return api;
+}
+function roleOf(name) {
+  if (name === "__wbindgen_init_externref_table") return "initTable";
+  for (const [stem, role] of STEMS) {
+    if (name.startsWith(stem) && /^[0-9a-f]{8,}$/.test(name.slice(stem.length))) return role;
+  }
+  return null;
+}
+function checkImports(module) {
+  const names = {};
+  for (const i of webAssembly().Module.imports(module)) {
+    const role = i.module === IMPORT_MODULE && i.kind === "function" ? roleOf(i.name) : null;
+    if (role === null || names[role]) throw new Error(`the WebAssembly module asks for an unexpected import: ${i.module} ${i.name}`);
+    names[role] = i.name;
+  }
+  if (Object.keys(names).length !== 5) throw new Error("the WebAssembly module is not a sky-web build");
+  return names;
+}
+function verifierFromModule(module, modelBytes, wordsBytes) {
+  const names = checkImports(module);
+  let wasm;
+  const decoder = new TextDecoder("utf-8", { ignoreBOM: true, fatal: true });
+  const encoder = new TextEncoder();
+  const bytes = () => new Uint8Array(wasm.memory.buffer);
+  const readString = (ptr, len) => decoder.decode(bytes().subarray(ptr >>> 0, (ptr >>> 0) + len));
+  const pass = (data) => {
+    const ptr = wasm.__wbindgen_malloc(data.length, 1) >>> 0;
+    bytes().set(data, ptr);
+    return [ptr, data.length];
+  };
+  const passString = (s) => pass(encoder.encode(s));
+  const takeRef = (idx) => {
+    const value = wasm.__wbindgen_externrefs.get(idx);
+    wasm.__externref_table_dealloc(idx);
+    return value;
+  };
+  const asError = (v) => v instanceof Error ? v : new Error(String(v));
+  const takeString = (ptr, len) => {
+    try {
+      return readString(ptr, len);
+    } finally {
+      wasm.__wbindgen_free(ptr, len, 1);
+    }
+  };
+  const imports = {
+    [IMPORT_MODULE]: {
+      [names.error]: (ptr, len) => new Error(readString(ptr, len)),
+      [names.stringGet]: (retptr, obj) => {
+        const [ptr, len] = typeof obj === "string" ? passString(obj) : [0, 0];
+        const view = new DataView(wasm.memory.buffer);
+        view.setInt32(retptr + 4, len, true);
+        view.setInt32(retptr, ptr, true);
+      },
+      [names.throw]: (ptr, len) => {
+        throw new Error(readString(ptr, len));
+      },
+      [names.now]: () => performance.now(),
+      [names.initTable]: () => {
+        const table = wasm.__wbindgen_externrefs;
+        const offset = table.grow(4);
+        table.set(0, void 0);
+        table.set(offset, void 0);
+        table.set(offset + 1, null);
+        table.set(offset + 2, true);
+        table.set(offset + 3, false);
+      }
+    }
+  };
+  wasm = new (webAssembly()).Instance(module, imports).exports;
+  wasm.__wbindgen_start();
+  const created = wasm.secretverifier_new(...pass(modelBytes), ...pass(wordsBytes));
+  if (created[2]) throw asError(takeRef(created[1]));
+  let self = created[0];
+  const live = () => {
+    if (!self) throw new Error("the verifier was freed");
+    return self;
+  };
+  const asJson = (x) => typeof x === "string" ? x : JSON.stringify(x);
+  const call = (fn, arg) => {
+    const ret = fn(live(), ...passString(asJson(arg)));
+    if (ret[3]) throw asError(takeRef(ret[2]));
+    return takeString(ret[0], ret[1]);
+  };
+  return {
+    judge: (candidate) => JSON.parse(call(wasm.secretverifier_judge, candidate)),
+    state: (candidate) => call(wasm.secretverifier_state, candidate),
+    thresholds: () => JSON.parse(takeString(...wasm.secretverifier_thresholds(live()))),
+    info: () => JSON.parse(takeString(...wasm.secretverifier_info(live()))),
+    free: () => {
+      if (self) wasm.__wbg_secretverifier_free(self, 0);
+      self = 0;
+    }
+  };
+}
+var IMPORT_MODULE, STEMS;
+var init_host = __esm({
+  "src/verifier/host.ts"() {
+    "use strict";
+    IMPORT_MODULE = "./sky_web_bg.js";
+    STEMS = [
+      ["__wbg_Error_", "error"],
+      ["__wbg___wbindgen_string_get_", "stringGet"],
+      ["__wbg___wbindgen_throw_", "throw"],
+      ["__wbg_now_", "now"]
+    ];
+  }
+});
+
+// src/verifier/verifier.ts
+var verifier_exports = {};
+__export(verifier_exports, {
+  GENERIC_KEYWORD_COST_LIMIT: () => GENERIC_KEYWORD_COST_LIMIT,
+  VERIFIER_BUDGET_MS: () => VERIFIER_BUDGET_MS,
+  VERIFIER_MAX_CANDIDATES: () => VERIFIER_MAX_CANDIDATES,
+  VERIFIER_MAX_TEXT: () => VERIFIER_MAX_TEXT,
+  VERIFIER_RULE_ID: () => VERIFIER_RULE_ID,
+  VerifierAssetError: () => VerifierAssetError,
+  VerifierSession: () => VerifierSession,
+  compileEngine: () => compileEngine,
+  debugFromEnv: () => debugFromEnv,
+  engineCandidate: () => engineCandidate,
+  loadEngine: () => loadEngine,
+  repositoryPath: () => repositoryPath,
+  setEngineLoader: () => setEngineLoader
+});
+import { writeSync as writeSync2 } from "fs";
+import { isAbsolute as isAbsolute4, relative as relative4, resolve as resolve6, sep as sep3 } from "path";
+function asset(file, dir) {
+  const read = readAsset(file, dir);
+  if (!("bytes" in read)) throw new VerifierAssetError(file, read.state);
+  return read.bytes;
+}
+function compileEngine(dir, force) {
+  if (force !== "simd128") {
+    const relaxed = asset("sky_web_relaxed_bg.wasm", dir);
+    try {
+      return { build: "relaxed-simd", module: compileModule(relaxed) };
+    } catch (err) {
+      if (force === "relaxed-simd") throw err;
+    }
+  }
+  return { build: "simd128", module: compileModule(asset("sky_web_bg.wasm", dir)) };
+}
+function compileModule(bytes) {
+  const api = webAssembly();
+  return new api.Module(bytes);
+}
+function loadEngine(preset, opts = {}) {
+  const model = asset("s6-secrets-verify-pico.gguf", opts.dir);
+  const words = asset("dictionary.txt", opts.dir);
+  const { build, module } = compileEngine(opts.dir, opts.force);
+  const v = verifierFromModule(module, model, words);
+  const tau = v.thresholds()[`tau_${preset}`];
+  if (typeof tau !== "number" || !Number.isFinite(tau) || tau <= 0 || tau > 1) {
+    v.free();
+    throw new Error(`the model file has no usable tau_${preset}`);
+  }
+  return {
+    build,
+    tau,
+    judge: (c) => {
+      const p = v.judge(c).p_real;
+      if (typeof p !== "number" || !Number.isFinite(p)) throw new Error("the engine answered no probability");
+      return p;
+    },
+    state: (c) => v.state(c)
+  };
+}
+function setEngineLoader(loader) {
+  defaultLoader = loader ?? ((preset) => loadEngine(preset));
+}
+function repositoryPath(file, cwd) {
+  if (typeof file !== "string" || file.length === 0) return void 0;
+  const abs = resolve6(cwd, file);
+  const root = repositoryRoot(cwd) ?? resolve6(cwd);
+  const rel = relative4(root, abs);
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep3}`) || isAbsolute4(rel)) return void 0;
+  return rel.split(sep3).join("/");
+}
+function engineCandidate(record, path) {
+  return path === void 0 ? { ...record } : { ...record, file: path };
+}
+function debugFromEnv() {
+  const d = process.env.SECRETGATE_DEBUG ?? "";
+  if (!/(?:^|,)(?:verifier|1|all)(?:,|$)/.test(d)) return void 0;
+  return (line) => {
+    try {
+      writeSync2(2, `secretgate verifier: ${line}
+`);
+    } catch {
+    }
+  };
+}
+var VERIFIER_RULE_ID, VERIFIER_BUDGET_MS, VERIFIER_MAX_CANDIDATES, VERIFIER_MAX_TEXT, GENERIC_KEYWORD_COST_LIMIT, VerifierAssetError, defaultLoader, VerifierSession;
+var init_verifier = __esm({
+  "src/verifier/verifier.ts"() {
+    "use strict";
+    init_allowlist();
+    init_entropy();
+    init_paths();
+    init_assets();
+    init_generator();
+    init_host();
+    VERIFIER_RULE_ID = "verifier:s6-secrets";
+    VERIFIER_BUDGET_MS = 750;
+    VERIFIER_MAX_CANDIDATES = 200;
+    VERIFIER_MAX_TEXT = 1024 * 1024;
+    GENERIC_KEYWORD_COST_LIMIT = 5e7;
+    VerifierAssetError = class extends Error {
+      constructor(file, state) {
+        super(`${file} is ${state}`);
+        this.name = "VerifierAssetError";
+      }
+    };
+    defaultLoader = (preset) => loadEngine(preset);
+    VerifierSession = class {
+      stats = {
+        strings: 0,
+        skippedStrings: {},
+        candidates: 0,
+        covered: 0,
+        allowlisted: 0,
+        judged: 0,
+        accepted: 0,
+        unjudged: 0,
+        ms: 0
+      };
+      accepted = [];
+      engine;
+      stopped;
+      budgetMs;
+      maxCandidates;
+      loader;
+      started = performance.now();
+      opts;
+      constructor(opts) {
+        this.opts = opts;
+        this.budgetMs = opts.budgetMs ?? VERIFIER_BUDGET_MS;
+        this.maxCandidates = opts.maxCandidates ?? VERIFIER_MAX_CANDIDATES;
+        this.loader = opts.loader ?? defaultLoader;
+        if (!opts.config.enabled) this.stopped = "off";
+        else if (isDisabledRule(VERIFIER_RULE_ID, opts.allowlist)) this.stopped = `rule ${VERIFIER_RULE_ID} is allowlisted`;
+      }
+      /** Whether the verifier still runs in this event. */
+      get active() {
+        return this.stopped === void 0;
+      }
+      /** Time spent in the verifier so far, in ms: the rules' deadline moves by it. */
+      get spentMs() {
+        return this.stats.ms;
+      }
+      stop(why) {
+        this.stopped ??= why;
+        this.stats.stopped ??= why;
+      }
+      skipString(why) {
+        this.stats.skippedStrings[why] = (this.stats.skippedStrings[why] ?? 0) + 1;
+      }
+      /**
+       * The candidates of `text` the verifier accepts, as findings of
+       * VERIFIER_RULE_ID, sorted by position. `covered` are the rule findings of
+       * the same text: a candidate one of them overlaps is left to the rule.
+       * Never throws: on any failure it returns what it accepted before it.
+       */
+      accept(text, covered) {
+        if (this.stopped !== void 0 || text.length === 0) return [];
+        const t0 = performance.now();
+        const out = [];
+        try {
+          this.stats.strings++;
+          const end = this.started + this.budgetMs;
+          if (performance.now() >= end) {
+            this.stop("budget");
+            return out;
+          }
+          if (text.length > VERIFIER_MAX_TEXT) {
+            this.skipString("too long");
+            return out;
+          }
+          if (genericKeywordCost(text) > GENERIC_KEYWORD_COST_LIMIT) {
+            this.skipString("generic-keyword bound");
+            return out;
+          }
+          let records;
+          try {
+            records = candidateRecords(text, { reported: false, deadline: end });
+          } catch {
+            this.skipString("generator deadline");
+            this.stop("budget");
+            return out;
+          }
+          this.stats.candidates += records.length;
+          const todo = [];
+          for (const r of records) {
+            const span = { start: r.offset, end: r.offset + r.length };
+            if (covered.some((f) => f.start < span.end && span.start < f.end)) this.stats.covered++;
+            else if (isAllowedValue(r.value, this.opts.allowlist)) this.stats.allowlisted++;
+            else todo.push(r);
+          }
+          if (todo.length === 0) return out;
+          if (this.engine === void 0) {
+            const l0 = performance.now();
+            try {
+              this.engine = this.loader(this.opts.config.threshold);
+            } catch (err) {
+              this.stop(err instanceof VerifierAssetError ? `assets: ${err.message}` : "engine failed to load");
+              this.stats.unjudged += todo.length;
+              return out;
+            }
+            this.stats.build = this.engine.build;
+            this.stats.loadMs = performance.now() - l0;
+          }
+          for (let i = 0; i < todo.length; i++) {
+            if (this.stats.judged >= this.maxCandidates || performance.now() >= end) {
+              this.stop(this.stats.judged >= this.maxCandidates ? "candidate cap" : "budget");
+              this.stats.unjudged += todo.length - i;
+              break;
+            }
+            const r = todo[i];
+            let p;
+            try {
+              p = this.engine.judge(engineCandidate(r, this.opts.path));
+            } catch {
+              this.stop("engine error");
+              this.stats.unjudged += todo.length - i;
+              break;
+            }
+            this.stats.judged++;
+            if (!(p >= this.engine.tau)) continue;
+            const finding = {
+              ruleId: VERIFIER_RULE_ID,
+              match: r.value,
+              secret: r.value,
+              start: r.offset,
+              end: r.offset + r.length,
+              entropy: shannonEntropy(r.value),
+              line: r.line - 1
+            };
+            this.stats.accepted++;
+            this.accepted.push({ finding, rule: r.rule, p });
+            out.push(finding);
+          }
+          return out;
+        } catch {
+          this.stop("internal error");
+          return out;
+        } finally {
+          this.stats.ms += performance.now() - t0;
+        }
+      }
+      /** One line for debug output: counts and times, never a value. */
+      summary() {
+        const s = this.stats;
+        const parts = [
+          `${s.strings} string(s)`,
+          `${s.candidates} candidate(s)`,
+          `${s.covered} left to a rule`,
+          `${s.allowlisted} allowlisted`,
+          `${s.judged} judged`,
+          `${s.accepted} accepted`
+        ];
+        if (s.unjudged > 0) parts.push(`${s.unjudged} NOT judged (${s.stopped})`);
+        else if (s.stopped !== void 0) parts.push(`stopped: ${s.stopped}`);
+        const skipped = Object.entries(s.skippedStrings);
+        if (skipped.length > 0) parts.push(`strings skipped: ${skipped.map(([k, n]) => `${n} ${k}`).join(", ")}`);
+        if (s.build !== void 0) parts.push(`engine ${s.build}, loaded in ${s.loadMs.toFixed(1)} ms`);
+        if (this.opts.path !== void 0) parts.push("with the file's path");
+        parts.push(`verifier total ${s.ms.toFixed(1)} ms`);
+        for (const a of this.accepted) parts.push(`accepted line ${a.finding.line + 1} (${a.rule}, p ${a.p.toFixed(3)})`);
+        return parts.join("; ");
+      }
+      /** Writes the summary to the debug sink, if there is one and the verifier was on. */
+      report() {
+        if (this.opts.debug === void 0 || this.stats.stopped === "off" || this.stopped === "off") return;
+        this.opts.debug(this.summary());
+      }
+    };
+  }
+});
+
+// src/verifier/cli.ts
+var cli_exports = {};
+__export(cli_exports, {
+  VERIFIER_NOTICE: () => VERIFIER_NOTICE,
+  cmdVerifier: () => cmdVerifier,
+  statusLine: () => statusLine,
+  writeVerifierConfig: () => writeVerifierConfig
+});
+import { mkdirSync as mkdirSync10, readFileSync as readFileSync12 } from "fs";
+import { join as join14 } from "path";
+function statusLine(cfg) {
+  if (cfg.invalid) return `verifier  !! the "verifier" entry of config.json is invalid (${cfg.invalid}) \u2014 the verifier is OFF
+`;
+  if (!cfg.enabled) return "verifier  off (experimental, opt-in: `secretgate verifier` for details)\n";
+  const states = assetStates();
+  const bad = states.filter((s) => s.state !== "verified");
+  if (bad.length > 0)
+    return `verifier  ON (threshold ${cfg.threshold}) but SKIPPED: ${bad.map((s) => `${s.pin.file} ${s.state}`).join(", ")} \u2014 run \`secretgate verifier fetch\`; the rules run as without it
+`;
+  const load = tryLoad(cfg.threshold);
+  if ("error" in load)
+    return `verifier  ON (threshold ${cfg.threshold}) but SKIPPED: the engine does not load here (${load.error}); the rules run as without it
+`;
+  return `verifier  ON (experimental), threshold ${cfg.threshold} (tau ${load.tau.toFixed(4)}), assets verified, engine ${load.build} build \u2014 redacts what it accepts as ${VERIFIER_RULE_ID}
+`;
+}
+function tryLoad(preset) {
+  try {
+    const t0 = performance.now();
+    const e = loadEngine(preset);
+    return { build: e.build, tau: e.tau, ms: performance.now() - t0 };
+  } catch (err) {
+    return { error: err instanceof Error ? err.message.split("\n")[0] : String(err) };
+  }
+}
+function configPath() {
+  return join14(defaultVaultHome(), "config.json");
+}
+function writeVerifierConfig(value) {
+  const path = configPath();
+  mkdirSync10(defaultVaultHome(), { recursive: true, mode: 448 });
+  let text;
+  try {
+    text = readFileSync12(path, "utf8");
+  } catch (err) {
+    if (err.code !== "ENOENT") throw err;
+    text = "";
+  }
+  if (text.trim() === "") text = "{}\n";
+  const errors = [];
+  const current = parse2(text, errors, { allowTrailingComma: true, disallowComments: false });
+  if (errors.length > 0) {
+    const line = text.slice(0, errors[0].offset).split("\n").length;
+    throw new Error(`${path} is not valid JSON (${printParseErrorCode(errors[0].error)} at line ${line}) \u2014 fix it by hand, nothing was written`);
+  }
+  if (current === null || typeof current !== "object" || Array.isArray(current)) throw new Error(`${path} must be a JSON object \u2014 nothing was written`);
+  text = applyEdits(text, modify(text, ["verifier"], value, { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" } }));
+  rewriteFileAtomic(path, text, 384);
+}
+async function cmdVerifier(args, io) {
+  const [sub = "status", ...rest] = args;
+  if (sub === "status" && rest.length === 0) return status(io);
+  if (sub === "fetch" && rest.length === 0) {
+    io.stdout(`secretgate: downloading the ${MODEL_NAME} data files, pinned at commit ${MODEL_COMMIT}, from ${ASSET_BASE_URL}
+`);
+    io.stdout(`secretgate: into ${assetDir()}
+`);
+    try {
+      await fetchAssets((line) => io.stdout(`  ${line}
+`));
+    } catch (err) {
+      io.stderr(`verifier fetch: ${err instanceof Error ? err.message : String(err)}
+`);
+      return 1;
+    }
+    io.stdout("secretgate: every file matches its pinned sha256.\n");
+    if (!loadConfig().verifier.enabled) io.stdout("secretgate: the verifier is still off \u2014 `secretgate verifier on` switches it on.\n");
+    return 0;
+  }
+  if (sub === "on") {
+    let threshold = "f1";
+    for (let i = 0; i < rest.length; i++) {
+      const v = rest[i + 1];
+      if (rest[i] === "--threshold" && v !== void 0 && THRESHOLD_PRESETS.includes(v)) {
+        threshold = v;
+        i++;
+      } else {
+        io.stderr(`verifier on: expected --threshold f1, f05 or f2
+${USAGE}`);
+        return 2;
+      }
+    }
+    try {
+      writeVerifierConfig({ enabled: true, threshold });
+    } catch (err) {
+      io.stderr(`verifier on: ${err instanceof Error ? err.message : String(err)}
+`);
+      return 2;
+    }
+    io.stdout(`secretgate: the verifier is ON (threshold ${threshold}), in ${configPath()}.
+${VERIFIER_NOTICE}`);
+    const missing = assetStates().filter((s) => s.state !== "verified");
+    if (missing.length > 0) io.stdout("secretgate: its data files are not there yet: until `secretgate verifier fetch`, it is skipped.\n");
+    return 0;
+  }
+  if (sub === "off" && rest.length === 0) {
+    try {
+      writeVerifierConfig({ enabled: false, threshold: loadConfig().verifier.threshold });
+    } catch (err) {
+      io.stderr(`verifier off: ${err instanceof Error ? err.message : String(err)}
+`);
+      return 2;
+    }
+    io.stdout("secretgate: the verifier is off. The rules are unchanged.\n");
+    return 0;
+  }
+  io.stderr(USAGE);
+  return 2;
+}
+function status(io) {
+  const cfg = loadConfig().verifier;
+  io.stdout(VERIFIER_NOTICE);
+  io.stdout("\n");
+  io.stdout(
+    cfg.invalid ? `config    !! the "verifier" entry of ${configPath()} is invalid (${cfg.invalid}): the verifier is OFF
+` : `config    ${cfg.enabled ? `ON, threshold ${cfg.threshold}` : "off"} (${configPath()})
+`
+  );
+  io.stdout(`assets    ${assetDir()}
+`);
+  const states = assetStates();
+  for (const s of states)
+    io.stdout(`  ${s.state === "verified" ? "verified" : s.state.toUpperCase().padEnd(8)}  ${s.pin.file} (${s.pin.bytes} bytes, sha256 ${s.pin.sha256})
+`);
+  if (states.some((s) => s.state !== "verified")) {
+    io.stdout("engine    not loaded: `secretgate verifier fetch` downloads the files\n");
+  } else {
+    const load = tryLoad(cfg.threshold);
+    io.stdout(
+      "error" in load ? `engine    !! does not load here: ${load.error}
+` : `engine    the ${load.build} build loads (${load.ms.toFixed(0)} ms); tau_${cfg.threshold} ${load.tau}
+`
+    );
+  }
+  io.stdout(
+    `budget    ${VERIFIER_BUDGET_MS} ms and ${VERIFIER_MAX_CANDIDATES} candidates per hook event, the load included; past it the rest is not judged (SECRETGATE_DEBUG=verifier says so)
+`
+  );
+  io.stdout(`files     ${ASSETS.length} data files, pinned by sha256; the JavaScript that loads them is part of secretgate
+`);
+  return 0;
+}
+var RESULT_URL, USAGE, VERIFIER_NOTICE;
+var init_cli = __esm({
+  "src/verifier/cli.ts"() {
+    "use strict";
+    init_main();
+    init_config2();
+    init_fs_atomic();
+    init_vault();
+    init_assets();
+    init_config();
+    init_verifier();
+    RESULT_URL = "https://github.com/maxgfr/skycmd/blob/main/BENCH.md#s6-secrets-verify-pico-s6-secrets-v2-a-verifier-of-rule-candidates-pre-registered-gate-failed";
+    USAGE = `usage: secretgate verifier [status]           what is on, whether the assets are there and verified, which engine loads
+       secretgate verifier fetch            download the four pinned data files (the only command that downloads)
+       secretgate verifier on [--threshold f1|f05|f2]
+       secretgate verifier off
+`;
+    VERIFIER_NOTICE = `EXPERIMENTAL. The verifier is the model ${MODEL_NAME}, which FAILED its pre-registered gate: on 221 real
+test repositories (CredData) its line F1 is 0.856 against 0.733 for the best rule scanner, +0.123 where the gate
+asked for +0.15; the system "rules or verifier" failed the same gate. It is published as a result, not as a
+validated detector. Read docs/verifier.md and ${RESULT_URL}
+`;
+  }
+});
+
+// src/cli.ts
+init_config2();
+import { execFileSync } from "child_process";
+import { copyFileSync as copyFileSync5, existsSync as existsSync9, mkdirSync as mkdirSync11, mkdtempSync as mkdtempSync2, readFileSync as readFileSync13, readdirSync as readdirSync4, realpathSync as realpathSync5, rmSync as rmSync7, statSync as statSync6 } from "fs";
+import { homedir as homedir8, tmpdir as tmpdir3 } from "os";
+import { delimiter as delimiter3, dirname as dirname11, isAbsolute as isAbsolute6, join as join15, relative as relative5, resolve as resolve8 } from "path";
+import { fileURLToPath as fileURLToPath2, pathToFileURL } from "url";
 
 // src/scope.ts
+init_allowlist();
+init_paths();
+init_shell_paths();
+init_vault();
 import { homedir as homedir5, tmpdir } from "os";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute3, join as join5, relative as relative2, resolve as resolve4, sep as sep2 } from "path";
 var isOutside = (rel) => rel === ".." || rel.startsWith(`..${sep2}`) || rel.startsWith("../") || isAbsolute3(rel);
@@ -4113,6 +10010,9 @@ function describeScope(scope) {
 }
 
 // src/disable.ts
+init_fs_atomic();
+init_paths();
+init_vault();
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync4 } from "fs";
 import { join as join6 } from "path";
 var NOT_DISABLED = { disabled: false };
@@ -4266,21 +10166,9 @@ function describeDisable(state) {
   return `${where}${when}${alsoScope}`;
 }
 
-// src/engine/entropy.ts
-function shannonEntropy(s) {
-  if (s.length === 0) return 0;
-  const freq = /* @__PURE__ */ new Map();
-  for (const ch of s) {
-    freq.set(ch, (freq.get(ch) ?? 0) + 1);
-  }
-  let entropy = 0;
-  const len = s.length;
-  for (const count of freq.values()) {
-    const p = count / len;
-    entropy -= p * Math.log2(p);
-  }
-  return entropy;
-}
+// src/cli.ts
+init_allowlist();
+init_entropy();
 
 // src/engine/gitleaks-bin.ts
 import { spawn } from "child_process";
@@ -4306,7 +10194,7 @@ function scanWithGitleaks(text, opts = {}) {
   if (!bin) return Promise.resolve([]);
   const dir = mkdtempSync(join7(tmpdir2(), "secretgate-gl-"));
   const report = join7(dir, "report.json");
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve9, reject) => {
     const child = spawn(bin, ["stdin", "--no-banner", "--exit-code", String(LEAK_EXIT), "--report-format", "json", "--report-path", report], {
       stdio: ["pipe", "ignore", "pipe"],
       timeout: opts.timeoutMs ?? 1e4
@@ -4322,7 +10210,7 @@ function scanWithGitleaks(text, opts = {}) {
     child.on("close", (code) => {
       try {
         if (code === 0) {
-          resolve8([]);
+          resolve9([]);
           return;
         }
         if (code !== LEAK_EXIT) {
@@ -4330,7 +10218,7 @@ function scanWithGitleaks(text, opts = {}) {
           return;
         }
         const raw = JSON.parse(readFileSync5(report, "utf8"));
-        resolve8(
+        resolve9(
           raw.map((f) => ({
             ruleId: f.RuleID,
             secret: f.Secret,
@@ -4348,6 +10236,10 @@ function scanWithGitleaks(text, opts = {}) {
     child.stdin.end(text);
   });
 }
+
+// src/engine/scanner.ts
+init_allowlist();
+init_entropy();
 
 // src/engine/luhn.ts
 function luhnValid(input, options = {}) {
@@ -9010,6 +14902,9 @@ function dedupe(findings, text) {
   return kept;
 }
 
+// src/hooks/claude-code.ts
+init_config2();
+
 // src/prompt-directive.ts
 var SKILL_DISABLE = /^[/$]secretgate\s+(?:disable|off|pause|stop)(\s+(?:--)?scope)?\s*[.!]?$/i;
 var SKILL_ENABLE = /^[/$]secretgate\s+(?:enable|on|resume)\s*[.!]?$/i;
@@ -9044,6 +14939,7 @@ function applyPromptDirective(directive, sessionId, cwd) {
 }
 
 // src/redact.ts
+init_placeholder();
 var MAX_ROUNDS = 3;
 var RedactionUnsettledError = class extends Error {
   constructor() {
@@ -9051,10 +14947,24 @@ var RedactionUnsettledError = class extends Error {
     this.name = "RedactionUnsettledError";
   }
 };
-function redactText(text, vault, source, cfg = {}) {
-  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : void 0;
+function redactText(text, vault, source, cfg = {}, extra) {
+  let deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : void 0;
   const scanNow = (t) => scan(t, { ...cfg, pragmas: cfg.pragmas ?? false, ...deadline !== void 0 ? { deadlineMs: deadline - performance.now() } : {} });
-  const findings = scanNow(text);
+  const ruleFindings = scanNow(text);
+  let findings = ruleFindings;
+  if (extra) {
+    const t0 = performance.now();
+    let proposed = [];
+    try {
+      proposed = extra(text, ruleFindings);
+    } catch {
+    }
+    const added = proposed.filter((x) => x.end > x.start && !ruleFindings.some((f) => f.start < x.end && x.start < f.end));
+    if (deadline !== void 0) deadline += performance.now() - t0;
+    const disjoint = [];
+    for (const x of [...added].sort((a, b) => a.start - b.start)) if (disjoint.every((d) => x.start >= d.end || x.end <= d.start)) disjoint.push(x);
+    if (disjoint.length > 0) findings = [...ruleFindings, ...disjoint].sort((a, b) => a.start - b.start);
+  }
   if (findings.length === 0) return { text, findings, replaced: [] };
   const replaced = [];
   let current = text;
@@ -9100,13 +15010,19 @@ function restorePlaceholders(text, vault) {
   return { text: out, restored };
 }
 
+// src/hooks/claude-code.ts
+init_paths();
+init_vault();
+
 // src/hooks/policy.ts
+init_paths();
 import { basename as basename4, relative as relative3, resolve as resolve5 } from "path";
+init_shell_paths();
 function touchesOnly(call, file, cwd) {
   if (call.kind !== "read" && call.kind !== "write" && call.kind !== "patch") return false;
   return call.paths.length > 0 && call.paths.every((p) => canonical(resolve5(cwd, expandHome(p))) === canonical(file));
 }
-var GUARDED = /* @__PURE__ */ new Set(["disable", "allow", "uninstall", "trust", "vault clear"]);
+var GUARDED = /* @__PURE__ */ new Set(["disable", "allow", "uninstall", "trust", "vault clear", "verifier on", "verifier off", "verifier fetch"]);
 function tamperReason(call, cwd, analysis) {
   if (analysis) {
     for (const argv of analysis.commands) {
@@ -9258,14 +15174,15 @@ function isAttachmentPayload(value, declared) {
   if (typeof value !== "string" || value.length < 8 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
   return hasSignature(Buffer.from(value.slice(0, 1400), "base64"), typeof declared === "string" ? declared.toLowerCase() : "");
 }
-function eventRedactor(vault, source, allowlist) {
+function eventRedactor(vault, source, allowlist, verifier) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
   let remaining = SCAN_CAP;
+  const extra = verifier?.active ? (text, findings) => verifier.accept(text, findings) : void 0;
   return (text) => {
     remaining -= text.length;
-    const deadlineMs = deadline - performance.now();
+    const deadlineMs = deadline + (verifier?.spentMs ?? 0) - performance.now();
     if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
-    return redactText(text, vault, source, { allowlist, deadlineMs }).text;
+    return redactText(text, vault, source, { allowlist, deadlineMs }, extra).text;
   };
 }
 function resultScanner(allowlist, deadline) {
@@ -9279,6 +15196,7 @@ function resultScanner(allowlist, deadline) {
 }
 
 // src/hooks/stopped-session.ts
+init_vault();
 import { createHash as createHash3 } from "crypto";
 import { existsSync as existsSync3, mkdirSync as mkdirSync4, writeFileSync } from "fs";
 import { join as join8 } from "path";
@@ -9515,8 +15433,8 @@ async function handleClaudeCode(event, rawStdin, opts = {}) {
     const withNotice = (r) => notice && opts.notices !== false ? addSystemMessage(r, notice) : r;
     const state = disableState({ cwd: str2(parsed?.cwd), sessionId: str2(parsed?.session_id) });
     if (state.disabled) return withNotice(disabledResult(event, parsed, state, opts.notices !== false && !notice));
-    if (notice) return withNotice(handleEnabled(event, rawStdin, parsed, opts));
-    return handleEnabled(event, rawStdin, parsed, opts);
+    if (notice) return withNotice(await handleEnabled(event, rawStdin, parsed, opts));
+    return await handleEnabled(event, rawStdin, parsed, opts);
   } catch {
     return failClosed(event, parsed, opts.blockFallback);
   }
@@ -9527,7 +15445,15 @@ function addSystemMessage(r, message) {
 ${out.systemMessage}` : message;
   return { stdout: JSON.stringify(out), exit: r.exit };
 }
-function handleEnabled(event, rawStdin, parsed, opts) {
+async function verifierFor(event, cfg) {
+  if (!cfg.verifier.enabled || event !== "post-tool-use" && event !== "post-tool-batch") return void 0;
+  try {
+    return await Promise.resolve().then(() => (init_verifier(), verifier_exports));
+  } catch {
+    return void 0;
+  }
+}
+async function handleEnabled(event, rawStdin, parsed, opts) {
   if (!opts.blockFallback && isStoppedSession(parsed?.session_id)) {
     const reason = "secretgate stopped this session after an unscannable tool result. Start a fresh session; resuming may expose the old result.";
     if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
@@ -9545,9 +15471,9 @@ function handleEnabled(event, rawStdin, parsed, opts) {
     case "pre-tool-use":
       return preToolUse(input, cfg);
     case "post-tool-use":
-      return postToolUse(input, cfg);
+      return postToolUse(input, cfg, await verifierFor(event, cfg));
     case "post-tool-batch":
-      return postToolBatch(input, cfg);
+      return postToolBatch(input, cfg, await verifierFor(event, cfg));
     default:
       return { stdout: "", exit: 2 };
   }
@@ -9657,7 +15583,7 @@ function updatedOutput(value) {
     exit: 0
   };
 }
-function postToolUse(input, cfg) {
+function postToolUse(input, cfg, lib) {
   if (!("tool_response" in input)) return PASS;
   const toolName = String(input.tool_name ?? "");
   const filtered = scopeFilter(input, cfg);
@@ -9666,18 +15592,29 @@ function postToolUse(input, cfg) {
   const attachment = toolName === "Read" && (response?.type === "image" || response?.type === "pdf") ? response.file : void 0;
   const mediaType = response?.type === "pdf" ? "application/pdf" : attachment?.type;
   const skip = (key, v, parent) => isBinaryField(key, v, parent) || attachment !== void 0 && parent === attachment && key === "base64" && isAttachmentPayload(v, mediaType);
-  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), skip);
+  const verifier = lib ? new lib.VerifierSession({
+    config: cfg.verifier,
+    allowlist: cfg.allowlist,
+    path: toolName === "Read" ? lib.repositoryPath(input.tool_input?.file_path, str2(input.cwd) ?? process.cwd()) : void 0,
+    debug: lib.debugFromEnv()
+  }) : void 0;
+  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist, verifier), skip);
+  verifier?.report();
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
 }
-function postToolBatch(input, cfg) {
+function postToolBatch(input, cfg, lib) {
   const calls = Array.isArray(input.tool_calls) ? input.tool_calls : [];
   const deadline = performance.now() + SCAN_DEADLINE_MS;
   const tools = /* @__PURE__ */ new Set();
   const rules = /* @__PURE__ */ new Set();
+  const results = [];
   for (const call of calls) {
     if (call === null || typeof call !== "object" || !("tool_response" in call)) continue;
     const findings = resultScanner(cfg.allowlist, deadline);
+    const tool = String(call.tool_name ?? "a tool");
+    const strings2 = [];
+    results.push({ tool, strings: strings2 });
     const blocks = Array.isArray(call.tool_response) ? call.tool_response : [];
     const sources = /* @__PURE__ */ new Set();
     for (const b of blocks)
@@ -9687,19 +15624,34 @@ function postToolBatch(input, cfg) {
       (s) => {
         for (const f of findings(s)) {
           rules.add(f.ruleId);
-          tools.add(String(call.tool_name ?? "a tool"));
+          tools.add(tool);
         }
+        strings2.push(s);
         return s;
       },
       (key, v, parent) => isBinaryField(key, v, parent) || key === "data" && sources.has(parent) && isAttachmentPayload(v, parent.media_type)
     );
   }
-  if (rules.size === 0) return PASS;
+  if (rules.size === 0) return lib ? verifierBatchReport(results, cfg, lib) : PASS;
   return stopTurn(
     `the result of ${[...tools].join(", ")} still holds a secret (${[...rules].join(", ")}) on its way to the model. A hook can rewrite the output of a successful call only: this is the output of a call that failed (a command that exits non-zero, a tool error), or one whose redacted output Claude Code did not apply`,
     input.session_id,
     "that result stays in this session's transcript, so start a fresh session (if the value is not a secret, `secretgate allow` it first)"
   );
+}
+function verifierBatchReport(results, cfg, lib) {
+  const verifier = new lib.VerifierSession({ config: cfg.verifier, allowlist: cfg.allowlist, debug: lib.debugFromEnv() });
+  if (!verifier.active) return PASS;
+  const tools = /* @__PURE__ */ new Set();
+  for (const { tool, strings: strings2 } of results) for (const s of strings2) if (verifier.accept(s, []).length > 0) tools.add(tool);
+  verifier.report();
+  if (tools.size === 0) return PASS;
+  return {
+    stdout: JSON.stringify({
+      systemMessage: `secretgate: the experimental verifier (${lib.VERIFIER_RULE_ID}) judges that the result of ${[...tools].join(", ")} holds a credential the rules did not flag, and it reached the model as the tool printed it: a hook can rewrite the output of a successful call only (this one failed, or its output was not replaced). It was NOT redacted. Check the value and rotate it if it is real; the verifier is a model and can be wrong (secretgate verifier status).`
+    }),
+    exit: 0
+  };
 }
 
 // src/hooks/codex.ts
@@ -9740,17 +15692,20 @@ ${text}`
 }
 
 // src/install/allow-store.ts
-import { mkdirSync as mkdirSync5, readFileSync as readFileSync6 } from "fs";
+init_main();
+init_config2();
+init_fs_atomic();
+import { mkdirSync as mkdirSync6, readFileSync as readFileSync7 } from "fs";
 import { dirname as dirname5 } from "path";
 var AllowlistFileError = class extends Error {
 };
 var KEYS = ["sha256", "rules", "paths"];
 function writeAllow(add) {
   const path = allowlistPath();
-  mkdirSync5(dirname5(path), { recursive: true, mode: 448 });
+  mkdirSync6(dirname5(path), { recursive: true, mode: 448 });
   let text;
   try {
-    text = readFileSync6(path, "utf8");
+    text = readFileSync7(path, "utf8");
   } catch (err) {
     if (err.code !== "ENOENT") throw err;
     text = "";
@@ -9790,8 +15745,10 @@ function isSecretgateHook(command, agent) {
 }
 
 // src/install/json-merge.ts
-import { copyFileSync, existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync7, rmSync as rmSync3 } from "fs";
-import { basename as basename5, dirname as dirname6, join as join9 } from "path";
+init_fs_atomic();
+init_paths();
+import { copyFileSync, existsSync as existsSync4, readdirSync as readdirSync3, readFileSync as readFileSync8, rmSync as rmSync3 } from "fs";
+import { basename as basename5, dirname as dirname6, join as join10 } from "path";
 var SettingsParseError = class extends Error {
   constructor(path, cause) {
     super(`refusing to edit ${path}: it is not valid JSON (${cause}). Fix it manually, then re-run.`);
@@ -9833,7 +15790,7 @@ function editJsonFile(path, mutate, opts = {}) {
   let original;
   let obj = {};
   if (existsSync4(path)) {
-    original = readFileSync7(path, "utf8");
+    original = readFileSync8(path, "utf8");
     if (original.trim() !== "") {
       try {
         obj = JSON.parse(original);
@@ -9858,7 +15815,7 @@ function editJsonFile(path, mutate, opts = {}) {
     backupPath = `${path}.secretgate-backup-${stamp}`;
     if (opts.latestBackupOnly) {
       const prefix = `${basename5(path)}.secretgate-backup-`;
-      for (const f of readdirSync3(dirname6(path))) if (f.startsWith(prefix)) rmSync3(join9(dirname6(path), f), { force: true });
+      for (const f of readdirSync3(dirname6(path))) if (f.startsWith(prefix)) rmSync3(join10(dirname6(path), f), { force: true });
     }
     copyFileSync(path, backupPath);
   }
@@ -9867,7 +15824,7 @@ function editJsonFile(path, mutate, opts = {}) {
 }
 
 // src/install/claude-code.ts
-import { existsSync as existsSync5, readFileSync as readFileSync8, rmSync as rmSync4 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync9, rmSync as rmSync4 } from "fs";
 import { dirname as dirname7 } from "path";
 var CC_DENY_RULES = [
   "Read(**/.env)",
@@ -9971,7 +15928,7 @@ function settingsTree(settingsPath, root) {
 function installClaudeCode({ settingsPath, command, root, claudeVersion }) {
   const recentEvents = claudeCodeTakesBatchHook(claudeVersion);
   const { ownershipPath, within } = settingsTree(settingsPath, root);
-  const previous = existsSync5(ownershipPath) ? JSON.parse(readFileSync8(ownershipPath, "utf8")) : {};
+  const previous = existsSync5(ownershipPath) ? JSON.parse(readFileSync9(ownershipPath, "utf8")) : {};
   const added = [];
   const adopted = [];
   const report = editJsonFile(
@@ -10011,7 +15968,7 @@ function installClaudeCode({ settingsPath, command, root, claudeVersion }) {
 }
 function uninstallClaudeCode({ settingsPath, root }) {
   const { ownershipPath, within } = settingsTree(settingsPath, root);
-  const recorded = existsSync5(ownershipPath) ? JSON.parse(readFileSync8(ownershipPath, "utf8")).deny ?? [] : void 0;
+  const recorded = existsSync5(ownershipPath) ? JSON.parse(readFileSync9(ownershipPath, "utf8")).deny ?? [] : void 0;
   const report = editJsonFile(
     settingsPath,
     (s) => {
@@ -10038,10 +15995,11 @@ function uninstallClaudeCode({ settingsPath, root }) {
 }
 
 // src/install/codex.ts
-import { createHash as createHash4 } from "crypto";
-import { copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync6, readFileSync as readFileSync9, realpathSync as realpathSync3 } from "fs";
+init_fs_atomic();
+import { createHash as createHash6 } from "crypto";
+import { copyFileSync as copyFileSync2, existsSync as existsSync6, mkdirSync as mkdirSync7, readFileSync as readFileSync10, realpathSync as realpathSync3 } from "fs";
 import { homedir as homedir6 } from "os";
-import { dirname as dirname8, join as join10, resolve as resolve6 } from "path";
+import { dirname as dirname8, join as join11, resolve as resolve7 } from "path";
 
 // src/install/toml-touch.ts
 var BLOCK_START = "# >>> secretgate managed >>>";
@@ -10075,7 +16033,7 @@ function rootEnd(lines) {
   const i = lines.findIndex((l) => TABLE_HEADER.test(l));
   return i === -1 ? lines.length : i;
 }
-var unquote2 = (k) => k.startsWith('"') ? k.slice(1, -1) : k;
+var unquote3 = (k) => k.startsWith('"') ? k.slice(1, -1) : k;
 function refuseValue(value, snippet) {
   if (/^false\b/.test(value)) throw new Error(`config.toml sets 'hooks = false' explicitly \u2014 not overriding it. Enable hooks manually:
 ${snippet}`);
@@ -10096,7 +16054,7 @@ function enableHooksFeature(content) {
   const root = lines.slice(0, rootEnd(lines));
   const dotted = root.map((l, i) => ({ i, m: ROOT_DOTTED.exec(l) })).filter((d) => d.m);
   if (dotted.length > 0) {
-    const hooks = dotted.find((d) => unquote2(d.m[1]) === "hooks");
+    const hooks = dotted.find((d) => unquote3(d.m[1]) === "hooks");
     if (hooks) {
       if (/^true\b/.test(hooks.m[2])) return { content, changed: false };
       refuseValue(hooks.m[2], "features.hooks = true");
@@ -10281,7 +16239,7 @@ function staleHookTrustKeys(content, hooksPath, hashes, keep) {
 
 // src/install/codex.ts
 function codexHome() {
-  return process.env.CODEX_HOME ?? join10(homedir6(), ".codex");
+  return process.env.CODEX_HOME ?? join11(homedir6(), ".codex");
 }
 function withoutOurGroups2(groups) {
   if (!Array.isArray(groups)) return [];
@@ -10313,10 +16271,10 @@ function hookTrustHash(event, group, handler) {
     hooks: [normalizedHandler]
   };
   const serialized = JSON.stringify(canonicalize(identity));
-  return `sha256:${createHash4("sha256").update(serialized).digest("hex")}`;
+  return `sha256:${createHash6("sha256").update(serialized).digest("hex")}`;
 }
 function ourHookTrustEntries(hooksPath) {
-  const root = JSON.parse(readFileSync9(hooksPath, "utf8"));
+  const root = JSON.parse(readFileSync10(hooksPath, "utf8"));
   const entries = [];
   for (const { event } of EVENTS2) {
     for (const [groupIndex, group] of (root.hooks?.[event] ?? []).entries()) {
@@ -10333,8 +16291,8 @@ function ourHookTrustEntries(hooksPath) {
 }
 function codexWiringStatus(codexDir) {
   try {
-    const hooksPath = join10(realpathSync3(codexDir), "hooks.json");
-    const config = readFileSync9(join10(codexDir, "config.toml"), "utf8");
+    const hooksPath = join11(realpathSync3(codexDir), "hooks.json");
+    const config = readFileSync10(join11(codexDir, "config.toml"), "utf8");
     const entries = ourHookTrustEntries(hooksPath);
     const tables = config.split(/(?=^\s*\[)/m);
     const trusted = entries.filter(
@@ -10349,9 +16307,9 @@ function codexWiringStatus(codexDir) {
   }
 }
 function codexTree(codexDir) {
-  const within = [homedir6(), dirname8(resolve6(codexDir))];
-  assertWithin(join10(codexDir, "hooks.json"), within);
-  assertWithin(join10(codexDir, "config.toml"), within);
+  const within = [homedir6(), dirname8(resolve7(codexDir))];
+  assertWithin(join11(codexDir, "hooks.json"), within);
+  assertWithin(join11(codexDir, "config.toml"), within);
   return within;
 }
 function writeTextWithBackup(path, content) {
@@ -10366,9 +16324,9 @@ function withoutStaleTrust(content, hooksPath, ours, keep) {
   return removeHookTrust(content, stale);
 }
 function installCodex({ codexDir, command }) {
-  mkdirSync6(codexDir, { recursive: true });
+  mkdirSync7(codexDir, { recursive: true });
   const within = codexTree(codexDir);
-  const hooksPath = join10(realpathSync3(codexDir), "hooks.json");
+  const hooksPath = join11(realpathSync3(codexDir), "hooks.json");
   const hooksReport = editJsonFile(
     hooksPath,
     (root) => {
@@ -10384,10 +16342,10 @@ function installCodex({ codexDir, command }) {
     },
     { within }
   );
-  const configPath = join10(codexDir, "config.toml");
-  const current = existsSync6(configPath) ? readFileSync9(configPath, "utf8") : "";
+  const configPath2 = join11(codexDir, "config.toml");
+  const current = existsSync6(configPath2) ? readFileSync10(configPath2, "utf8") : "";
   const featureEdit = enableHooksFeature(current);
-  const legacyPath = resolve6(codexDir, "hooks.json");
+  const legacyPath = resolve7(codexDir, "hooks.json");
   const legacyKeys = legacyPath === hooksPath ? [] : ourHookTrustEntries(hooksPath).map((entry) => entry.key.replace(hooksPath, legacyPath));
   const migrated = removeHookTrust(featureEdit.content, legacyKeys);
   const ours = ourHookTrustEntries(hooksPath);
@@ -10399,7 +16357,7 @@ function installCodex({ codexDir, command }) {
   );
   const trustEdit = upsertHookTrust(pruned.content, ours);
   const configChanged = featureEdit.changed || migrated.changed || pruned.changed || trustEdit.changed;
-  if (configChanged) writeTextWithBackup(configPath, trustEdit.content);
+  if (configChanged) writeTextWithBackup(configPath2, trustEdit.content);
   return {
     hooks: hooksReport,
     configChanged,
@@ -10411,7 +16369,7 @@ function installCodex({ codexDir, command }) {
 }
 function uninstallCodex({ codexDir }) {
   const within = codexTree(codexDir);
-  const hooksPath = existsSync6(codexDir) ? join10(realpathSync3(codexDir), "hooks.json") : resolve6(codexDir, "hooks.json");
+  const hooksPath = existsSync6(codexDir) ? join11(realpathSync3(codexDir), "hooks.json") : resolve7(codexDir, "hooks.json");
   const ours = existsSync6(hooksPath) ? ourHookTrustEntries(hooksPath) : [];
   const trustKeys = ours.map((entry) => entry.key);
   let hooksReport = { path: hooksPath, changed: false };
@@ -10431,63 +16389,68 @@ function uninstallCodex({ codexDir }) {
       { within }
     );
   }
-  const configPath = join10(codexDir, "config.toml");
+  const configPath2 = join11(codexDir, "config.toml");
   let configChanged = false;
-  if (existsSync6(configPath)) {
-    const current = readFileSync9(configPath, "utf8");
+  if (existsSync6(configPath2)) {
+    const current = readFileSync10(configPath2, "utf8");
     const removed = removeHookTrust(current, trustKeys);
     const stale = withoutStaleTrust(removed.content, hooksPath, ours, []);
     const trustEdit = { content: stale.content, changed: removed.changed || stale.changed };
-    const remaining = existsSync6(hooksPath) ? JSON.parse(readFileSync9(hooksPath, "utf8")).hooks : void 0;
+    const remaining = existsSync6(hooksPath) ? JSON.parse(readFileSync10(hooksPath, "utf8")).hooks : void 0;
     const foreignHooks = remaining && Object.keys(remaining).length > 0;
     const sharedConfig = /\[hooks\.(?!state\b)|\[plugins\./.test(trustEdit.content);
     const featureEdit = foreignHooks || sharedConfig ? { content: trustEdit.content, changed: false } : disableHooksFeature(trustEdit.content);
     if (trustEdit.changed || featureEdit.changed) {
-      writeTextWithBackup(configPath, featureEdit.content);
+      writeTextWithBackup(configPath2, featureEdit.content);
       configChanged = true;
     }
   }
   return { hooks: hooksReport, configChanged };
 }
 
+// src/cli.ts
+init_paths();
+
 // src/install/opencode.ts
-import { copyFileSync as copyFileSync3, existsSync as existsSync7, mkdirSync as mkdirSync7, readFileSync as readFileSync10, rmSync as rmSync5 } from "fs";
+init_main();
+init_fs_atomic();
+import { copyFileSync as copyFileSync3, existsSync as existsSync7, mkdirSync as mkdirSync8, readFileSync as readFileSync11, rmSync as rmSync5 } from "fs";
 import { homedir as homedir7 } from "os";
-import { dirname as dirname9, join as join11 } from "path";
+import { dirname as dirname9, join as join12 } from "path";
 var OWNERSHIP_MARKER = "SecretgatePlugin";
 function opencodeConfigDir() {
   const custom = process.env.OPENCODE_CONFIG_DIR;
   if (custom && custom !== "") return custom;
   const xdg = process.env.XDG_CONFIG_HOME;
-  return join11(xdg && xdg !== "" ? xdg : join11(homedir7(), ".config"), "opencode");
+  return join12(xdg && xdg !== "" ? xdg : join12(homedir7(), ".config"), "opencode");
 }
 function opencodePluginFile(configDir) {
-  return join11(configDir, "plugins", "secretgate.js");
+  return join12(configDir, "plugins", "secretgate.js");
 }
 function removeStalePlugin(configDir) {
-  const stale = join11(configDir, "plugin", "secretgate.js");
-  if (!existsSync7(stale) || !readFileSync10(stale, "utf8").includes(OWNERSHIP_MARKER)) return false;
+  const stale = join12(configDir, "plugin", "secretgate.js");
+  if (!existsSync7(stale) || !readFileSync11(stale, "utf8").includes(OWNERSHIP_MARKER)) return false;
   rmSync5(stale);
   return true;
 }
 function installOpencode(options) {
   const { configDir } = options;
   const target = opencodePluginFile(configDir);
-  const content = "pluginContent" in options ? options.pluginContent : readFileSync10(options.pluginSource, "utf8");
+  const content = "pluginContent" in options ? options.pluginContent : readFileSync11(options.pluginSource, "utf8");
   if (existsSync7(target)) {
-    const existing = readFileSync10(target, "utf8");
+    const existing = readFileSync11(target, "utf8");
     if (!existing.includes(OWNERSHIP_MARKER)) {
       throw new Error(`refusing to overwrite ${target}: the existing file is not ours (foreign plugin?). Remove it manually first.`);
     }
     if (existing === content) return { path: target, changed: removeStalePlugin(configDir) };
   }
-  mkdirSync7(dirname9(target), { recursive: true });
+  mkdirSync8(dirname9(target), { recursive: true });
   writeFileAtomic(target, content, 420);
   removeStalePlugin(configDir);
   return { path: target, changed: true };
 }
 function withoutNpmPin(path) {
-  const text = readFileSync10(path, "utf8");
+  const text = readFileSync11(path, "utf8");
   if (text.trim() === "") return void 0;
   const errors = [];
   const cfg = parse2(text, errors, { allowTrailingComma: true, disallowComments: false });
@@ -10504,14 +16467,14 @@ function uninstallOpencode({ configDir }) {
   const target = opencodePluginFile(configDir);
   const edits = [];
   for (const name of ["opencode.json", "opencode.jsonc"]) {
-    const path = join11(configDir, name);
+    const path = join12(configDir, name);
     if (!existsSync7(path)) continue;
     assertWithin(path, [homedir7(), dirname9(configDir)]);
     const text = withoutNpmPin(path);
     if (text !== void 0) edits.push({ path, text });
   }
   let changed = false;
-  if (existsSync7(target) && readFileSync10(target, "utf8").includes(OWNERSHIP_MARKER)) {
+  if (existsSync7(target) && readFileSync11(target, "utf8").includes(OWNERSHIP_MARKER)) {
     rmSync5(target);
     changed = true;
   }
@@ -10525,8 +16488,9 @@ function uninstallOpencode({ configDir }) {
 }
 
 // src/self.ts
-import { chmodSync as chmodSync2, copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync8, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync6 } from "fs";
-import { basename as basename6, delimiter as delimiter2, dirname as dirname10, isAbsolute as isAbsolute4, join as join12 } from "path";
+init_vault();
+import { chmodSync as chmodSync2, copyFileSync as copyFileSync4, existsSync as existsSync8, mkdirSync as mkdirSync9, realpathSync as realpathSync4, renameSync as renameSync3, rmSync as rmSync6 } from "fs";
+import { basename as basename6, delimiter as delimiter2, dirname as dirname10, isAbsolute as isAbsolute5, join as join13 } from "path";
 import { fileURLToPath } from "url";
 function currentContext() {
   const modulePath = fileURLToPath(import.meta.url);
@@ -10545,9 +16509,9 @@ function stableRuntime(execPath, pathEnv = process.env.PATH ?? "", stableDirs = 
   for (const dir of pathEnv.split(delimiter2)) {
     if (!stable.has(dir)) continue;
     for (const name of [basename6(execPath), "node"]) {
-      const candidate = join12(dir, name);
+      const candidate = join13(dir, name);
       try {
-        if (isAbsolute4(candidate) && realpathSync4(candidate) === real) return candidate;
+        if (isAbsolute5(candidate) && realpathSync4(candidate) === real) return candidate;
       } catch {
       }
     }
@@ -10559,10 +16523,10 @@ function selfForm(modulePath) {
   return modulePath.endsWith(".mjs") ? "bundle" : "dev";
 }
 function pinnedBinaryPath(home) {
-  return join12(home, "bin", "secretgate");
+  return join13(home, "bin", "secretgate");
 }
 function pinnedBundlePath(home) {
-  return join12(home, "bin", "secretgate.mjs");
+  return join13(home, "bin", "secretgate.mjs");
 }
 function commandLine(inv) {
   return [inv.file === "node" ? "node" : `"${inv.file}"`, ...inv.args.map((a) => `"${a}"`)].join(" ");
@@ -10577,7 +16541,7 @@ function runningInvocation(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   if (form === "binary") return { file: ctx.execPath, args: [] };
   if (form === "bundle") return { file: ctx.execPath, args: [ctx.modulePath] };
-  return { file: "node", args: [join12(dirname10(ctx.modulePath), "main.ts")] };
+  return { file: "node", args: [join13(dirname10(ctx.modulePath), "main.ts")] };
 }
 function samePath(a, b) {
   try {
@@ -10601,7 +16565,7 @@ function pinSelf(ctx = currentContext()) {
   const form = selfForm(ctx.modulePath);
   if (form === "dev") return selfInvocation(ctx);
   const [source, target] = form === "binary" ? [ctx.execPath, pinnedBinaryPath(ctx.home)] : [ctx.modulePath, pinnedBundlePath(ctx.home)];
-  mkdirSync8(dirname10(target), { recursive: true, mode: 448 });
+  mkdirSync9(dirname10(target), { recursive: true, mode: 448 });
   if (!samePath(source, target)) atomicCopy(source, target);
   return form === "binary" ? { file: target, args: [] } : { file: ctx.execPath, args: [target] };
 }
@@ -10619,11 +16583,14 @@ function hookRuntime(command) {
   return first && JS_RUNTIME.test(basename6(first)) ? first : void 0;
 }
 
+// src/cli.ts
+init_vault();
+
 // src/version.ts
 var VERSION = "1.8.1";
 
 // src/cli.ts
-var USAGE = `secretgate ${VERSION} \u2014 local secrets firewall for coding agents
+var USAGE2 = `secretgate ${VERSION} \u2014 local secrets firewall for coding agents
 
 Usage: secretgate <command> [options]
 
@@ -10638,6 +16605,7 @@ Commands:
   trust       Let the hooks honor this repo's .secretgate.json allowlist (--revoke to undo)
   scope       Show the project scope; \`scope check <path\u2026>\` exits 1 if a path is outside it
   vault       Manage the placeholder vault (list | clear) \u2014 never prints secrets
+  verifier    The experimental, opt-in ML verifier (status | fetch | on [--threshold f1|f05|f2] | off)
   disable     Turn the firewall off for this run (--minutes N | --forever | --session, --project, --session <id>; --scope also lifts the project scope)
   enable      Turn it back on (--project, --session [id], --all)
   hook        Internal: agent hook entrypoint (secretgate hook <agent> <event>)
@@ -10698,7 +16666,7 @@ var MAX_FILE_BYTES = 2 * 1024 * 1024;
 function* walkFiles(root) {
   for (const entry of readdirSync4(root, { withFileTypes: true })) {
     if (entry.isSymbolicLink()) continue;
-    const full = join13(root, entry.name);
+    const full = join15(root, entry.name);
     if (entry.isDirectory()) {
       if (!SKIP_DIRS.has(entry.name)) yield* walkFiles(full);
     } else if (entry.isFile()) {
@@ -10707,10 +16675,10 @@ function* walkFiles(root) {
   }
 }
 function readTextFile(path) {
-  const stats = statSync5(path);
+  const stats = statSync6(path);
   if (stats.size === 0) return { skipped: "empty" };
   if (stats.size > MAX_FILE_BYTES) return { skipped: "too-large" };
-  const buf = readFileSync11(path);
+  const buf = readFileSync13(path);
   const probe = buf.subarray(0, 8192);
   if (probe.includes(0)) return { skipped: "binary" };
   return { text: buf.toString("utf8") };
@@ -10721,11 +16689,11 @@ function hashPrefix(secret) {
 async function gitleaksExtra(bin, text, found, allowlist) {
   const known = new Set(found.map((f) => f.secret));
   const extra = [];
-  let lineStarts2;
+  let lineStarts3;
   for (const g of await scanWithGitleaks(text, { bin })) {
     if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
-    lineStarts2 ??= [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
-    const reported = g.startLine !== void 0 && g.startLine <= lineStarts2.length ? text.indexOf(g.secret, lineStarts2[g.startLine - 1]) : -1;
+    lineStarts3 ??= [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
+    const reported = g.startLine !== void 0 && g.startLine <= lineStarts3.length ? text.indexOf(g.secret, lineStarts3[g.startLine - 1]) : -1;
     const start = reported !== -1 ? reported : Math.max(0, text.indexOf(g.secret));
     if (isNonSecretInContext(text, start, g.secret, g.ruleId)) continue;
     known.add(g.secret);
@@ -10795,8 +16763,8 @@ async function cmdScan(args, io) {
   if (target === "-") {
     scanText(await readIoStdin(io), void 0, "stdin");
   } else {
-    const root = resolve7(target);
-    const stats = statSync5(root, { throwIfNoEntry: false });
+    const root = resolve8(target);
+    const stats = statSync6(root, { throwIfNoEntry: false });
     if (!stats) {
       io.stderr(`scan: no such file or directory: ${target}
 `);
@@ -10804,8 +16772,8 @@ async function cmdScan(args, io) {
     }
     const files = stats.isDirectory() ? [...walkFiles(root)] : [root];
     for (const file of files) {
-      const rel = stats.isDirectory() ? relative4(root, file) : file;
-      const fromCwd = relative4(process.cwd(), file);
+      const rel = stats.isDirectory() ? relative5(root, file) : file;
+      const fromCwd = relative5(process.cwd(), file);
       if (excludes.some((g) => pathMatchesGlob(rel, g) || pathMatchesGlob(fromCwd, g))) continue;
       if (allowlist.paths?.some((g) => pathMatchesGlob(rel, g) || pathMatchesGlob(fromCwd, g))) continue;
       const nameRule = sensitiveFileNameRule(rel);
@@ -11181,20 +17149,20 @@ function parseAgentFlags(args, io) {
 function opencodePlugin() {
   if (embeddedOpencodePlugin !== void 0) return { pluginContent: embeddedOpencodePlugin };
   const selfDir = dirname11(fileURLToPath2(import.meta.url));
-  const candidates = [join13(selfDir, "secretgate-opencode.mjs"), join13(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
+  const candidates = [join15(selfDir, "secretgate-opencode.mjs"), join15(selfDir, "..", "scripts", "secretgate-opencode.mjs")];
   const found = candidates.find((c) => existsSync9(c));
   if (!found) throw new Error("cannot locate secretgate-opencode.mjs next to the CLI bundle \u2014 reinstall the package");
   return { pluginSource: found };
 }
 function claudeSettingsPath(project) {
-  return project ? join13(process.cwd(), ".claude", "settings.json") : join13(homedir8(), ".claude", "settings.json");
+  return project ? join15(process.cwd(), ".claude", "settings.json") : join15(homedir8(), ".claude", "settings.json");
 }
 function projectSettingsAliasesGlobal() {
   const canon = (p) => {
     try {
       return realpathSync5(p);
     } catch {
-      return resolve7(p);
+      return resolve8(p);
     }
   };
   return canon(process.cwd()) === canon(homedir8());
@@ -11204,10 +17172,10 @@ function trustedClaude() {
   const project = repositoryRoot(process.cwd()) ?? process.cwd();
   const inProject = (dir) => !covers(project, homedir8()) && covers(project, dir);
   for (const dir of (process.env.PATH ?? "").split(delimiter3)) {
-    if (!isAbsolute5(dir) || /[\\/]node_modules[\\/]\.bin[\\/]?$/.test(dir) || inProject(dir)) continue;
+    if (!isAbsolute6(dir) || /[\\/]node_modules[\\/]\.bin[\\/]?$/.test(dir) || inProject(dir)) continue;
     for (const name of names) {
-      const file = join13(dir, name);
-      if (statSync5(file, { throwIfNoEntry: false })?.isFile()) return file;
+      const file = join15(dir, name);
+      if (statSync6(file, { throwIfNoEntry: false })?.isFile()) return file;
     }
   }
   return void 0;
@@ -11247,7 +17215,7 @@ function installForAgents(flags, io) {
       if (flags.project && projectSettingsAliasesGlobal()) {
         io.stdout("claude-code: note \u2014 the current directory is your home directory, so --project resolves to the GLOBAL settings file.\n");
       }
-      mkdirSync9(dirname11(settingsPath), { recursive: true });
+      mkdirSync11(dirname11(settingsPath), { recursive: true });
       const claudeVersion = claudeCodeVersion();
       const r = installClaudeCode({ settingsPath, command: installedCliCommand(), claudeVersion });
       io.stdout(`claude-code: ${r.changed ? "wired" : "already up to date"} (${r.path})
@@ -11272,7 +17240,7 @@ function installForAgents(flags, io) {
   if (flags.codex) {
     outcome.installed.codex = attempt("codex", () => {
       const dir = codexHome();
-      mkdirSync9(dir, { recursive: true });
+      mkdirSync11(dir, { recursive: true });
       const r = installCodex({ codexDir: dir, command: installedCliCommand() });
       io.stdout(`codex: ${r.hooks.changed || r.configChanged ? "wired" : "already up to date"} (${dir})
 `);
@@ -11294,7 +17262,7 @@ async function cmdInstall(args, io) {
 }
 function detectAgents() {
   return {
-    claudeCode: existsSync9(join13(homedir8(), ".claude")),
+    claudeCode: existsSync9(join15(homedir8(), ".claude")),
     codex: existsSync9(codexHome()),
     opencode: existsSync9(opencodeConfigDir()),
     project: false
@@ -11306,7 +17274,7 @@ function spawnHook(agent, event, payload, env) {
 }
 function verifyClaudeCodeWiring(io, batchWired) {
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join13(tmpdir3(), "secretgate-verify-"));
+  const tmpHome = mkdtempSync2(join15(tmpdir3(), "secretgate-verify-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
@@ -11401,7 +17369,7 @@ function verifyCodexWiring(io) {
     return false;
   }
   const fake = "ghp_" + ["aB3dE6", "gH9jK2", "mN5pQ8", "sT1vW4", "yZ7bC0", "dF6hJ9"].join("");
-  const tmpHome = mkdtempSync2(join13(tmpdir3(), "secretgate-verify-codex-"));
+  const tmpHome = mkdtempSync2(join15(tmpdir3(), "secretgate-verify-codex-"));
   const env = { ...process.env, SECRETGATE_HOME: tmpHome };
   delete env.SECRETGATE_DISABLE;
   const runHook = (event, payload) => {
@@ -11460,7 +17428,7 @@ async function cmdVerifyOpencode(args, io) {
     return 2;
   }
   try {
-    const plugin = (await import(pathToFileURL(resolve7(file)).href)).default;
+    const plugin = (await import(pathToFileURL(resolve8(file)).href)).default;
     if (typeof plugin?.setup !== "function" || typeof plugin?.id !== "string") {
       throw new Error("plugin does not export an { id, setup } definition");
     }
@@ -11488,9 +17456,9 @@ async function cmdVerifyOpencode(args, io) {
   return 0;
 }
 function verifyOpencodeBundle(io) {
-  const scratch = mkdtempSync2(join13(tmpdir3(), "secretgate-verify-opencode-"));
+  const scratch = mkdtempSync2(join15(tmpdir3(), "secretgate-verify-opencode-"));
   const plugin = opencodePluginFile(opencodeConfigDir());
-  const verificationModule = join13(scratch, "secretgate.mjs");
+  const verificationModule = join15(scratch, "secretgate.mjs");
   try {
     copyFileSync5(plugin, verificationModule);
     const env = { ...process.env, SECRETGATE_HOME: scratch, SECRETGATE_DISABLE: "0" };
@@ -11580,7 +17548,7 @@ async function cmdUninstall(args, io) {
 }
 function readJsonSafe(path) {
   try {
-    return JSON.parse(readFileSync11(path, "utf8"));
+    return JSON.parse(readFileSync13(path, "utf8"));
   } catch {
     return void 0;
   }
@@ -11611,31 +17579,31 @@ function reportPinned(hookCommandList, io) {
 `);
   }
   if (existsSync9(bundle)) {
-    const v = /VERSION = "([^"]+)"/.exec(readFileSync11(bundle, "utf8"))?.[1] ?? "unknown";
+    const v = /VERSION = "([^"]+)"/.exec(readFileSync13(bundle, "utf8"))?.[1] ?? "unknown";
     io.stdout(`bundle    pinned at ${bundle} (v${v}${refresh(v, bundle)})
 `);
   }
   if (hookCommandList.length > 0 && !existsSync9(binary) && !existsSync9(bundle)) io.stdout("bundle    not pinned yet (run `secretgate init`)\n");
 }
 function reportMissingPrograms(commands2, label, io) {
-  const missing = new Set(commands2.map(hookProgram).filter((p) => !!p && isAbsolute5(p) && !existsSync9(p)));
+  const missing = new Set(commands2.map(hookProgram).filter((p) => !!p && isAbsolute6(p) && !existsSync9(p)));
   for (const p of missing) io.stdout(`${label}!! hooks run ${p}, which is MISSING \u2014 run \`secretgate init\` to re-pin it
 `);
   const runtimes = new Set(commands2.map(hookRuntime).filter((r) => r !== void 0));
   for (const r of runtimes) {
-    if (isAbsolute5(r) ? !existsSync9(r) : !onPath(r))
+    if (isAbsolute6(r) ? !existsSync9(r) : !onPath(r))
       io.stdout(
-        `${label}!! hooks start ${r}, which is NOT FOUND${isAbsolute5(r) ? "" : " on PATH"} \u2014 run \`secretgate init\` to wire this node by its absolute path
+        `${label}!! hooks start ${r}, which is NOT FOUND${isAbsolute6(r) ? "" : " on PATH"} \u2014 run \`secretgate init\` to wire this node by its absolute path
 `
       );
-    else if (!isAbsolute5(r))
+    else if (!isAbsolute6(r))
       io.stdout(`${label}hooks start a bare \`${r}\`: an agent launched without your shell's PATH may not find it \u2014 re-run \`secretgate init\`
 `);
   }
 }
 function onPath(name) {
   const exts = process.platform === "win32" ? ["", ".exe", ".cmd"] : [""];
-  return (process.env.PATH ?? "").split(delimiter3).some((dir) => dir !== "" && exts.some((e) => existsSync9(join13(dir, name + e))));
+  return (process.env.PATH ?? "").split(delimiter3).some((dir) => dir !== "" && exts.some((e) => existsSync9(join15(dir, name + e))));
 }
 async function cmdStatus(_args, io) {
   io.stdout(`secretgate ${VERSION}
@@ -11657,7 +17625,7 @@ async function cmdStatus(_args, io) {
   if (here.disabled || pauses.length > 0) io.stdout("\n");
   const ccScopes = [["global ", claudeSettingsPath(false)]];
   if (!projectSettingsAliasesGlobal()) ccScopes.push(["project", claudeSettingsPath(true)]);
-  const codexHooks = readJsonSafe(join13(codexHome(), "hooks.json"));
+  const codexHooks = readJsonSafe(join15(codexHome(), "hooks.json"));
   const codexCommands = hookCommands(codexHooks, "codex");
   reportPinned([...ccScopes.flatMap(([, path]) => hookCommands(readJsonSafe(path), "claude-code")), ...codexCommands], io);
   const ccVersion = ccScopes.some(([, path]) => hookCommands(readJsonSafe(path), "claude-code").length > 0) ? claudeCodeVersion() : void 0;
@@ -11722,7 +17690,7 @@ async function cmdStatus(_args, io) {
   reportMissingPrograms(codexCommands, "codex     ", io);
   const ocPlugin = opencodePluginFile(opencodeConfigDir());
   const ocPinned = ["opencode.json", "opencode.jsonc"].some((name) => {
-    const read = readJsonFile(join13(opencodeConfigDir(), name));
+    const read = readJsonFile(join15(opencodeConfigDir(), name));
     const plugin = read.ok ? read.value?.plugin : void 0;
     return Array.isArray(plugin) && plugin.some((p) => typeof p === "string" && /^secretgate@/.test(p));
   });
@@ -11734,11 +17702,13 @@ async function cmdStatus(_args, io) {
     `engines   built-in JS rules${gl ? hybridOff ? ` (gitleaks at ${gl} is switched off: config hybrid = "off")` : ` + gitleaks binary in \`scan\` (${gl})` : " (gitleaks binary not found \u2014 `scan` runs the JS engine only)"}
 `
   );
+  if (cfg.verifier.enabled || cfg.verifier.invalid) io.stdout((await Promise.resolve().then(() => (init_cli(), cli_exports))).statusLine(cfg.verifier));
+  else io.stdout("verifier  off (experimental, opt-in: `secretgate verifier` for details)\n");
   const vault = new Vault();
   const entries = vault.list();
   io.stdout(`vault     ${defaultVaultHome()} \u2014 ${entries.length} placeholder(s)`);
   try {
-    const mode = statSync5(join13(defaultVaultHome(), "vault.json")).mode & 511;
+    const mode = statSync6(join15(defaultVaultHome(), "vault.json")).mode & 511;
     io.stdout(mode === 384 ? "\n" : ` \u2014 WARNING: vault.json is ${mode.toString(8)}, expected 600
 `);
   } catch {
@@ -11759,6 +17729,7 @@ var commands = {
   install: cmdInstall,
   uninstall: cmdUninstall,
   status: cmdStatus,
+  verifier: async (args, io) => (await Promise.resolve().then(() => (init_cli(), cli_exports))).cmdVerifier(args, io),
   hook: cmdHook,
   "__verify-opencode": cmdVerifyOpencode
 };
@@ -11770,18 +17741,18 @@ async function run(argv, io) {
     return 0;
   }
   if (first === "--help" || first === "-h") {
-    io.stdout(USAGE);
+    io.stdout(USAGE2);
     return 0;
   }
   if (!first) {
-    io.stderr(USAGE);
+    io.stderr(USAGE2);
     return 2;
   }
   const command = commands[first];
   if (!command) {
     io.stderr(`Unknown command: ${first}
 
-${USAGE}`);
+${USAGE2}`);
     return 2;
   }
   return command(rest, io);

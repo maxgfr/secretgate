@@ -30,11 +30,37 @@ export class RedactionUnsettledError extends Error {
   }
 }
 
-export function redactText(text: string, vault: Vault, source: string, cfg: ScanConfig = {}): RedactResult {
-  const deadline = cfg.deadlineMs !== undefined ? performance.now() + cfg.deadlineMs : undefined;
+/**
+ * More findings for the first round, from something other than the rules (the
+ * experimental verifier): given the text and the rules' findings in it, spans
+ * that none of those overlaps. Its time is not counted against the rules'
+ * deadline, and a span that does overlap a rule finding is dropped here too:
+ * the rules stay the authority.
+ */
+export type ExtraFindings = (text: string, findings: readonly Finding[]) => Finding[];
+
+export function redactText(text: string, vault: Vault, source: string, cfg: ScanConfig = {}, extra?: ExtraFindings): RedactResult {
+  let deadline = cfg.deadlineMs !== undefined ? performance.now() + cfg.deadlineMs : undefined;
   const scanNow = (t: string): Finding[] =>
     scan(t, { ...cfg, pragmas: cfg.pragmas ?? false, ...(deadline !== undefined ? { deadlineMs: deadline - performance.now() } : {}) });
-  const findings = scanNow(text);
+  const ruleFindings = scanNow(text);
+  let findings = ruleFindings;
+  if (extra) {
+    const t0 = performance.now();
+    let proposed: Finding[] = [];
+    try {
+      proposed = extra(text, ruleFindings);
+    } catch {
+      // What only adds to the rules is never a reason to fail: the text goes
+      // on as the rules leave it.
+    }
+    const added = proposed.filter((x) => x.end > x.start && !ruleFindings.some((f) => f.start < x.end && x.start < f.end));
+    if (deadline !== undefined) deadline += performance.now() - t0;
+    // Disjoint among themselves too: the first of two that overlap is kept.
+    const disjoint: Finding[] = [];
+    for (const x of [...added].sort((a, b) => a.start - b.start)) if (disjoint.every((d) => x.start >= d.end || x.end <= d.start)) disjoint.push(x);
+    if (disjoint.length > 0) findings = [...ruleFindings, ...disjoint].sort((a, b) => a.start - b.start);
+  }
   if (findings.length === 0) return { text, findings, replaced: [] };
   const replaced: RedactResult["replaced"] = [];
   let current = text;
