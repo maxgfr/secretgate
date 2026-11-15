@@ -14,7 +14,8 @@
 // Read of the file (its path below the repository goes to the model).
 //
 // Per file it records the verifier's own line (SECRETGATE_DEBUG=verifier:
-// counts and times, never a value) and the wall time of both processes, and
+// counts and times, never a value; the child process's time from spawn to
+// answer, and whether the hard bound killed it) and the wall time of both processes, and
 // checks that the verifier only ADDED redactions: the output with it on, with
 // every verifier placeholder put back, must be the output with it off. It
 // prints aggregates only: no value, no line of any file.
@@ -99,11 +100,14 @@ const stats = {
   covered: 0,
   unjudged: 0,
   budgetFiles: 0,
+  hardBoundFiles: 0,
+  childFailures: {},
   stringsSkipped: {},
   builds: {},
   rulesChanged: 0,
 };
 const verifierMs = [];
+const childMs = [];
 const verifierMsLoaded = [];
 const loadMs = [];
 const wallOff = [];
@@ -130,6 +134,14 @@ for (const [file, repo] of files) {
   if (on.status !== 0) stats.failures.on++;
   const line = on.stderr.split("\n").find((l) => l.startsWith("secretgate verifier: "));
   if (line === undefined) continue;
+  // The child's time, spawn to answer (or to its kill at the hard bound).
+  const child = /(?:answered in|after) (\d+) ms/.exec(line);
+  if (child) childMs.push(Number(child[1]));
+  const dropped = /the child (.+?) after \d+ ms/.exec(line);
+  if (dropped) {
+    stats.childFailures[dropped[1]] = (stats.childFailures[dropped[1]] ?? 0) + 1;
+    if (dropped[1] === "hard bound") stats.hardBoundFiles++;
+  }
   const n = (re) => Number(re.exec(line)?.[1] ?? 0);
   const cands = n(/(\d+) candidate\(s\)/);
   const judged = n(/(\d+) judged/);
@@ -174,6 +186,7 @@ console.log(
       reading: opt.read ? "Read, with the path below the repository" : "Bash stdout, no path",
       node: process.version,
       ...stats,
+      childMsPerFile: ms(childMs),
       verifierMsPerFile: ms(verifierMs),
       verifierMsPerFileWhenItLoadedTheEngine: { files: verifierMsLoaded.length, ...ms(verifierMsLoaded) },
       engineLoadMs: ms(loadMs),
