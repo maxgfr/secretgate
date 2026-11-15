@@ -8,7 +8,8 @@ export default defineConfig({
     coverage: {
       include: ["src/**/*.ts"],
       // Generated from the vendored gitleaks config; exercised through the scanner.
-      exclude: ["src/engine/rules.gen.ts"],
+      // The verifier's frozen copy of it too (src/verifier/sg-cand-1/README.md).
+      exclude: ["src/engine/rules.gen.ts", "src/verifier/sg-cand-1/rules.gen.ts"],
       // A floor, not a target: CI fails if coverage of the firewall regresses.
       thresholds: { lines: 80, statements: 78, functions: 85, branches: 70 },
     },

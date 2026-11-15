@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
   "files": {
-    "includes": ["src/**", "tests/**", "*.ts", "!tests/fixtures", "!src/engine/rules.gen.ts"]
+    "includes": ["src/**", "tests/**", "*.ts", "!tests/fixtures", "!src/engine/rules.gen.ts", "!src/verifier/sg-cand-1"]
   },
   "formatter": {
     "enabled": true,
