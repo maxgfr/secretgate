@@ -162,9 +162,13 @@ estimate cannot be the safety of a regex that may not change. So:
   it judged before the kill. Strings over **1 MiB**, and strings whose
   estimated cost for `generic-keyword` is too high, are skipped early: an early
   skip only, the kill is the bound.
-- `PostToolBatch` reads every result again; the strings `PostToolUse` answered
-  with (recorded by their sha256, per session, and taken by the batch) are not
-  judged again there.
+- `PostToolBatch` reads every result again. The strings `PostToolUse` answered
+  with are recorded by their sha256 (per session, taken by the batch) and not
+  judged again when the batch carries them as they were answered. With Claude
+  Code 2.1.325 it does not: the batch carries each result in the shape the
+  model reads, so its strings are judged again, which costs one more child
+  process per batch (43 to 56 ms in the live test) under the same hard bound;
+  a result `PostToolUse` redacted holds no candidate any more there.
 - Strings are walked in a fixed order and candidates are judged in text order.
   The engine is loaded only when a string has a candidate to judge, and the
   verifier's code is loaded only when it is on.
