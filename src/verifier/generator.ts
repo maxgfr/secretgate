@@ -1,6 +1,6 @@
 import { posix } from "node:path";
 import type { UserAllowlist } from "./sg-cand-1/allowlist.js";
-import { dedupeFindings, type ExtraRule, type MatchGate, ScanBudgetError, scan, type TracedMatch, traceMatches } from "./sg-cand-1/scanner.js";
+import { dedupeFindings, type ExtraRule, type MatchGate, scan, type TracedMatch, traceMatches } from "./sg-cand-1/scanner.js";
 
 // The candidate generator `sg-cand-1`, revision 1: the generator the verifier
 // (s6-secrets-verify-pico) was trained and measured on, as it was frozen at
@@ -160,8 +160,13 @@ export interface GeneratorOptions {
   maxLine?: number;
   /** Compute `reported` (a second, full scan of the text by the frozen default engine). Default true. */
   reported?: boolean;
-  /** `performance.now()` past which the generator stops between two rules (throws ScanBudgetError). */
-  deadline?: number;
+  /**
+   * The user's allowlist, read by the frozen engine as it reads it: a rule in
+   * `rules` does not run (a value only it proposes is no candidate; what
+   * another rule proposes on the same span still is), a value in `sha256` is
+   * no candidate (its `user-value` gate). The frozen runs had none.
+   */
+  allowlist?: UserAllowlist;
 }
 
 /**
@@ -216,29 +221,13 @@ function codePoints(text: string, from: number, to: number): number {
 
 const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }): boolean => a.start < b.end && b.start < a.end;
 
-// The frozen `traceMatches` takes no deadline. It asks the allowlist whether
-// each rule is disabled before it runs that rule, and nothing else of the
-// allowlist without a source path or a `sha256` list: that question is where
-// a deadline can be checked between two rules without changing the frozen
-// file or what it returns. The deadline throws ScanBudgetError there, as the
-// default engine's own scan does between rules.
-function deadlineAllowlist(deadline: number): UserAllowlist {
-  const rules = {
-    includes: (): boolean => {
-      if (performance.now() > deadline) throw new ScanBudgetError(0);
-      return false;
-    },
-  };
-  return { rules: rules as unknown as string[] };
-}
-
 type Live = TracedMatch & { name?: string | undefined; rule?: string };
 
 /** The sg-cand-1 candidates of one text, as raw records (see the top of this file). */
 export function candidateRecords(text: string, opts: GeneratorOptions = {}): CandidateRecord[] {
   const maxLine = opts.maxLine ?? 1000;
   const cfg = opts.sourcePath ? { sourcePath: opts.sourcePath } : {};
-  const traceCfg = opts.deadline !== undefined ? { ...cfg, allowlist: deadlineAllowlist(opts.deadline) } : cfg;
+  const traceCfg = opts.allowlist !== undefined ? { ...cfg, allowlist: opts.allowlist } : cfg;
   const starts = lineStartsOf(text);
   const lineEnd = (i: number): number => {
     const end = i + 1 < starts.length ? starts[i + 1]! - 1 : text.length;
@@ -330,7 +319,13 @@ export function candidateRecords(text: string, opts: GeneratorOptions = {}): Can
  * was 8.2 million, for a 1.9 MB file the regex took 7 ms over.
  */
 const PER_KEYWORD_STEPS = 1500;
+// After the name, `[ \t]*` (and after the separator, `[ \t]*` again) is walked
+// for every keyword of the name: a long run of blanks there is paid per
+// keyword, and once more by each form of the value tried after a separator.
+const PER_BLANK_AFTER_SEPARATOR = 8;
 
+// An EARLY SKIP, not a safety mechanism: the hard bound is the child process
+// (src/verifier/child.ts). It errs on the side of skipping.
 export function genericKeywordCost(text: string): number {
   const lower = text.toLowerCase();
   // End of the run of name characters each offset is in (its own offset when
@@ -343,9 +338,32 @@ export function genericKeywordCost(text: string): number {
     const name = (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95 || c === 46 || c === 36 || c === 45 || (c >= 65 && c <= 90);
     runEnd[i] = name ? (i + 1 < n && runEnd[i + 1]! > i + 1 ? runEnd[i + 1]! : i + 1) : i;
   }
+  // Length of the run of blanks (spaces, tabs) at each offset.
+  const blanks = new Int32Array(n + 1);
+  for (let i = n - 1; i >= 0; i--) {
+    const c = lower.charCodeAt(i);
+    blanks[i] = c === 32 || c === 9 ? blanks[i + 1]! + 1 : 0;
+  }
+  // What follows a run end: blanks, perhaps a closing quote or bracket, a
+  // separator, blanks again.
+  const after = (end: number): number => {
+    let at = end;
+    while (at < n && (lower[at] === '"' || lower[at] === "'" || lower[at] === "`" || lower[at] === "\\" || lower[at] === "]" || lower[at] === ")")) at++;
+    let steps = blanks[at]!;
+    at += blanks[at]!;
+    const sep = /^(?::=|=>|==|!=|:|=)/.exec(lower.slice(at, at + 2));
+    if (sep) steps += blanks[at + sep[0].length]! * PER_BLANK_AFTER_SEPARATOR;
+    return steps;
+  };
+  const afterRun = new Map<number, number>();
   let cost = n;
   for (const k of KEYWORDS) {
-    for (let at = lower.indexOf(k); at !== -1; at = lower.indexOf(k, at + 1)) cost += runEnd[at]! - at + PER_KEYWORD_STEPS;
+    for (let at = lower.indexOf(k); at !== -1; at = lower.indexOf(k, at + 1)) {
+      const end = runEnd[at]!;
+      let tail = afterRun.get(end);
+      if (tail === undefined) afterRun.set(end, (tail = after(end)));
+      cost += end - at + PER_KEYWORD_STEPS + tail;
+    }
   }
   return cost;
 }

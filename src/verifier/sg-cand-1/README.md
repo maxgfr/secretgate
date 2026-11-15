@@ -28,7 +28,7 @@ file to its git blob id at `4e93cfa`.
 
 Two comments of `scanner.ts` describe it as it stood in that commit: "For
 development tools only (scripts/rule-candidates.mjs): the product does not call
-anything below" was true of `src/engine/scanner.ts` there. In this copy the
+anything below" was true of `src/engine/scanner.ts` there; in this copy the
 verifier calls `traceMatches` and `dedupeFindings`. And "there is no deadline":
-the verifier adds one between two rules without changing this file (see
-`deadlineAllowlist` in `../generator.ts`).
+there is none here either. The verifier runs this engine in a child process
+that is killed at a hard deadline (`../child.ts`), which no regex can outlast.

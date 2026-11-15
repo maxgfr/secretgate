@@ -1362,6 +1362,8 @@ const commands: Record<string, Command> = {
   uninstall: cmdUninstall,
   status: cmdStatus,
   verifier: async (args, io) => (await import("./verifier/cli.js")).cmdVerifier(args, io),
+  // Internal: the verifier's child process (src/verifier/child.ts).
+  "__verifier-job": async (_args, io) => (await import("./verifier/job.js")).cmdVerifierJob(() => readIoStdin(io), io.stdout),
   hook: cmdHook,
   "__verify-opencode": cmdVerifyOpencode,
 };

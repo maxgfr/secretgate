@@ -107,7 +107,8 @@ describe("VerifierSession", () => {
   it("skips values the user allowlisted, and stops entirely when its rule id is allowlisted", () => {
     const s = new VerifierSession({ config: ON, loader: acceptAll, allowlist: { sha256: [sha256(value)] } });
     expect(s.accept(text, []).map((f) => text.slice(f.start, f.end))).toEqual([`${other}x`]);
-    expect(s.stats.allowlisted).toBe(1);
+    // The frozen engine's own user-value gate: the value is no candidate at all.
+    expect(s.stats).toMatchObject({ candidates: 1, judged: 1 });
     const off = new VerifierSession({ config: ON, loader: acceptAll, allowlist: { rules: [VERIFIER_RULE_ID] } });
     expect(off.active).toBe(false);
     expect(off.accept(text, [])).toEqual([]);

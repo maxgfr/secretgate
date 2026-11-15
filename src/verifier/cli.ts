@@ -7,7 +7,7 @@ import { rewriteFileAtomic } from "../fs-atomic.js";
 import { defaultVaultHome } from "../vault/vault.js";
 import { ASSET_BASE_URL, ASSETS, assetDir, assetStates, fetchAssets, MODEL_COMMIT, MODEL_NAME } from "./assets.js";
 import { THRESHOLD_PRESETS, type ThresholdPreset, type VerifierConfig } from "./config.js";
-import { loadEngine, VERIFIER_BUDGET_MS, VERIFIER_MAX_CANDIDATES, VERIFIER_RULE_ID } from "./verifier.js";
+import { loadEngine, VERIFIER_BUDGET_MS, VERIFIER_HARD_MS, VERIFIER_MAX_CANDIDATES, VERIFIER_RULE_ID } from "./verifier.js";
 
 // `secretgate verifier [status | fetch | on [--threshold f1|f05|f2] | off]`.
 
@@ -154,7 +154,7 @@ function status(io: Io): number {
     );
   }
   io.stdout(
-    `budget    ${VERIFIER_BUDGET_MS} ms and ${VERIFIER_MAX_CANDIDATES} candidates per hook event, the load included; past it the rest is not judged (SECRETGATE_DEBUG=verifier says so)\n`,
+    `budget    a child process per hook event, killed at ${VERIFIER_HARD_MS} ms (then the rules' result stands alone); inside it ${VERIFIER_BUDGET_MS} ms and ${VERIFIER_MAX_CANDIDATES} candidates, past which the rest is not judged (SECRETGATE_DEBUG=verifier says so)\n`,
   );
   io.stdout(`files     ${ASSETS.length} data files, pinned by sha256; the JavaScript that loads them is part of secretgate\n`);
   return 0;

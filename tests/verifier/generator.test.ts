@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { candidateRecords, GENERIC_KEYWORD, genericKeywordCost } from "../../src/verifier/generator.js";
-import { ScanBudgetError } from "../../src/verifier/sg-cand-1/scanner.js";
 import { GENERIC_KEYWORD_COST_LIMIT } from "../../src/verifier/verifier.js";
 import { CORPUS } from "../fixtures/sg-cand-corpus.mjs";
 
@@ -127,10 +126,17 @@ describe("candidateRecords", () => {
     expect(candidateRecords(lock).length).toBeGreaterThan(0);
   });
 
-  it("stops between two rules past its deadline, and otherwise returns the same records", () => {
+  it("applies the user's disabled rules and allowlisted values as the frozen engine does", () => {
     const [, text] = CORPUS[0] as [string, string];
-    expect(() => candidateRecords(text, { deadline: performance.now() - 1 })).toThrow(ScanBudgetError);
-    expect(candidateRecords(text, { deadline: performance.now() + 60_000 })).toEqual(candidateRecords(text));
+    const all = candidateRecords(text, { reported: false });
+    const value = all.find((r) => r.rule === "generic-keyword")!.value;
+    const without = candidateRecords(text, { reported: false, allowlist: { rules: ["generic-keyword"] } });
+    expect(without.some((r) => r.rule === "generic-keyword")).toBe(false);
+    // What another rule also proposes is still proposed, by that rule.
+    expect(without.length).toBeGreaterThan(0);
+    const valueAllowed = candidateRecords(text, { reported: false, allowlist: { sha256: [sha256(value)] } });
+    expect(valueAllowed.some((r) => r.value === value)).toBe(false);
+    expect(candidateRecords(text, { reported: false, allowlist: {} })).toEqual(all);
   });
 });
 

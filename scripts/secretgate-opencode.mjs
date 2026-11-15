@@ -8606,15 +8606,17 @@ function isAttachmentPayload(value, declared) {
   if (typeof value !== "string" || value.length < 8 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
   return hasSignature(Buffer.from(value.slice(0, 1400), "base64"), typeof declared === "string" ? declared.toLowerCase() : "");
 }
-function eventRedactor(vault, source, allowlist, verifier) {
+function eventRedactor(vault, source, allowlist, seen) {
   const deadline = performance.now() + SCAN_DEADLINE_MS;
   let remaining = SCAN_CAP;
-  const extra = verifier?.active ? (text, findings) => verifier.accept(text, findings) : void 0;
   return (text) => {
     remaining -= text.length;
-    const deadlineMs = deadline + (verifier?.spentMs ?? 0) - performance.now();
+    const deadlineMs = deadline - performance.now();
     if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
-    return redactText(text, vault, source, { allowlist, deadlineMs }, extra).text;
+    const t0 = performance.now();
+    const r = redactText(text, vault, source, { allowlist, deadlineMs });
+    seen?.(text, r, performance.now() - t0);
+    return r.text;
   };
 }
 

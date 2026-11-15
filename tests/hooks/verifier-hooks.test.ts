@@ -6,6 +6,8 @@ import { handleClaudeCode } from "../../src/hooks/claude-code.js";
 import { handleCodex } from "../../src/hooks/codex.js";
 import { isStoppedSession } from "../../src/hooks/stopped-session.js";
 import { Vault } from "../../src/vault/vault.js";
+import { setJobRunner } from "../../src/verifier/child.js";
+import { runJob } from "../../src/verifier/job.js";
 import { type EngineLoader, setEngineLoader, VERIFIER_RULE_ID } from "../../src/verifier/verifier.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
@@ -41,9 +43,13 @@ beforeEach(() => {
   loads = 0;
   seen = [];
   setEngineLoader(engine(() => 0.9));
+  // The job runs in this process (the fake engine is this process's); the
+  // child process itself is tested in verifier-bound.test.ts.
+  setJobRunner((job) => ({ ok: true, result: runJob(job), ms: 0 }));
 });
 afterEach(() => {
   setEngineLoader(undefined);
+  setJobRunner(undefined);
   delete process.env.SECRETGATE_HOME;
   rmSync(home, { recursive: true, force: true });
 });
@@ -121,6 +127,16 @@ describe("the verifier in the hooks", () => {
     );
     const b = await handleClaudeCode("post-tool-use", bash(`DB_PASS=${value}\n`));
     expect(b).toEqual({ stdout: "", exit: 0 });
+  });
+
+  it("does not judge or redact a candidate only a rule the user disabled proposes; allow --rule verifier:s6-secrets switches it off", async () => {
+    verifierConfig({ enabled: true });
+    writeFileSync(join(home, "allowlist.json"), JSON.stringify({ rules: ["generic-keyword"] }));
+    expect(await handleClaudeCode("post-tool-use", bash(`DB_PASS=${value}\n`))).toEqual({ stdout: "", exit: 0 });
+    expect(seen).toEqual([]);
+    writeFileSync(join(home, "allowlist.json"), JSON.stringify({ rules: [VERIFIER_RULE_ID] }));
+    expect(await handleClaudeCode("post-tool-use", bash(`DB_PASS=${value}\n`))).toEqual({ stdout: "", exit: 0 });
+    expect(loads).toBe(0);
   });
 
   it("is skipped when the config entry is invalid", async () => {
@@ -207,6 +223,19 @@ describe("the verifier at the PostToolBatch gate", () => {
     expect(out.continue).toBe(false);
     expect(out.stopReason).toContain("github-pat");
     expect(out.stopReason).not.toContain(VERIFIER_RULE_ID);
+  });
+
+  it("does not judge again, at the batch gate, the strings PostToolUse answered with (and does judge the others)", async () => {
+    verifierConfig({ enabled: true });
+    setEngineLoader(engine(() => 0.1));
+    const text = `DB_PASS=${value}\n`;
+    expect(await handleClaudeCode("post-tool-use", bash(text))).toEqual({ stdout: "", exit: 0 });
+    expect(seen.length).toBe(1);
+    await handleClaudeCode("post-tool-batch", batch({ tool_name: "Bash", tool_response: text }));
+    expect(seen.length).toBe(1);
+    // The record is taken by that batch: the next one judges again.
+    await handleClaudeCode("post-tool-batch", batch({ tool_name: "Bash", tool_response: text }));
+    expect(seen.length).toBe(2);
   });
 
   it("finds nothing in a result PostToolUse already redacted with it", async () => {

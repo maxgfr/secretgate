@@ -1,10 +1,9 @@
-import { writeSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
 import { isAllowedValue, isDisabledRule, type UserAllowlist } from "../engine/allowlist.js";
 import { shannonEntropy } from "../engine/entropy.js";
 import type { Finding } from "../engine/scanner.js";
-import { repositoryRoot } from "../paths.js";
 import { type AssetName, readAsset } from "./assets.js";
+import { VERIFIER_RULE_ID } from "./common.js";
+export { debugFromEnv, repositoryPath, VERIFIER_HARD_MS, VERIFIER_RULE_ID } from "./common.js";
 import type { ThresholdPreset, VerifierConfig } from "./config.js";
 import { type CandidateRecord, candidateRecords, genericKeywordCost } from "./generator.js";
 import { verifierFromModule, type WasmModule, type WasmVerifier, webAssembly } from "./host.js";
@@ -22,22 +21,21 @@ import { verifierFromModule, type WasmModule, type WasmVerifier, webAssembly } f
 //     not the pinned one, a WebAssembly error, its budget running out) skips
 //     it, and the text goes on exactly as the rules left it.
 
-export const VERIFIER_RULE_ID = "verifier:s6-secrets";
-
 // ---------------------------------------------------------------- budget
-// A hook is a fresh process: loading the engine costs about 20 ms, and each
-// candidate about 2.6 ms (3.3 ms without relaxed SIMD). The verifier has its
-// own budget per event, apart from the rules' (src/hooks/scan-budget.ts): when
-// it runs out, the candidates left are not judged (debug output says how
-// many), and the rules' deadline is moved by the time the verifier took.
+// The generator and the model run in a child process of this same program
+// (src/verifier/child.ts), killed at a hard deadline: the rules' result is
+// computed first and never waits on the verifier longer than VERIFIER_HARD_MS.
+// Inside the child, a softer budget stops judging in time to answer with what
+// it judged: when it runs out, the candidates left are not judged (debug
+// output says how many).
 
-/** Wall-clock time per event, the engine's load included. */
+/** The child's own budget, from its start: it answers with what it judged by then. */
 export const VERIFIER_BUDGET_MS = 750;
 /** Candidates judged per event. */
 export const VERIFIER_MAX_CANDIDATES = 200;
 /** A longer string is not given to the generator. */
 export const VERIFIER_MAX_TEXT = 1024 * 1024;
-/** A string whose generic-keyword bound is higher is not given to the generator (see genericKeywordCost). */
+/** An early skip only: a string whose generic-keyword estimate is higher is not given to the generator (see genericKeywordCost). */
 export const GENERIC_KEYWORD_COST_LIMIT = 50_000_000;
 
 // ---------------------------------------------------------------- engine
@@ -119,22 +117,6 @@ export function setEngineLoader(loader: EngineLoader | undefined): void {
 
 // ---------------------------------------------------------------- candidates
 
-/**
- * A path the hook can trust (the file a Read named), relative to its
- * repository, `/`-separated, as the model was trained with CredData's paths.
- * Undefined when the file is outside the repository (or the working
- * directory when there is none): an absolute path would bring the words of
- * the directories above it into the model's scope.
- */
-export function repositoryPath(file: unknown, cwd: string): string | undefined {
-  if (typeof file !== "string" || file.length === 0) return undefined;
-  const abs = resolve(cwd, file);
-  const root = repositoryRoot(cwd) ?? resolve(cwd);
-  const rel = relative(root, abs);
-  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return undefined;
-  return rel.split(sep).join("/");
-}
-
 /** The candidate as the engine reads it: the generator's record, with the file's path when there is one. */
 export function engineCandidate(record: CandidateRecord, path: string | undefined): Record<string, unknown> {
   return path === undefined ? { ...record } : { ...record, file: path };
@@ -177,22 +159,9 @@ export interface SessionOptions {
   loader?: EngineLoader;
   budgetMs?: number;
   maxCandidates?: number;
+  /** false: give every string to the generator (tests of the hard bound) */
+  earlySkip?: boolean;
   debug?: (line: string) => void;
-}
-
-/** `SECRETGATE_DEBUG=verifier` (or `1`/`all`) writes what the verifier did, never a value, to stderr. */
-export function debugFromEnv(): ((line: string) => void) | undefined {
-  const d = process.env.SECRETGATE_DEBUG ?? "";
-  if (!/(?:^|,)(?:verifier|1|all)(?:,|$)/.test(d)) return undefined;
-  // Synchronous, and a failed write is dropped: debug output must never be
-  // what makes a hook fail (an asynchronous EPIPE on stderr would crash it).
-  return (line) => {
-    try {
-      writeSync(2, `secretgate verifier: ${line}\n`);
-    } catch {
-      // stderr is gone: nothing to report to
-    }
-  };
 }
 
 /**
@@ -234,11 +203,6 @@ export class VerifierSession {
     return this.stopped === undefined;
   }
 
-  /** Time spent in the verifier so far, in ms: the rules' deadline moves by it. */
-  get spentMs(): number {
-    return this.stats.ms;
-  }
-
   private stop(why: string): void {
     this.stopped ??= why;
     this.stats.stopped ??= why;
@@ -265,22 +229,17 @@ export class VerifierSession {
         this.stop("budget");
         return out;
       }
-      if (text.length > VERIFIER_MAX_TEXT) {
+      if (this.opts.earlySkip !== false && text.length > VERIFIER_MAX_TEXT) {
         this.skipString("too long");
         return out;
       }
-      if (genericKeywordCost(text) > GENERIC_KEYWORD_COST_LIMIT) {
+      if (this.opts.earlySkip !== false && genericKeywordCost(text) > GENERIC_KEYWORD_COST_LIMIT) {
         this.skipString("generic-keyword bound");
         return out;
       }
-      let records: CandidateRecord[];
-      try {
-        records = candidateRecords(text, { reported: false, deadline: end });
-      } catch {
-        this.skipString("generator deadline");
-        this.stop("budget");
-        return out;
-      }
+      // The user's allowlist goes to the frozen engine: a rule the user
+      // disabled proposes nothing, an allowlisted value is no candidate.
+      const records = candidateRecords(text, { reported: false, ...(this.opts.allowlist ? { allowlist: this.opts.allowlist } : {}) });
       this.stats.candidates += records.length;
       const todo: CandidateRecord[] = [];
       for (const r of records) {
