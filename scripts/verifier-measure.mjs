@@ -101,6 +101,8 @@ const stats = {
   unjudged: 0,
   budgetFiles: 0,
   hardBoundFiles: 0,
+  spread: 0,
+  spreadFiles: 0,
   childFailures: {},
   stringsSkipped: {},
   builds: {},
@@ -111,6 +113,8 @@ const childMs = [];
 const verifierMsLoaded = [];
 const loadMs = [];
 const wallOff = [];
+// The five files the verifier slowed most: their paths and times, no content.
+const top = [];
 const wallOn = [];
 const began = performance.now();
 for (const [file, repo] of files) {
@@ -130,8 +134,16 @@ for (const [file, repo] of files) {
   const on = hook(homes.on, input);
   wallOff.push(off.ms);
   wallOn.push(on.ms);
+  top.push({ file: opt.tree ? relative(opt.tree, file) : relative(opt.base, file), off: Math.round(off.ms), on: Math.round(on.ms), child: Number(/(?:answered in|after) (\d+) ms/.exec(on.stderr)?.[1] ?? 0) });
+  top.sort((a, b) => b.on - b.off - (a.on - a.off));
+  top.length = Math.min(top.length, 5);
   if (off.status !== 0) stats.failures.off++;
   if (on.status !== 0) stats.failures.on++;
+  const spreadLine = /spread to (\d+) other place/.exec(on.stderr);
+  if (spreadLine) {
+    stats.spread += Number(spreadLine[1]);
+    stats.spreadFiles++;
+  }
   const line = on.stderr.split("\n").find((l) => l.startsWith("secretgate verifier: "));
   if (line === undefined) continue;
   // The child's time, spawn to answer (or to its kill at the hard bound).
@@ -191,6 +203,7 @@ console.log(
       verifierMsPerFileWhenItLoadedTheEngine: { files: verifierMsLoaded.length, ...ms(verifierMsLoaded) },
       engineLoadMs: ms(loadMs),
       hookWallMs: { off: ms(wallOff), on: ms(wallOn), addedPerFile: ms(added) },
+      slowest: top,
       seconds: Number(((performance.now() - began) / 1000).toFixed(0)),
     },
     null,

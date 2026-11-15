@@ -294,14 +294,13 @@ measured with the file's path given to the model, and with the model alone.
 |---|---:|---:|
 | files with a verifier redaction | **41 (0.46%)** | **24 (0.27%)** |
 | values the verifier accepted | 85 | 61 |
-| by the rule that proposed them | generic-keyword 45, gcp-api-key 16, generic-api-key 11, github-pat 7, password-assignment 4, url-credentials 2 | generic-keyword 26, gcp-api-key 16, generic-api-key 8, github-pat 7, password-assignment 4 |
-| candidates / left to a rule finding | 13,389 / 80 | 13,475 / 80 |
-| judged / not judged (child budget or cap reached, files) | 12,150 / 1,159 (7 files) | 12,066 / 1,329 (6 files) |
-| files where the child hit the **hard bound** (killed, nothing added) | **1** | **0** |
-| child process time, spawn to answer, median / p95 / max | 49 / 159 / 1,019 ms | 50 / 134 / 909 ms |
-| engine load in the child, median / p95 | 24.3 / 47.5 ms | 24.6 / 33.1 ms |
-| hook wall time off → on, median | 43.8 → 97.8 ms | 43.6 → 100.0 ms |
-| **added wall time per file, median / p95 / max** | **52 / 175 / 1,109 ms** | **52 / 139 / 937 ms** |
+| other places those values were spread to (whole tokens, see the rule above) | 30, in 5 files | 24, in 4 files |
+| candidates judged / not judged (child budget or cap reached, files) | 12,236 / 1,153 (6 files) | 11,982 / 1,468 (11 files) |
+| files where the child hit the **hard bound** (killed, nothing added) | **0** | **0** |
+| child process time, spawn to answer, median / p95 / max | 42 / 122 / 809 ms | 55 / 171 / 997 ms |
+| hook wall time off → on, median | 38.8 → 84.3 ms | 47.8 → 112.9 ms |
+| **added wall time per file, median / p95** | **44 / 127 ms** | **59 / 187 ms** |
+| added wall time per file, max | 863 ms | 3,258 ms (a load spike: see below) |
 | files where the rules' output changed | **0** | **0** |
 | hook failures, off / on | 0 / 0 | 0 / 0 |
 
@@ -309,8 +308,14 @@ measured with the file's path given to the model, and with the model alone.
 the verifier put back to its value, the output with the verifier on must be the
 output with it off, byte for byte (same rule findings, same placeholders). The
 median added time is mostly the child process's start (it runs for every event
-with text, before anyone knows whether it holds a candidate); the largest one
-is the file whose child was killed at the bound.
+with text, before anyone knows whether it holds a candidate).
+
+The maxima of a census are not bounds on this machine: it was shared with a
+training job, and a fresh process can wait seconds for the CPU. The Read
+reading's maximum (3,258 ms) came with a child that answered in under 1 s; a
+second full run put other files on top (up to 5,057 ms, children of 43 to
+494 ms), and those five files, replayed four times each, added at most 460 ms.
+The bound itself is what `tests/hooks/verifier-bound.test.ts` measures.
 
 These files are clean: every redaction above is a false positive of the
 verifier, as far as they were read. skycmd's hand reading of the 110 candidates

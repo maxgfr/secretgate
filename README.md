@@ -99,7 +99,7 @@ anything per-use.
   0.46% of them without a path (most tool output) and 0.27% with one (a Read);
   the model's own 0.35% was measured with the path. The rules' result is
   computed first and never changes; the verifier runs in a child process killed
-  at 1 s and adds at most about 1.25 s to a hook (median 52 ms measured); it
+  at 1 s and adds at most about 1.25 s to a hook (median 44 to 59 ms measured); it
   never blocks a prompt or stops a turn, and any failure leaves the rules'
   result exactly as with it off. Its four data files are downloaded only by
   `secretgate verifier fetch`, pinned by sha256 — see

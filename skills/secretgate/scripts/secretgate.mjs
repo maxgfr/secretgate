@@ -4053,7 +4053,8 @@ function verifyStrings(seen, o) {
       own.add(text);
       if (propagates(f.secret)) values.add(f.secret);
     }
-    spread: for (const text of texts) {
+    let spread = 0;
+    spreading: for (const text of texts) {
       const rules = byText.get(text);
       const list = spans.get(text) ?? [];
       for (const v of values) {
@@ -4065,12 +4066,15 @@ function verifyStrings(seen, o) {
                 text,
                 list.sort((a, b) => a.start - b.start)
               );
-            break spread;
+            break spreading;
           }
           const end = at + v.length;
           if (!wholeToken(text, at, end) || !applicableSpan(text, at, end, placeholders(text))) continue;
           const f = finding(text, at, end);
-          if (!rules.some((r) => overlaps(r, f)) && !list.some((x) => overlaps(x, f))) list.push(f);
+          if (!rules.some((r) => overlaps(r, f)) && !list.some((x) => overlaps(x, f))) {
+            list.push(f);
+            spread++;
+          }
         }
       }
       if (list.length > 0)
@@ -4079,6 +4083,7 @@ function verifyStrings(seen, o) {
           list.sort((a, b) => a.start - b.start)
         );
     }
+    if (spread > 0) o.debug?.(`${o.label}: spread to ${spread} other place(s) of the same value`);
     return { extra: spans, completed: true, deadline, own };
   } catch {
     return none;

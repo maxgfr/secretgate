@@ -146,7 +146,8 @@ export function verifyStrings(seen: readonly Seen[], o: VerifyOptions): Verified
     // A long, unusual value accepted once is redacted where else the event
     // repeats it as a whole token (a value echoed by a log line): that place
     // may give the model no context, and the value would reach it in clear.
-    spread: for (const text of texts) {
+    let spread = 0;
+    spreading: for (const text of texts) {
       const rules = byText.get(text)!;
       const list = spans.get(text) ?? [];
       for (const v of values) {
@@ -158,12 +159,15 @@ export function verifyStrings(seen: readonly Seen[], o: VerifyOptions): Verified
                 text,
                 list.sort((a, b) => a.start - b.start),
               );
-            break spread;
+            break spreading;
           }
           const end = at + v.length;
           if (!wholeToken(text, at, end) || !applicableSpan(text, at, end, placeholders(text))) continue;
           const f = finding(text, at, end);
-          if (!rules.some((r) => overlaps(r, f)) && !list.some((x) => overlaps(x, f))) list.push(f);
+          if (!rules.some((r) => overlaps(r, f)) && !list.some((x) => overlaps(x, f))) {
+            list.push(f);
+            spread++;
+          }
         }
       }
       if (list.length > 0)
@@ -172,6 +176,7 @@ export function verifyStrings(seen: readonly Seen[], o: VerifyOptions): Verified
           list.sort((a, b) => a.start - b.start),
         );
     }
+    if (spread > 0) o.debug?.(`${o.label}: spread to ${spread} other place(s) of the same value`);
     return { extra: spans, completed: true, deadline, own };
   } catch {
     return none;
