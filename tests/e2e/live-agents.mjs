@@ -513,6 +513,12 @@ for (const agent of agents) {
   } finally {
     server.closeAllConnections();
     await new Promise((r) => server.close(r));
-    rmSync(scratch, { recursive: true, force: true });
+    // An agent that is still exiting can write into the scratch directory while it is removed
+    // (ENOTEMPTY on macOS): retry, and never let the cleanup of a temporary directory decide the run.
+    try {
+      rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (e) {
+      console.warn(`warning: could not remove ${scratch}: ${e.code ?? e.message}`);
+    }
   }
 }
