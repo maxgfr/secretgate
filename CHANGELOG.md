@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.9.0](https://github.com/maxgfr/secretgate/compare/v1.8.1...v1.9.0) (2026-11-16)
+
+
+### Bug Fixes
+
+* **verifier:** a hard time bound in a child process, and the user's disabled rules ([312f5b3](https://github.com/maxgfr/secretgate/commit/312f5b3a1befc75e0d80ab379a58419455f314a2))
+* **verifier:** delete batch records older than 24 hours ([f3b5f9a](https://github.com/maxgfr/secretgate/commit/f3b5f9ae5734a1032bb1d082ccd2511e7d790592))
+* **verifier:** redact only the spans it accepts; drop value propagation ([bc7ae98](https://github.com/maxgfr/secretgate/commit/bc7ae98f6b0f42cc95b7f29cd4b415278322ef20))
+* **verifier:** spread a value only as a whole, unusual token; never touch keys; one deadline per event; no path from a session id ([4dc10a5](https://github.com/maxgfr/secretgate/commit/4dc10a5ff236bd5881074832ab61df33070720eb))
+
+
+### Features
+
+* an experimental, opt-in ML verifier after the rules (s6-secrets-verify-pico) ([93522bd](https://github.com/maxgfr/secretgate/commit/93522bdff35329c34851f7604d35a2af3c956b39))
+
 ## [1.8.1](https://github.com/maxgfr/secretgate/compare/v1.8.0...v1.8.1) (2026-11-14)
 
 

@@ -16941,7 +16941,7 @@ init_self();
 init_vault();
 
 // src/version.ts
-var VERSION = "1.8.1";
+var VERSION = "1.9.0";
 
 // src/cli.ts
 var USAGE2 = `secretgate ${VERSION} \u2014 local secrets firewall for coding agents
