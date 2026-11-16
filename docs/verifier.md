@@ -362,7 +362,7 @@ and no rule finding changed.
   the SIMD128 build (on a less loaded moment of the same machine; under the
   heaviest load of the re-run, 3.48 and 5.22 ms).
 - With the verifier **off**: its code is not loaded, but the bundle is larger
-  (`scripts/secretgate.mjs` 389,863 → 587,487 bytes; the OpenCode plugin
+  (`scripts/secretgate.mjs` 389,863 → 590,656 bytes; the OpenCode plugin
   275,115 → 277,172), and a hook starts about 1 ms later (median 45.0 → 46.0
   ms over 120 interleaved runs of a small PostToolUse event). Its answers are
   those of v1.8.1 (`tests/e2e/option-off.mjs`).
