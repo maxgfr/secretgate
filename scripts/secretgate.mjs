@@ -3980,11 +3980,9 @@ var init_common = __esm({
 var hook_exports = {};
 __export(hook_exports, {
   REDACT_AGAIN_MS: () => REDACT_AGAIN_MS,
-  REPEAT_MIN_LENGTH: () => REPEAT_MIN_LENGTH,
   VERIFIER_RULE_ID: () => VERIFIER_RULE_ID,
   applicableSpan: () => applicableSpan,
   debugFromEnv: () => debugFromEnv,
-  propagates: () => propagates,
   recordHandled: () => recordHandled,
   repositoryPath: () => repositoryPath,
   takeHandled: () => takeHandled,
@@ -3999,23 +3997,13 @@ function applicableSpan(text, start, end, placeholders) {
   if (end < text.length && isLow(text.charCodeAt(end)) && isHigh(text.charCodeAt(end - 1))) return false;
   return placeholders.every((p) => !overlaps(p, { start, end }) || start <= p.start && end >= p.end);
 }
-function propagates(value) {
-  return value.length >= REPEAT_MIN_LENGTH && (/\d/.test(value) || /[a-z]/.test(value) && /[A-Z]/.test(value));
-}
-function wholeToken(text, at, end) {
-  const before = at > 0 ? text.slice(Math.max(0, at - 2), at) : "";
-  const after = text.slice(end, end + 2);
-  const last = before ? [...before].at(-1) : "";
-  const next = after ? [...after][0] : "";
-  return !(last && WORD.test(last)) && !(next && WORD.test(next));
-}
 function verifyStrings(seen, o) {
-  const none = { extra: /* @__PURE__ */ new Map(), completed: false, deadline: 0, own: /* @__PURE__ */ new Set() };
+  const none = { extra: /* @__PURE__ */ new Map(), completed: false, deadline: 0 };
   try {
     if (!o.config.enabled || isDisabledRule(VERIFIER_RULE_ID, o.allowlist)) return none;
     const byText = /* @__PURE__ */ new Map();
     for (const s of seen) if (s.text.length >= 4 && !byText.has(s.text)) byText.set(s.text, s.findings);
-    if (byText.size === 0) return { extra: /* @__PURE__ */ new Map(), completed: true, deadline: 0, own: /* @__PURE__ */ new Set() };
+    if (byText.size === 0) return { extra: /* @__PURE__ */ new Map(), completed: true, deadline: 0 };
     const texts = [...byText.keys()];
     const job = {
       v: 1,
@@ -4039,8 +4027,6 @@ function verifyStrings(seen, o) {
       return p;
     };
     const spans = /* @__PURE__ */ new Map();
-    const own = /* @__PURE__ */ new Set();
-    const values = /* @__PURE__ */ new Set();
     for (const a of out.result.accepted) {
       const text = texts[a.i];
       if (text === void 0 || !applicableSpan(text, a.start, a.end, placeholders(text))) continue;
@@ -4050,41 +4036,9 @@ function verifyStrings(seen, o) {
       const list = spans.get(text) ?? [];
       if (!list.some((x) => overlaps(x, f))) list.push(f);
       spans.set(text, list);
-      own.add(text);
-      if (propagates(f.secret)) values.add(f.secret);
     }
-    let spread = 0;
-    spreading: for (const text of texts) {
-      const rules = byText.get(text);
-      const list = spans.get(text) ?? [];
-      for (const v of values) {
-        for (let at = text.indexOf(v); at !== -1; at = text.indexOf(v, at + v.length)) {
-          if (performance.now() > deadline) {
-            o.debug?.(`${o.label}: the event's deadline passed while spreading accepted values; the strings left keep what they have`);
-            if (list.length > 0)
-              spans.set(
-                text,
-                list.sort((a, b) => a.start - b.start)
-              );
-            break spreading;
-          }
-          const end = at + v.length;
-          if (!wholeToken(text, at, end) || !applicableSpan(text, at, end, placeholders(text))) continue;
-          const f = finding(text, at, end);
-          if (!rules.some((r) => overlaps(r, f)) && !list.some((x) => overlaps(x, f))) {
-            list.push(f);
-            spread++;
-          }
-        }
-      }
-      if (list.length > 0)
-        spans.set(
-          text,
-          list.sort((a, b) => a.start - b.start)
-        );
-    }
-    if (spread > 0) o.debug?.(`${o.label}: spread to ${spread} other place(s) of the same value`);
-    return { extra: spans, completed: true, deadline, own };
+    for (const list of spans.values()) list.sort((a, b) => a.start - b.start);
+    return { extra: spans, completed: true, deadline };
   } catch {
     return none;
   }
@@ -4115,7 +4069,7 @@ function takeHandled(session) {
   }
   return (s) => hashes.size > 0 && hashes.has(digest(s));
 }
-var REDACT_AGAIN_MS, overlaps, PLACEHOLDER2, finding, isHigh, isLow, REPEAT_MIN_LENGTH, WORD, handledDir, sessionFile, digest;
+var REDACT_AGAIN_MS, overlaps, PLACEHOLDER2, finding, isHigh, isLow, handledDir, sessionFile, digest;
 var init_hook = __esm({
   "src/verifier/hook.ts"() {
     "use strict";
@@ -4136,8 +4090,6 @@ var init_hook = __esm({
     };
     isHigh = (c) => c >= 55296 && c <= 56319;
     isLow = (c) => c >= 56320 && c <= 57343;
-    REPEAT_MIN_LENGTH = 12;
-    WORD = /[\p{L}\p{N}_]/u;
     handledDir = () => join11(defaultVaultHome(), "verifier-batch");
     sessionFile = (session) => {
       if (typeof session !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(session)) return void 0;
@@ -16031,7 +15983,7 @@ function postToolUse(input, cfg, lib) {
     };
     if (v.extra.size > 0) {
       const ms = (s) => first.get(s)?.ms ?? Number.POSITIVE_INFINITY;
-      for (const s of [...v.extra.keys()].sort((a, b) => Number(v.own.has(b)) - Number(v.own.has(a)) || ms(a) - ms(b))) valueOut(s);
+      for (const s of [...v.extra.keys()].sort((a, b) => ms(a) - ms(b))) valueOut(s);
       const again = mapStrings(filtered.value, valueOut, skip, (k) => keys.get(k) ?? k);
       value = again.value;
       changed ||= again.changed;

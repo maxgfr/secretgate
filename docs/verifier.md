@@ -111,14 +111,16 @@ real"). A model's judgement does not stop a turn: only a rule finding does.
   judges only the candidates that **no** rule finding overlaps; a rule finding
   is redacted exactly as without it (same span, same placeholder, same rule
   id): the measurements below check this file by file.
-- What it may add: the values it accepts, at their own span; and another place
-  where the same event repeats one of them, only when the value is long and
-  unusual enough not to be a word or a piece of code (**12 characters or more,
-  with a digit or both cases**) and that occurrence is a **whole token** (no
-  letter, digit or `_` right before or after it), never inside or across an
-  existing `SECRETGATE_…` placeholder. The model's precision was about 0.84: a
-  false acceptance must stay one wrong redaction, never spread through the
-  text (an accepted `postgres` must not eat `postgresql://` or `postgres_fdw`).
+- What it may add: the values it accepts, **at their own span only**, the span
+  the candidate generator reported. A value it accepts is never looked for
+  elsewhere: another occurrence of it in the event (an echo in a log line, a
+  path segment, a longer token that holds it, an object key) stays as the
+  rules left it. The model's precision was about 0.84: a false acceptance must
+  stay one wrong redaction, never spread through the text (an accepted
+  `postgres` must not eat `postgresql://` or `postgres_fdw`, an accepted
+  `node_modules` must not touch `node_modules2`). An earlier version redacted
+  other whole-token occurrences of a long, unusual accepted value; it was
+  removed after review, because it rewrote ordinary text.
 - It judges and rewrites string **values** only: object keys of a tool result
   (`filePath`, `stdout`, `type`…) are never sent to it nor rewritten by it; the
   rules redact keys as they always did. A span it answers is applied only if it
@@ -154,14 +156,12 @@ estimate cannot be the safety of a regex that may not change. So:
   (about 10 ms and 4 ms), but Bun did not interrupt a worker stuck in a regex
   (it waited for the regex), and a worker shares the hook's memory, where a
   process killed with its own memory takes a runaway allocation with it.
-- **Everything the verifier causes after its child answers** (spreading a
-  value, re-redacting the strings it adds to) runs under **one deadline per
-  event, 250 ms** from that answer. Each distinct string is handled once (an
-  output that repeats a string pays once); the strings holding a value the
-  child accepted come first, then the ones it only spreads to, the cheapest
-  rule pass first; a string whose rules' pass took longer than the time left
-  is not redacted again; and past the deadline the strings left keep the
-  rules' result.
+- **Everything the verifier causes after its child answers** (re-redacting
+  the strings it adds to) runs under **one deadline per event, 250 ms** from
+  that answer. Each distinct string is handled once (an output that repeats a
+  string pays once), the cheapest rule pass first; a string whose rules' pass
+  took longer than the time left is not redacted again; and past the deadline
+  the strings left keep the rules' result.
 - So the **worst-case added wall time per hook event is 1,000 ms for the child
   plus 250 ms after it, about 1.25 s** (a rule that is running when the deadline
   passes finishes first: the rules' deadline is checked between two rules),
@@ -294,7 +294,6 @@ measured with the file's path given to the model, and with the model alone.
 |---|---:|---:|
 | files with a verifier redaction | **41 (0.46%)** | **24 (0.27%)** |
 | values the verifier accepted | 85 | 61 |
-| other places those values were spread to (whole tokens, see the rule above) | 30, in 5 files | 24, in 4 files |
 | candidates / left to a rule finding | 13,475 / 80 | 13,475 / 80 |
 | candidates judged / not judged (child budget or cap reached, files) | 12,242 / 1,153 (6 files) | 11,927 / 1,468 (11 files) |
 | files where the child hit the **hard bound** (killed, nothing added) | **0** | **0** |
@@ -304,6 +303,13 @@ measured with the file's path given to the model, and with the model alone.
 | added wall time per file, max | 863 ms | 3,258 ms (a load spike: see below) |
 | files where the rules' output changed | **0** | **0** |
 | hook failures, off / on | 0 / 0 | 0 / 0 |
+
+This census was run with the earlier version that also redacted other
+whole-token occurrences of an accepted value (30 more places in 5 files
+without a path, 24 in 4 files with it); that step is gone, and it was not run
+again. The counts above are those of the accepted values themselves, which
+the removal does not change; the added times include the few strings that
+step redacted again.
 
 "The rules' output changed" is checked file by file: with every placeholder of
 the verifier put back to its value, the output with the verifier on must be the

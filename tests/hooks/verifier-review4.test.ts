@@ -51,7 +51,7 @@ const bash = (stdout: string, stderr = "", session = "s1") =>
   });
 const out = (r: { stdout: string }) => (r.stdout ? JSON.parse(r.stdout).hookSpecificOutput.updatedToolOutput : undefined);
 
-describe("1. a value it accepts spreads only as a whole, unusual token", () => {
+describe("1. only the span it accepts is redacted, never another occurrence of its value", () => {
   it("does not corrupt text that merely contains a short or common value", async () => {
     on();
     const stderr = "DATABASE_URL=postgresql://localhost:5432/app image: postgres:16-alpine; use the postgres_fdw extension; login as root1234567";
@@ -62,13 +62,43 @@ describe("1. a value it accepts spreads only as a whole, unusual token", () => {
     }
   });
 
-  it("redacts a long, mixed value where it stands alone elsewhere, never inside a longer token", async () => {
+  it("a path segment and a longer token that hold the accepted value stay as they were", async () => {
+    on();
+    const stderr = "ls /app/node_modules2/x /app/node_modules/.bin node_modules";
+    const r = out(await handleClaudeCode("post-tool-use", bash("DB_PASSWORD=node_modules\n", stderr)));
+    expect(r.stdout).toMatch(/^DB_PASSWORD=SECRETGATE_[0-9a-f]{12}\n$/);
+    expect(r.stderr).toBe(stderr);
+  });
+
+  it("a long, mixed value stays in clear everywhere but its accepted span, alone or inside a longer token", async () => {
     on();
     const v = ["Hb4", "wE9", "zN2", "cK7", "qL1"].join("");
-    const stderr = `using ${v} now; id x${v} and ${v}_2 and ${v}9 stay`;
+    const stderr = `using ${v} now; path /srv/${v}/bin; id x${v} and ${v}_2 and ${v}9 stay`;
     const r = out(await handleClaudeCode("post-tool-use", bash(`DB_PASS=${v}\n`, stderr)));
-    expect(r.stderr).toMatch(/^using SECRETGATE_[0-9a-f]{12} now; /);
-    expect(r.stderr.endsWith(`id x${v} and ${v}_2 and ${v}9 stay`)).toBe(true);
+    expect(r.stdout).toMatch(/^DB_PASS=SECRETGATE_[0-9a-f]{12}\n$/);
+    expect(r.stderr).toBe(stderr);
+  });
+
+  it("a JSON key equal to the value, and another string equal to it, are left untouched", async () => {
+    on();
+    const v = ["Hb4", "wE9", "zN2", "cK7", "qL1"].join("");
+    const r = await handleClaudeCode(
+      "post-tool-use",
+      JSON.stringify({
+        session_id: "s1",
+        cwd: "/tmp",
+        tool_name: "mcp__s__get",
+        tool_input: {},
+        tool_response: [
+          { type: "text", text: `DB_PASS=${v}`, meta: { [v]: v } },
+          { type: "text", text: v },
+        ],
+      }),
+    );
+    const o = out(r);
+    expect(o[0].text).toMatch(/^DB_PASS=SECRETGATE_[0-9a-f]{12}$/);
+    expect(o[0].meta).toEqual({ [v]: v });
+    expect(o[1].text).toBe(v);
   });
 });
 

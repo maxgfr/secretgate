@@ -132,14 +132,6 @@ describe("the text around a candidate", () => {
     expect(out).not.toContain(value);
     expect(restorePlaceholders(out, new Vault()).text).toBe(`DB_PASS=${value}${value}Zz\n`);
   });
-
-  it("a value it accepts once is redacted wherever else the output repeats it", async () => {
-    // Only the assignment is a candidate; the echo has no context of its own.
-    const text = `DB_PASS=${value}\nconnecting with ${value} now\n`;
-    const out = stdoutOf(await handleClaudeCode("post-tool-use", bash(text)));
-    expect(out).not.toContain(value);
-    expect(out.match(/SECRETGATE_[0-9a-f]{12}/g)!.length).toBe(2);
-  });
 });
 
 describe("concurrent hooks", () => {

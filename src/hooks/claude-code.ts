@@ -412,10 +412,9 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig, lib?: Ve
       return out;
     };
     if (v.extra.size > 0) {
-      // In order of value: the strings holding a value the child accepted,
-      // then the ones it only spreads to; the cheapest rule pass first.
+      // The cheapest rule pass first.
       const ms = (s: string): number => first.get(s)?.ms ?? Number.POSITIVE_INFINITY;
-      for (const s of [...v.extra.keys()].sort((a, b) => Number(v.own.has(b)) - Number(v.own.has(a)) || ms(a) - ms(b))) valueOut(s);
+      for (const s of [...v.extra.keys()].sort((a, b) => ms(a) - ms(b))) valueOut(s);
       const again = mapStrings(filtered.value, valueOut, skip, (k) => keys.get(k) ?? k);
       value = again.value;
       changed ||= again.changed;

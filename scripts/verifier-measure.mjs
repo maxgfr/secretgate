@@ -101,8 +101,6 @@ const stats = {
   unjudged: 0,
   budgetFiles: 0,
   hardBoundFiles: 0,
-  spread: 0,
-  spreadFiles: 0,
   childFailures: {},
   stringsSkipped: {},
   builds: {},
@@ -139,11 +137,6 @@ for (const [file, repo] of files) {
   top.length = Math.min(top.length, 5);
   if (off.status !== 0) stats.failures.off++;
   if (on.status !== 0) stats.failures.on++;
-  const spreadLine = /spread to (\d+) other place/.exec(on.stderr);
-  if (spreadLine) {
-    stats.spread += Number(spreadLine[1]);
-    stats.spreadFiles++;
-  }
   const line = on.stderr.split("\n").find((l) => l.startsWith("secretgate verifier: "));
   if (line === undefined) continue;
   // The child's time, spawn to answer (or to its kill at the hard bound).

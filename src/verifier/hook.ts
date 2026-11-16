@@ -47,8 +47,6 @@ export interface Verified {
   completed: boolean;
   /** `performance.now()` past which nothing more the verifier causes is done in this event: REDACT_AGAIN_MS after the child answered */
   deadline: number;
-  /** the strings with a span the child accepted in them (not only spread there) */
-  own: Set<string>;
 }
 
 const overlaps = (a: { start: number; end: number }, b: { start: number; end: number }): boolean => a.start < b.end && b.start < a.end;
@@ -74,34 +72,15 @@ export function applicableSpan(text: string, start: number, end: number, placeho
   return placeholders.every((p) => !overlaps(p, { start, end }) || (start <= p.start && end >= p.end));
 }
 
-// Where else a value the verifier accepted is redacted. A false acceptance
-// (its precision was about 0.84 on the test repositories) must stay one wrong
-// redaction, never spread through the text: another occurrence is redacted
-// only when the value is long and unusual enough not to be a word or a
-// fragment of code (12 characters or more, with a digit or both cases), and
-// the occurrence is a whole token (no letter, digit or `_` on either side).
-export const REPEAT_MIN_LENGTH = 12;
-export function propagates(value: string): boolean {
-  return value.length >= REPEAT_MIN_LENGTH && (/\d/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value)));
-}
-const WORD = /[\p{L}\p{N}_]/u;
-function wholeToken(text: string, at: number, end: number): boolean {
-  const before = at > 0 ? text.slice(Math.max(0, at - 2), at) : "";
-  const after = text.slice(end, end + 2);
-  const last = before ? [...before].at(-1)! : "";
-  const next = after ? [...after][0]! : "";
-  return !(last && WORD.test(last)) && !(next && WORD.test(next));
-}
-
 /** The verifier's spans for an event's strings, under the hard bound. Never throws. */
 export function verifyStrings(seen: readonly Seen[], o: VerifyOptions): Verified {
-  const none: Verified = { extra: new Map(), completed: false, deadline: 0, own: new Set() };
+  const none: Verified = { extra: new Map(), completed: false, deadline: 0 };
   try {
     if (!o.config.enabled || isDisabledRule(VERIFIER_RULE_ID, o.allowlist)) return none;
     // Each distinct string once, with its rule findings.
     const byText = new Map<string, readonly Finding[]>();
     for (const s of seen) if (s.text.length >= 4 && !byText.has(s.text)) byText.set(s.text, s.findings);
-    if (byText.size === 0) return { extra: new Map(), completed: true, deadline: 0, own: new Set() };
+    if (byText.size === 0) return { extra: new Map(), completed: true, deadline: 0 };
     const texts = [...byText.keys()];
     const job: VerifierJob = {
       v: 1,
@@ -117,8 +96,8 @@ export function verifyStrings(seen: readonly Seen[], o: VerifyOptions): Verified
       return none;
     }
     o.debug?.(`${o.label}: child answered in ${out.ms.toFixed(0)} ms; ${out.result.summary}`);
-    // Everything below runs after the child answered, under one deadline for
-    // the event (shared with the re-redaction of the hook, `deadline`).
+    // What the verifier causes after the child answered (the hook redacting
+    // again the strings it adds to) runs under one deadline for the event.
     const deadline = performance.now() + REDACT_AGAIN_MS;
     const placeholdersOf = new Map<string, Array<{ start: number; end: number }>>();
     const placeholders = (text: string) => {
@@ -127,10 +106,10 @@ export function verifyStrings(seen: readonly Seen[], o: VerifyOptions): Verified
       return p;
     };
     // What the child accepted, each in its own text, where it can be applied
-    // and overlaps no rule finding.
+    // and overlaps no rule finding. Only those spans: a value accepted once is
+    // never looked for elsewhere in the event (a false acceptance stays one
+    // wrong redaction, and a longer token or a key that holds it is untouched).
     const spans = new Map<string, Finding[]>();
-    const own = new Set<string>();
-    const values = new Set<string>();
     for (const a of out.result.accepted) {
       const text = texts[a.i];
       if (text === undefined || !applicableSpan(text, a.start, a.end, placeholders(text))) continue;
@@ -140,44 +119,9 @@ export function verifyStrings(seen: readonly Seen[], o: VerifyOptions): Verified
       const list = spans.get(text) ?? [];
       if (!list.some((x) => overlaps(x, f))) list.push(f);
       spans.set(text, list);
-      own.add(text);
-      if (propagates(f.secret)) values.add(f.secret);
     }
-    // A long, unusual value accepted once is redacted where else the event
-    // repeats it as a whole token (a value echoed by a log line): that place
-    // may give the model no context, and the value would reach it in clear.
-    let spread = 0;
-    spreading: for (const text of texts) {
-      const rules = byText.get(text)!;
-      const list = spans.get(text) ?? [];
-      for (const v of values) {
-        for (let at = text.indexOf(v); at !== -1; at = text.indexOf(v, at + v.length)) {
-          if (performance.now() > deadline) {
-            o.debug?.(`${o.label}: the event's deadline passed while spreading accepted values; the strings left keep what they have`);
-            if (list.length > 0)
-              spans.set(
-                text,
-                list.sort((a, b) => a.start - b.start),
-              );
-            break spreading;
-          }
-          const end = at + v.length;
-          if (!wholeToken(text, at, end) || !applicableSpan(text, at, end, placeholders(text))) continue;
-          const f = finding(text, at, end);
-          if (!rules.some((r) => overlaps(r, f)) && !list.some((x) => overlaps(x, f))) {
-            list.push(f);
-            spread++;
-          }
-        }
-      }
-      if (list.length > 0)
-        spans.set(
-          text,
-          list.sort((a, b) => a.start - b.start),
-        );
-    }
-    if (spread > 0) o.debug?.(`${o.label}: spread to ${spread} other place(s) of the same value`);
-    return { extra: spans, completed: true, deadline, own };
+    for (const list of spans.values()) list.sort((a, b) => a.start - b.start);
+    return { extra: spans, completed: true, deadline };
   } catch {
     return none;
   }
