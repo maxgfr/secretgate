@@ -194,6 +194,11 @@ estimate cannot be the safety of a regex that may not change. So:
   model reads, so its strings are judged again, which costs one more child
   process per batch (43 to 56 ms in the live test) under the same hard bound;
   a result `PostToolUse` redacted holds no candidate any more there.
+  A record not written to for **24 hours** (a session that ended before its
+  batch, a take that crashed) is deleted the next time a hook touches that
+  directory: at most 128 entries are looked at per hook, only files and links
+  with a record's name, by their own time; a link is unlinked, never
+  followed, and nothing is done when the directory is itself a link.
 - Strings are walked in a fixed order and candidates are judged in text order.
   The engine is loaded only when a string has a candidate to judge, and the
   verifier's code is loaded only when it is on.

@@ -3979,17 +3979,20 @@ var init_common = __esm({
 // src/verifier/hook.ts
 var hook_exports = {};
 __export(hook_exports, {
+  HANDLED_MAX_AGE_MS: () => HANDLED_MAX_AGE_MS,
+  PRUNE_MAX_ENTRIES: () => PRUNE_MAX_ENTRIES,
   REDACT_AGAIN_MS: () => REDACT_AGAIN_MS,
   VERIFIER_RULE_ID: () => VERIFIER_RULE_ID,
   applicableSpan: () => applicableSpan,
   debugFromEnv: () => debugFromEnv,
+  pruneHandled: () => pruneHandled,
   recordHandled: () => recordHandled,
   repositoryPath: () => repositoryPath,
   takeHandled: () => takeHandled,
   verifyStrings: () => verifyStrings
 });
 import { createHash as createHash4 } from "crypto";
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync6, readFileSync as readFileSync6, renameSync as renameSync4, rmSync as rmSync4 } from "fs";
+import { appendFileSync as appendFileSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync6, opendirSync, readFileSync as readFileSync6, renameSync as renameSync4, rmSync as rmSync4, unlinkSync as unlinkSync2 } from "fs";
 import { basename as basename6, dirname as dirname7, join as join11 } from "path";
 function applicableSpan(text, start, end, placeholders) {
   if (!(Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length)) return false;
@@ -4043,11 +4046,44 @@ function verifyStrings(seen, o) {
     return none;
   }
 }
+function pruneHandled(now = Date.now()) {
+  const dir = handledDir();
+  try {
+    const st = lstatSync2(dir);
+    if (!st.isDirectory()) return;
+  } catch {
+    return;
+  }
+  let handle;
+  try {
+    handle = opendirSync(dir);
+    for (let seen = 0; seen < PRUNE_MAX_ENTRIES; seen++) {
+      const entry = handle.readSync();
+      if (entry === null) break;
+      if (!RECORD_NAME.test(entry.name)) continue;
+      const file = join11(dir, entry.name);
+      if (dirname7(file) !== dir) continue;
+      try {
+        const st = lstatSync2(file);
+        if (!(st.isFile() || st.isSymbolicLink())) continue;
+        if (now - st.mtimeMs > HANDLED_MAX_AGE_MS) unlinkSync2(file);
+      } catch {
+      }
+    }
+  } catch {
+  } finally {
+    try {
+      handle?.closeSync();
+    } catch {
+    }
+  }
+}
 function recordHandled(session, strings2) {
   const file = sessionFile(session);
   if (file === void 0 || strings2.length === 0) return;
   try {
     mkdirSync6(handledDir(), { recursive: true, mode: 448 });
+    pruneHandled();
     appendFileSync2(file, `${[...new Set(strings2.map(digest))].join("\n")}
 `, { mode: 384 });
   } catch {
@@ -4066,10 +4102,11 @@ function takeHandled(session) {
       rmSync4(taken, { force: true });
     } catch {
     }
+    pruneHandled();
   }
   return (s) => hashes.size > 0 && hashes.has(digest(s));
 }
-var REDACT_AGAIN_MS, overlaps, PLACEHOLDER2, finding, isHigh, isLow, handledDir, sessionFile, digest;
+var REDACT_AGAIN_MS, overlaps, PLACEHOLDER2, finding, isHigh, isLow, handledDir, sessionFile, digest, HANDLED_MAX_AGE_MS, PRUNE_MAX_ENTRIES, RECORD_NAME;
 var init_hook = __esm({
   "src/verifier/hook.ts"() {
     "use strict";
@@ -4098,6 +4135,9 @@ var init_hook = __esm({
       return dirname7(file) === dir && basename6(file) === session ? file : void 0;
     };
     digest = (s) => createHash4("sha256").update(s).digest("hex");
+    HANDLED_MAX_AGE_MS = 24 * 60 * 60 * 1e3;
+    PRUNE_MAX_ENTRIES = 128;
+    RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}(?:\.\d+\.taken)?$/;
   }
 });
 

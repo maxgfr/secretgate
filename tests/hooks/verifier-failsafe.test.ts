@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lutimesSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ import { restorePlaceholders } from "../../src/redact.js";
 import { Vault } from "../../src/vault/vault.js";
 import { ASSETS, assetDir, assetStates } from "../../src/verifier/assets.js";
 import { setJobRunner } from "../../src/verifier/child.js";
-import { recordHandled, takeHandled } from "../../src/verifier/hook.js";
+import { HANDLED_MAX_AGE_MS, PRUNE_MAX_ENTRIES, pruneHandled, recordHandled, takeHandled } from "../../src/verifier/hook.js";
 import { runJob } from "../../src/verifier/job.js";
 import { type EngineLoader, setEngineLoader, VERIFIER_MAX_CANDIDATES } from "../../src/verifier/verifier.js";
 
@@ -144,6 +144,87 @@ describe("concurrent hooks", () => {
     // A session id that is not a plain name records nothing (no path from it).
     recordHandled("../../etc", ["x"]);
     expect(takeHandled("../../etc")("x")).toBe(false);
+  });
+});
+
+describe("old batch records", () => {
+  // Everything below lives in the temporary SECRETGATE_HOME of this file.
+  const dir = () => join(home, "verifier-batch");
+  const age = (path: string, ms: number) => {
+    const t = (Date.now() - ms) / 1000;
+    lutimesSync(path, t, t);
+  };
+  const old = HANDLED_MAX_AGE_MS + 60 * 60 * 1000;
+
+  it("deletes the records older than 24 hours when a hook next touches the directory, and keeps the others", () => {
+    recordHandled("stale", ["a"]);
+    recordHandled("fresh", ["b"]);
+    writeFileSync(join(dir(), "crashed.4242.taken"), "");
+    writeFileSync(join(dir(), "notes.txt"), "not a record");
+    age(join(dir(), "stale"), old);
+    age(join(dir(), "crashed.4242.taken"), old);
+    age(join(dir(), "notes.txt"), old);
+    age(join(dir(), "fresh"), HANDLED_MAX_AGE_MS - 60 * 60 * 1000);
+    // A record of another session is what touches the directory.
+    recordHandled("now", ["c"]);
+    expect(readdirSync(dir()).sort()).toEqual(["fresh", "notes.txt", "now"]);
+    expect(takeHandled("fresh")("b")).toBe(true);
+    // The batch side prunes too.
+    recordHandled("later", ["d"]);
+    age(join(dir(), "later"), old);
+    takeHandled("now");
+    expect(readdirSync(dir()).sort()).toEqual(["notes.txt"]);
+  });
+
+  it("never follows a link: a link is unlinked by its own age, its target stays; a linked directory is not pruned", () => {
+    mkdirSync(dir(), { recursive: true });
+    const outside = mkdtempSync(join(tmpdir(), "secretgate-outside-"));
+    try {
+      const target = join(outside, "precious");
+      writeFileSync(target, "keep");
+      utimesSync(target, (Date.now() - old) / 1000, (Date.now() - old) / 1000);
+      symlinkSync(target, join(dir(), "linked"));
+      symlinkSync(outside, join(dir(), "linkeddir"));
+      mkdirSync(join(dir(), "adir"));
+      writeFileSync(join(dir(), "adir", "inner"), "");
+      age(join(dir(), "adir", "inner"), old);
+      age(join(dir(), "adir"), old);
+      // The link to the old target is new itself: kept.
+      pruneHandled();
+      expect(readdirSync(dir()).sort()).toEqual(["adir", "linked", "linkeddir"]);
+      age(join(dir(), "linked"), old);
+      age(join(dir(), "linkeddir"), old);
+      pruneHandled();
+      expect(readdirSync(dir()).sort()).toEqual(["adir"]);
+      expect(existsSync(join(dir(), "adir", "inner"))).toBe(true);
+      expect(existsSync(target)).toBe(true);
+      // The record directory itself a link to elsewhere: nothing there is touched.
+      rmSync(dir(), { recursive: true, force: true });
+      writeFileSync(join(outside, "session"), "");
+      age(join(outside, "session"), old);
+      symlinkSync(outside, dir());
+      pruneHandled();
+      expect(readdirSync(outside).sort()).toEqual(["precious", "session"]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("is bounded per call, and never throws when the directory or a file is missing", () => {
+    expect(() => pruneHandled()).not.toThrow();
+    mkdirSync(dir(), { recursive: true });
+    const n = PRUNE_MAX_ENTRIES + 72;
+    for (let i = 0; i < n; i++) {
+      writeFileSync(join(dir(), `s${i}`), "");
+      age(join(dir(), `s${i}`), old);
+    }
+    pruneHandled();
+    expect(readdirSync(dir()).length).toBe(n - PRUNE_MAX_ENTRIES);
+    pruneHandled();
+    expect(readdirSync(dir()).length).toBe(0);
+    rmSync(dir(), { recursive: true, force: true });
+    expect(() => pruneHandled()).not.toThrow();
+    expect(takeHandled("s1")("x")).toBe(false);
   });
 });
 

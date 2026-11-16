@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, opendirSync, readFileSync, renameSync, rmSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { isDisabledRule, type UserAllowlist } from "../engine/allowlist.js";
 import { shannonEntropy } from "../engine/entropy.js";
@@ -147,12 +147,65 @@ const sessionFile = (session: unknown): string | undefined => {
 };
 const digest = (s: string): string => createHash("sha256").update(s).digest("hex");
 
+/** A record not written to for this long is deleted, the next time a hook touches the record directory. */
+export const HANDLED_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** The most directory entries one prune looks at: a hook pays for a few, never for the whole directory. */
+export const PRUNE_MAX_ENTRIES = 128;
+// The names this file creates: a session's record, and one being taken.
+const RECORD_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}(?:\.\d+\.taken)?$/;
+
+/**
+ * Deletes the records of the batch directory older than HANDLED_MAX_AGE_MS
+ * (a session that ended before its batch, a take that crashed). Opportunistic
+ * and bounded: at most PRUNE_MAX_ENTRIES entries per call. It deletes only an
+ * entry with a record's name that is a file or a symbolic link, by its own
+ * time (`lstat`), and unlinks a link without following it; it does nothing
+ * when the directory is itself a link. Never throws: an entry that vanishes
+ * in between is skipped.
+ */
+export function pruneHandled(now: number = Date.now()): void {
+  const dir = handledDir();
+  try {
+    const st = lstatSync(dir);
+    if (!st.isDirectory()) return;
+  } catch {
+    return;
+  }
+  let handle: ReturnType<typeof opendirSync> | undefined;
+  try {
+    handle = opendirSync(dir);
+    for (let seen = 0; seen < PRUNE_MAX_ENTRIES; seen++) {
+      const entry = handle.readSync();
+      if (entry === null) break;
+      if (!RECORD_NAME.test(entry.name)) continue;
+      const file = join(dir, entry.name);
+      if (dirname(file) !== dir) continue;
+      try {
+        const st = lstatSync(file);
+        if (!(st.isFile() || st.isSymbolicLink())) continue;
+        if (now - st.mtimeMs > HANDLED_MAX_AGE_MS) unlinkSync(file);
+      } catch {
+        // gone in between, or not ours to delete: the next prune sees it again
+      }
+    }
+  } catch {
+    // an unreadable directory only means nothing is pruned
+  } finally {
+    try {
+      handle?.closeSync();
+    } catch {
+      // already closed
+    }
+  }
+}
+
 /** Records the strings PostToolUse answered with, after the verifier judged them. Never throws. */
 export function recordHandled(session: unknown, strings: readonly string[]): void {
   const file = sessionFile(session);
   if (file === undefined || strings.length === 0) return;
   try {
     mkdirSync(handledDir(), { recursive: true, mode: 0o700 });
+    pruneHandled();
     // One append per call: concurrent PostToolUse hooks of a batch add lines.
     appendFileSync(file, `${[...new Set(strings.map(digest))].join("\n")}\n`, { mode: 0o600 });
   } catch {
@@ -177,6 +230,7 @@ export function takeHandled(session: unknown): (s: string) => boolean {
     } catch {
       // nothing recorded
     }
+    pruneHandled();
   }
   return (s) => hashes.size > 0 && hashes.has(digest(s));
 }
