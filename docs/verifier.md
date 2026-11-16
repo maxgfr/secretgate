@@ -179,7 +179,14 @@ estimate cannot be the safety of a regex that may not change. So:
   SIGTERM, crash or answer garbage (`tests/hooks/verifier-bound.test.ts`; with
   `SECRETGATE_BOUND_STRICT=1` the child's time must stay within 150 ms of the
   bound, which it did in every case). A machine starved of CPU can fire any
-  timer late; the bound is wall-clock time.
+  timer late; the bound is wall-clock time, so outside that strict mode a
+  child time over the bound plus 1 s fails the test only when a bare child,
+  killed at the same bound right after, is not as late. Those tests lift the
+  rules' own 5 s budget: some of their inputs take the rules about that long,
+  and the rules' answer (their result, or the fail-closed one past their
+  budget) would otherwise depend on the machine's speed. That the verifier
+  changes nothing past the rules' budget is tested on a budget that is always
+  spent: the answer with it on is the fail-closed answer with it off.
 - Inside the child, a softer budget: **750 ms** from its start and **200
   candidates**, past which the candidates left are **not judged**
   (`SECRETGATE_DEBUG=verifier` says how many), so that it can answer with what

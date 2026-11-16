@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleClaudeCode } from "../../src/hooks/claude-code.js";
+import { setScanDeadlineMs } from "../../src/hooks/scan-budget.js";
 import { spawnJob, setJobRunner } from "../../src/verifier/child.js";
 import { FAKE } from "../fixtures/fake-tokens.js";
 
@@ -27,7 +29,29 @@ afterEach(() => {
 // 150 ms when this file runs alone (SECRETGATE_BOUND_STRICT=1, as the
 // measurements of docs/verifier.md were made), 1 s inside a parallel suite on
 // a loaded machine, where any timer can fire late.
-const SLACK = process.env.SECRETGATE_BOUND_STRICT === "1" ? 150 : 1000;
+const STRICT = process.env.SECRETGATE_BOUND_STRICT === "1";
+const SLACK = STRICT ? 150 : 1000;
+
+// The bound is wall-clock time, enforced by the OS: the child is SIGKILLed when
+// the timer of the hook's spawn fires. On a machine starved of CPU that timer
+// fires late for any process, the hook's or not. So a child time over the
+// bound counts against the hook only when a bare child, killed by the same
+// kind of timer at the same bound right afterwards, is not as late: then the
+// lateness is the hook's own. (Not under SECRETGATE_BOUND_STRICT=1, where the
+// bound plus 150 ms is required as such.)
+function bareKillMs(hardMs: number): number {
+  const t0 = performance.now();
+  spawnSync(process.execPath, ["-e", "for(;;){}"], { timeout: hardMs, killSignal: "SIGKILL" });
+  return performance.now() - t0;
+}
+function expectWithinBound(ms: number, hardMs: number): void {
+  if (ms <= hardMs + SLACK || STRICT) {
+    expect(ms).toBeLessThanOrEqual(hardMs + SLACK);
+    return;
+  }
+  const bare = bareKillMs(hardMs);
+  expect(ms, `the child took ${ms.toFixed(0)} ms; a bare child killed at the same bound took ${bare.toFixed(0)} ms`).toBeLessThanOrEqual(bare + SLACK);
+}
 
 const k = (n: number) => "key".repeat(n);
 // The reviewer's hook inputs and their regex-only shapes, then other quadratic
@@ -75,10 +99,23 @@ async function timed(event: string, input: string): Promise<{ ms: number; stdout
   return { ms: performance.now() - t0, ...r };
 }
 
+// The rules' own budget (5 s per tool output, fail closed past it) is lifted
+// here: some of these shapes take the rules about that long, so the answer of
+// a run (the rules' result, or the fail-closed one) would depend on the
+// machine's speed, and two runs could differ with the verifier doing nothing.
+// With it lifted, every run reaches the verifier and both answers are the
+// rules' result. What happens past the rules' budget is checked below, on a
+// budget that is always spent.
 for (const earlySkip of [true, false])
   describe(`the verifier's hard bound${earlySkip ? "" : ", with the early skip turned off (the kill alone holds it)"}`, () => {
-    beforeEach(() => setJobRunner(earlySkip ? undefined : (job, ms) => spawnJob({ ...job, earlySkip: false }, ms)));
-    afterEach(() => setJobRunner(undefined));
+    beforeEach(() => {
+      setScanDeadlineMs(Number.POSITIVE_INFINITY);
+      setJobRunner(earlySkip ? undefined : (job, ms) => spawnJob({ ...job, earlySkip: false }, ms));
+    });
+    afterEach(() => {
+      setJobRunner(undefined);
+      setScanDeadlineMs(undefined);
+    });
     for (const [name, text] of Object.entries(SHAPES)) {
       for (const [event, make] of [
         ["post-tool-use", read],
@@ -108,7 +145,9 @@ for (const earlySkip of [true, false])
           const child = [...(existsSync(log) ? readFileSync(log, "utf8") : "").matchAll(/(?:answered in|after) (\d+) ms/g)].map((m) => Number(m[1]));
           // (At the batch gate a rule finding stops the turn and the verifier does not run.)
           if (!off.stdout.includes('"continue":false')) expect(child.length, "the verifier ran").toBeGreaterThan(0);
-          for (const ms of child) expect(ms).toBeLessThanOrEqual(VERIFIER_HARD_MS + SLACK);
+          // The rules' budget is lifted: no answer is the fail-closed one.
+          expect(off.stdout).not.toContain("could not scan this safely");
+          for (const ms of child) expectWithinBound(ms, VERIFIER_HARD_MS);
           // And the whole hook: the bound, the re-redaction budget, and the noise
           // of two runs of the rules over the same text.
           expect(on.ms - off.ms, `${on.ms.toFixed(0)} ms on, ${off.ms.toFixed(0)} ms off`).toBeLessThanOrEqual(VERIFIER_HARD_MS + 250 + SLACK + off.ms);
@@ -120,6 +159,45 @@ for (const earlySkip of [true, false])
       }
     }
   });
+
+describe("past the rules' budget, the verifier changes nothing", () => {
+  // A budget that is always spent (0 ms): the rules fail closed at the first
+  // string, whatever the machine. With the verifier on, the answer must be
+  // that same fail-closed answer, never an empty one, and the verifier does
+  // not run.
+  beforeEach(() => setScanDeadlineMs(0));
+  afterEach(() => setScanDeadlineMs(undefined));
+  for (const [event, make] of [
+    ["post-tool-use", read],
+    ["post-tool-use", bash],
+    ["post-tool-batch", batch],
+  ] as const) {
+    it(`${event} ${make === read ? "Read" : make === bash ? "Bash" : ""}: the fail-closed answer, with the option on as off`, async () => {
+      const text = SHAPES["2 MiB of keywords"]!;
+      const run = async (on: boolean) => {
+        const h = join(home, on ? "on" : "off");
+        mkdirSync(h, { recursive: true });
+        writeFileSync(join(h, "salt"), "0".repeat(64));
+        if (on) writeFileSync(join(h, "config.json"), JSON.stringify({ verifier: { enabled: true } }));
+        process.env.SECRETGATE_HOME = h;
+        return handleClaudeCode(event, make(text));
+      };
+      const off = await run(false);
+      const log = join(home, "debug.log");
+      process.env.SECRETGATE_DEBUG = "verifier";
+      process.env.SECRETGATE_DEBUG_FILE = log;
+      const on = await run(true).finally(() => {
+        delete process.env.SECRETGATE_DEBUG;
+        delete process.env.SECRETGATE_DEBUG_FILE;
+      });
+      expect(off.stdout).not.toBe("");
+      expect(off.stdout).toMatch(event === "post-tool-batch" ? /"continue":false/ : /could not scan this safely .* tool output withheld/);
+      expect(on.stdout).toBe(off.stdout);
+      expect(on.exit).toBe(off.exit);
+      expect(existsSync(log) ? readFileSync(log, "utf8") : "").not.toMatch(/answered in|NOTHING judged/);
+    });
+  }
+});
 
 describe("the child process, whatever it does", () => {
   const job = { v: 1 as const, texts: ["DB_PASS=x"], covered: [[]], threshold: "f1" as const };
@@ -138,7 +216,7 @@ describe("the child process, whatever it does", () => {
       const { VERIFIER_HARD_MS } = await import("../../src/verifier/verifier.js");
       const out = spawnJob(job, VERIFIER_HARD_MS, node(code));
       expect(out.ok).toBe(false);
-      expect(out.ms).toBeLessThanOrEqual(VERIFIER_HARD_MS + SLACK);
+      expectWithinBound(out.ms, VERIFIER_HARD_MS);
     }, 30_000);
   }
 

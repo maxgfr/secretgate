@@ -8,7 +8,7 @@ import { filterSearchOutput, promptMentions, promptScopeViolation } from "../sco
 import { Vault } from "../vault/vault.js";
 import type { Seen } from "../verifier/hook.js";
 import { preToolPolicy } from "./policy.js";
-import { eventRedactor, isAttachmentPayload, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS } from "./scan-budget.js";
+import { eventRedactor, isAttachmentPayload, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS, scanDeadlineMs } from "./scan-budget.js";
 import { isStoppedSession, stopSession } from "./stopped-session.js";
 import { extractToolCall } from "./tool-call.js";
 import { mapStrings } from "./walk.js";
@@ -437,7 +437,7 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig, lib?: Ve
 // what happens.
 function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig, lib?: VerifierLib): HookResult {
   const calls: unknown[] = Array.isArray(input.tool_calls) ? input.tool_calls : [];
-  const deadline = performance.now() + SCAN_DEADLINE_MS;
+  const deadline = performance.now() + scanDeadlineMs();
   const tools = new Set<string>();
   const rules = new Set<string>();
   const results: Array<{ tool: string; strings: string[] }> = [];

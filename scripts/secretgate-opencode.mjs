@@ -8540,6 +8540,10 @@ function restorePlaceholders(text, vault) {
 // src/hooks/scan-budget.ts
 var SCAN_CAP = 2 * 1024 * 1024;
 var SCAN_DEADLINE_MS = 5e3;
+var deadlineOverride;
+function scanDeadlineMs() {
+  return deadlineOverride ?? SCAN_DEADLINE_MS;
+}
 function isBinaryField(key, value, parent) {
   const media = ["image", "audio"].includes(parent.type ?? "");
   if ((key === "data" || key === "base64") && media) return isAttachmentPayload(value, parent.mimeType ?? parent.mime);
@@ -8607,7 +8611,7 @@ function isAttachmentPayload(value, declared) {
   return hasSignature(Buffer.from(value.slice(0, 1400), "base64"), typeof declared === "string" ? declared.toLowerCase() : "");
 }
 function eventRedactor(vault, source, allowlist, seen) {
-  const deadline = performance.now() + SCAN_DEADLINE_MS;
+  const deadline = performance.now() + scanDeadlineMs();
   let remaining = SCAN_CAP;
   return (text) => {
     remaining -= text.length;

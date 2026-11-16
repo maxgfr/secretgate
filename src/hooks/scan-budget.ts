@@ -9,6 +9,21 @@ export const SCAN_CAP = 2 * 1024 * 1024;
 // scan throws and the hook fails closed.
 export const SCAN_DEADLINE_MS = 5000;
 
+// For tests only: the budget a scan of tool output is held to. An input that
+// takes the rules about as long as the budget gets either answer (the rules'
+// result, or the fail-closed one past the budget) depending on the machine's
+// speed; a test that compares two runs fixes the budget so that both give the
+// same one. Never set outside tests.
+let deadlineOverride: number | undefined;
+/** For tests: replace the budget of a tool-output scan (undefined restores SCAN_DEADLINE_MS). */
+export function setScanDeadlineMs(ms: number | undefined): void {
+  deadlineOverride = ms;
+}
+/** The budget of a tool-output scan: SCAN_DEADLINE_MS unless a test replaced it. */
+export function scanDeadlineMs(): number {
+  return deadlineOverride ?? SCAN_DEADLINE_MS;
+}
+
 // A field that holds an image or a sound is not text and is left out of the
 // scan — for what it HOLDS, not for what it is called. On any tool, `{type:
 // "image", data: "…"}` used to be skipped unread, and `AWS <key id> <secret
@@ -106,7 +121,7 @@ export function eventRedactor(
   allowlist: UserAllowlist,
   seen?: (text: string, result: RedactResult, ms: number) => void,
 ): (text: string) => string {
-  const deadline = performance.now() + SCAN_DEADLINE_MS;
+  const deadline = performance.now() + scanDeadlineMs();
   let remaining = SCAN_CAP;
   return (text) => {
     remaining -= text.length;
