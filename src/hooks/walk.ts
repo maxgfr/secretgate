@@ -7,14 +7,23 @@
 // path a throw fails closed (safe), but that would withhold a legitimately deep
 // output — walking iteratively redacts it instead. Object KEYS are scanned too
 // (a secret can hide in a key name) while preserving the mapping.
+//
+// `fnKey`, when given, maps the object keys instead of `fn` (the verifier
+// judges values only, while the rules still redact keys).
 export function mapStrings(
   value: unknown,
   fn: (s: string) => string,
   skip?: (key: string, value: unknown, parent: any) => boolean,
+  fnKey: (s: string) => string = fn,
 ): { value: unknown; changed: boolean } {
   let changed = false;
   const map = (s: string): string => {
     const out = fn(s);
+    if (out !== s) changed = true;
+    return out;
+  };
+  const mapKey = (s: string): string => {
+    const out = fnKey(s);
     if (out !== s) changed = true;
     return out;
   };
@@ -38,7 +47,7 @@ export function mapStrings(
       }
     } else {
       for (const key of Object.keys(src)) {
-        const mappedKey = map(key);
+        const mappedKey = mapKey(key);
         const v = src[key];
         if (skip?.(key, v, src)) Object.defineProperty(dest, mappedKey, { value: v, enumerable: true, configurable: true, writable: true });
         else if (typeof v === "string") Object.defineProperty(dest, mappedKey, { value: map(v), enumerable: true, configurable: true, writable: true });

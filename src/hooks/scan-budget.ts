@@ -1,6 +1,6 @@
 import type { UserAllowlist } from "../engine/allowlist.js";
 import { type Finding, scan } from "../engine/scanner.js";
-import { redactText } from "../redact.js";
+import { type RedactResult, redactText } from "../redact.js";
 import type { Vault } from "../vault/vault.js";
 
 export const SCAN_CAP = 2 * 1024 * 1024;
@@ -8,6 +8,21 @@ export const SCAN_CAP = 2 * 1024 * 1024;
 // crafted payload can't stall the hook into a fail-open timeout; on exceed the
 // scan throws and the hook fails closed.
 export const SCAN_DEADLINE_MS = 5000;
+
+// For tests only: the budget a scan of tool output is held to. An input that
+// takes the rules about as long as the budget gets either answer (the rules'
+// result, or the fail-closed one past the budget) depending on the machine's
+// speed; a test that compares two runs fixes the budget so that both give the
+// same one. Never set outside tests.
+let deadlineOverride: number | undefined;
+/** For tests: replace the budget of a tool-output scan (undefined restores SCAN_DEADLINE_MS). */
+export function setScanDeadlineMs(ms: number | undefined): void {
+  deadlineOverride = ms;
+}
+/** The budget of a tool-output scan: SCAN_DEADLINE_MS unless a test replaced it. */
+export function scanDeadlineMs(): number {
+  return deadlineOverride ?? SCAN_DEADLINE_MS;
+}
 
 // A field that holds an image or a sound is not text and is left out of the
 // scan — for what it HOLDS, not for what it is called. On any tool, `{type:
@@ -96,14 +111,26 @@ export function isAttachmentPayload(value: unknown, declared?: unknown): value i
 // lockfiles and vendor trees whole; path-scoped rules stop running elsewhere),
 // and a path is what a repository or an agent arranges most easily. Those
 // allowlists are for `scan`, where the repository describes its own files.
-export function eventRedactor(vault: Vault, source: string, allowlist: UserAllowlist): (text: string) => string {
-  const deadline = performance.now() + SCAN_DEADLINE_MS;
+//
+// `seen`, when given, receives each string with what the rules made of it:
+// the experimental verifier works from there after the event's rule pass
+// (src/verifier/hook.ts), never inside it.
+export function eventRedactor(
+  vault: Vault,
+  source: string,
+  allowlist: UserAllowlist,
+  seen?: (text: string, result: RedactResult, ms: number) => void,
+): (text: string) => string {
+  const deadline = performance.now() + scanDeadlineMs();
   let remaining = SCAN_CAP;
   return (text) => {
     remaining -= text.length;
     const deadlineMs = deadline - performance.now();
     if (remaining < 0 || deadlineMs <= 0) throw new Error("scan budget exceeded");
-    return redactText(text, vault, source, { allowlist, deadlineMs }).text;
+    const t0 = performance.now();
+    const r = redactText(text, vault, source, { allowlist, deadlineMs });
+    seen?.(text, r, performance.now() - t0);
+    return r.text;
   };
 }
 

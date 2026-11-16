@@ -1,13 +1,14 @@
 import { loadConfig, type SecretgateConfig } from "../config.js";
 import { type DisableState, describeDisable, disableState, recordSession } from "../disable.js";
 import { applyPromptDirective, promptDirective } from "../prompt-directive.js";
-import { redactText } from "../redact.js";
+import { type RedactResult, redactText } from "../redact.js";
 import { restorePlaceholders } from "../redact.js";
 import { sensitivePathMatch } from "../paths.js";
 import { filterSearchOutput, promptMentions, promptScopeViolation } from "../scope.js";
 import { Vault } from "../vault/vault.js";
+import type { Seen } from "../verifier/hook.js";
 import { preToolPolicy } from "./policy.js";
-import { eventRedactor, isAttachmentPayload, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS } from "./scan-budget.js";
+import { eventRedactor, isAttachmentPayload, isBinaryField, resultScanner, SCAN_CAP, SCAN_DEADLINE_MS, scanDeadlineMs } from "./scan-budget.js";
 import { isStoppedSession, stopSession } from "./stopped-session.js";
 import { extractToolCall } from "./tool-call.js";
 import { mapStrings } from "./walk.js";
@@ -149,8 +150,8 @@ export async function handleClaudeCode(event: string, rawStdin: string, opts: { 
     const withNotice = (r: HookResult): HookResult => (notice && opts.notices !== false ? addSystemMessage(r, notice) : r);
     const state = disableState({ cwd: str(parsed?.cwd), sessionId: str(parsed?.session_id) });
     if (state.disabled) return withNotice(disabledResult(event, parsed, state, opts.notices !== false && !notice));
-    if (notice) return withNotice(handleEnabled(event, rawStdin, parsed, opts));
-    return handleEnabled(event, rawStdin, parsed, opts);
+    if (notice) return withNotice(await handleEnabled(event, rawStdin, parsed, opts));
+    return await handleEnabled(event, rawStdin, parsed, opts);
   } catch {
     // Parser/vault error messages can contain raw input. Never echo them.
     return failClosed(event, parsed, opts.blockFallback);
@@ -164,7 +165,20 @@ function addSystemMessage(r: HookResult, message: string): HookResult {
   return { stdout: JSON.stringify(out), exit: r.exit };
 }
 
-function handleEnabled(event: string, rawStdin: string, parsed: Record<string, any> | undefined, opts: { blockFallback?: boolean }): HookResult {
+// The experimental verifier's code is loaded only when it is on, and only for
+// the events that carry tool output: with it off, a hook pays nothing for it.
+// A verifier that cannot even load is skipped, never a reason to fail closed.
+type VerifierLib = typeof import("../verifier/hook.js");
+async function verifierFor(event: string, cfg: SecretgateConfig): Promise<VerifierLib | undefined> {
+  if (!cfg.verifier.enabled || (event !== "post-tool-use" && event !== "post-tool-batch")) return undefined;
+  try {
+    return await import("../verifier/hook.js");
+  } catch {
+    return undefined;
+  }
+}
+
+async function handleEnabled(event: string, rawStdin: string, parsed: Record<string, any> | undefined, opts: { blockFallback?: boolean }): Promise<HookResult> {
   if (!opts.blockFallback && isStoppedSession(parsed?.session_id)) {
     const reason = "secretgate stopped this session after an unscannable tool result. Start a fresh session; resuming may expose the old result.";
     if (event === "user-prompt-submit") return { stdout: JSON.stringify({ decision: "block", reason }), exit: 0 };
@@ -186,9 +200,9 @@ function handleEnabled(event: string, rawStdin: string, parsed: Record<string, a
     case "pre-tool-use":
       return preToolUse(input, cfg);
     case "post-tool-use":
-      return postToolUse(input, cfg);
+      return postToolUse(input, cfg, await verifierFor(event, cfg));
     case "post-tool-batch":
-      return postToolBatch(input, cfg);
+      return postToolBatch(input, cfg, await verifierFor(event, cfg));
     default:
       return { stdout: "", exit: 2 };
   }
@@ -319,7 +333,7 @@ function updatedOutput(value: unknown): HookResult {
   };
 }
 
-function postToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
+function postToolUse(input: Record<string, any>, cfg: SecretgateConfig, lib?: VerifierLib): HookResult {
   if (!("tool_response" in input)) return PASS;
   const toolName = String(input.tool_name ?? "");
   const filtered = scopeFilter(input, cfg);
@@ -333,7 +347,81 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookRes
   const mediaType = response?.type === "pdf" ? "application/pdf" : attachment?.type;
   const skip = (key: string, v: unknown, parent: object): boolean =>
     isBinaryField(key, v, parent) || (attachment !== undefined && parent === attachment && key === "base64" && isAttachmentPayload(v, mediaType));
-  const { value, changed } = mapStrings(filtered.value, eventRedactor(vault, `claude-code:${toolName}`, cfg.allowlist), skip);
+  // The rules' pass, complete, first. The experimental verifier (when it is
+  // on) works from its strings and their rule findings afterwards, under its
+  // hard bound, and can only add redactions to it.
+  const seen: Seen[] = [];
+  const first = new Map<string, { text: string; ms: number }>();
+  // The rules redact object keys as they always did; the verifier never sees
+  // nor rewrites one (a key is the tool's structure, not its output).
+  const keys = new Map<string, string>();
+  let inKey = false;
+  const source = `claude-code:${toolName}`;
+  const remember = lib
+    ? (s: string, r: RedactResult, ms: number) => {
+        if (inKey) keys.set(s, r.text);
+        else {
+          seen.push({ text: s, findings: r.findings });
+          first.set(s, { text: r.text, ms });
+        }
+      }
+    : undefined;
+  const redact = eventRedactor(vault, source, cfg.allowlist, remember);
+  const redactKey = (k: string): string => {
+    inKey = true;
+    try {
+      return redact(k);
+    } finally {
+      inKey = false;
+    }
+  };
+  let { value, changed } = lib ? mapStrings(filtered.value, redact, skip, redactKey) : mapStrings(filtered.value, redact, skip);
+  if (lib) {
+    const debug = lib.debugFromEnv();
+    // A Read names the file it read: only that path goes to the model.
+    const path = toolName === "Read" ? lib.repositoryPath(input.tool_input?.file_path, str(input.cwd) ?? process.cwd()) : undefined;
+    const v = lib.verifyStrings(seen, {
+      config: cfg.verifier,
+      allowlist: cfg.allowlist,
+      ...(path !== undefined ? { path } : {}),
+      ...(debug ? { debug } : {}),
+      label: "PostToolUse",
+    });
+    // Each distinct string once, all under ONE deadline for the event (set when
+    // the child answered): past it, the strings left keep the rules' result.
+    const answered = new Map<string, string>();
+    let late = 0;
+    const valueOut = (s: string): string => {
+      const known = answered.get(s);
+      if (known !== undefined) return known;
+      const pass = first.get(s);
+      let out = pass?.text ?? s;
+      const extra = v.extra.get(s);
+      if (extra && pass !== undefined) {
+        const left = v.deadline - lib.verifierNow();
+        // Redacting again costs about what the rules' pass over it cost.
+        if (left > 0 && pass.ms <= left) {
+          try {
+            out = redactText(s, vault, source, { allowlist: cfg.allowlist, deadlineMs: left }, () => extra).text;
+          } catch {
+            late++;
+          }
+        } else late++;
+      }
+      answered.set(s, out);
+      return out;
+    };
+    if (v.extra.size > 0) {
+      // The cheapest rule pass first.
+      const ms = (s: string): number => first.get(s)?.ms ?? Number.POSITIVE_INFINITY;
+      for (const s of [...v.extra.keys()].sort((a, b) => ms(a) - ms(b))) valueOut(s);
+      const again = mapStrings(filtered.value, valueOut, skip, (k) => keys.get(k) ?? k);
+      value = again.value;
+      changed ||= again.changed;
+      if (late > 0) debug?.(`PostToolUse: the event's deadline left ${late} string(s) with the rules' redaction only`);
+    } else for (const [s, p] of first) answered.set(s, p.text);
+    if (v.completed) lib.recordHandled(input.session_id, [...answered.values()]);
+  }
   if (!changed && !filtered.changed) return PASS;
   return updatedOutput(value);
 }
@@ -347,14 +435,18 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig): HookRes
 // the model as the tool printed it — or the host did not apply a replacement.
 // It cannot be replaced here either; the turn can be stopped, and that is
 // what happens.
-function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig): HookResult {
+function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig, lib?: VerifierLib): HookResult {
   const calls: unknown[] = Array.isArray(input.tool_calls) ? input.tool_calls : [];
-  const deadline = performance.now() + SCAN_DEADLINE_MS;
+  const deadline = performance.now() + scanDeadlineMs();
   const tools = new Set<string>();
   const rules = new Set<string>();
+  const results: Array<{ tool: string; strings: string[] }> = [];
   for (const call of calls) {
     if (call === null || typeof call !== "object" || !("tool_response" in call)) continue;
     const findings = resultScanner(cfg.allowlist, deadline);
+    const tool = String((call as { tool_name?: unknown }).tool_name ?? "a tool");
+    const strings: string[] = [];
+    results.push({ tool, strings });
     // An image or a PDF arrives as a content block of the result, `{type:
     // "image" | "document", source: {type: "base64", media_type, data}}`.
     // Only such a block, at the top of the result, holds an attachment.
@@ -362,22 +454,49 @@ function postToolBatch(input: Record<string, any>, cfg: SecretgateConfig): HookR
     const sources = new Set<unknown>();
     for (const b of blocks as Array<{ type?: unknown; source?: { type?: unknown } } | null>)
       if ((b?.type === "image" || b?.type === "document") && b.source?.type === "base64") sources.add(b.source);
+    const scanned = (s: string): string => {
+      for (const f of findings(s)) {
+        rules.add(f.ruleId);
+        tools.add(tool);
+      }
+      return s;
+    };
     mapStrings(
       call.tool_response,
       (s) => {
-        for (const f of findings(s)) {
-          rules.add(f.ruleId);
-          tools.add(String((call as { tool_name?: unknown }).tool_name ?? "a tool"));
-        }
-        return s;
+        // Values go to the verifier too, keys never.
+        strings.push(s);
+        return scanned(s);
       },
       (key, v, parent) => isBinaryField(key, v, parent) || (key === "data" && sources.has(parent) && isAttachmentPayload(v, parent.media_type)),
+      scanned,
     );
   }
-  if (rules.size === 0) return PASS;
+  if (rules.size === 0) return lib ? verifierBatchReport(results, cfg, lib, input.session_id) : PASS;
   return stopTurn(
     `the result of ${[...tools].join(", ")} still holds a secret (${[...rules].join(", ")}) on its way to the model. A hook can rewrite the output of a successful call only: this is the output of a call that failed (a command that exits non-zero, a tool error), or one whose redacted output Claude Code did not apply`,
     input.session_id,
     "that result stays in this session's transcript, so start a fresh session (if the value is not a secret, `secretgate allow` it first)",
   );
+}
+
+// The verifier at the last gate, after the rules found nothing: it reports,
+// and only reports. What it accepts here reached the model as the tool printed
+// it (a failed call, whose output no hook can rewrite, or an output the host
+// did not replace): it cannot be redacted any more, and a model's judgement
+// does not stop a turn or close a session — only a rule finding does.
+function verifierBatchReport(results: Array<{ tool: string; strings: string[] }>, cfg: SecretgateConfig, lib: VerifierLib, session: unknown): HookResult {
+  // What PostToolUse already judged (the rewrite of a successful call) is not judged again.
+  const handled = lib.takeHandled(session);
+  const debug = lib.debugFromEnv();
+  const seen: Seen[] = results.flatMap(({ strings }) => strings.filter((s) => !handled(s)).map((text) => ({ text, findings: [] })));
+  const v = lib.verifyStrings(seen, { config: cfg.verifier, allowlist: cfg.allowlist, ...(debug ? { debug } : {}), label: "PostToolBatch" });
+  const tools = new Set(results.filter(({ strings }) => strings.some((s) => v.extra.has(s))).map(({ tool }) => tool));
+  if (tools.size === 0) return PASS;
+  return {
+    stdout: JSON.stringify({
+      systemMessage: `secretgate: the experimental verifier (${lib.VERIFIER_RULE_ID}) judges that the result of ${[...tools].join(", ")} holds a credential the rules did not flag, and it reached the model as the tool printed it: a hook can rewrite the output of a successful call only (this one failed, or its output was not replaced). It was NOT redacted. Check the value and rotate it if it is real; the verifier is a model and can be wrong (secretgate verifier status).`,
+    }),
+    exit: 0,
+  };
 }

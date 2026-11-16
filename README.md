@@ -90,6 +90,20 @@ anything per-use.
   `node --env-file=.env`, `docker compose --env-file .env`, `mv .env .env.bak`,
   `openssl genrsa -out server.key` are fine; `cat`, `cp`, `curl -d @.env`,
   `source .env`, `< .env` are not.
+- **Experimental ML verifier** (opt-in, **off by default**): after the rules,
+  the 250 KB model `s6-secrets-verify-pico` judges the candidates they left in
+  tool output and redacts the ones it accepts, as `verifier:s6-secrets`. It
+  **failed its pre-registered gate** (line F1 0.856 against 0.733 for the best
+  rule scanner on 221 real repositories, +0.123 where +0.15 was asked) and is
+  offered as an experiment. On 8,825 clean real files it redacts something in
+  0.46% of them without a path (most tool output) and 0.27% with one (a Read);
+  the model's own 0.35% was measured with the path. The rules' result is
+  computed first and never changes; the verifier runs in a child process killed
+  at 1 s and adds at most about 1.25 s to a hook (median 44 to 59 ms measured); it
+  never blocks a prompt or stops a turn, and any failure leaves the rules'
+  result exactly as with it off. Its four data files are downloaded only by
+  `secretgate verifier fetch`, pinned by sha256 — see
+  [docs/verifier.md](docs/verifier.md).
 - **Project scope** (optional): a `.secretgate.json` can keep the agent inside
   some directories of the repository — see [Scope](#scope).
 - **Standalone scanner**: `secretgate scan <dir>` (exit 1 on findings) doubles
@@ -328,6 +342,7 @@ secretgate allow      <value> | --rule <id> | --path <glob>
 secretgate trust      [--revoke]   let the hooks honor this repo's .secretgate.json allowlist
 secretgate scope      [check <path…>]   show the project scope / exit 1 if a path is outside it
 secretgate vault      list | clear
+secretgate verifier   [status] | fetch | on [--threshold f1|f05|f2] | off   the experimental ML verifier (docs/verifier.md)
 secretgate disable    [--minutes N | --forever | --session] [--project] [--session <id>] [--scope]
 secretgate enable     [--project] [--session [id]] [--all]
 secretgate hook       <agent> <event>        (internal hook entrypoint)
@@ -335,6 +350,7 @@ secretgate hook       <agent> <event>        (internal hook entrypoint)
 
 Environment: `SECRETGATE_HOME` (state dir, default `~/.secretgate`),
 `SECRETGATE_DISABLE=1` (firewall off for this process),
+`SECRETGATE_DEBUG=verifier` (each hook writes what the verifier did to stderr: counts and times, never a value),
 `SECRETGATE_CLAUDE_CODE_VERSION` (the Claude Code version `init` and `status`
 should assume when `claude --version` cannot be run from their shell).
 

@@ -59,6 +59,15 @@ config directory (`plugins/`; OpenCode 1 is not supported). These survive `brew 
   `allow --path` exempts matching reads from the hook deny; tool output is still
   scanned. The agent's independent permission rules can still refuse a read.
 
+## The experimental verifier
+
+`secretgate verifier` shows the status of an opt-in ML verifier that judges
+what the rules left in tool output (off by default; see `docs/verifier.md` in
+the repository). Switch it on (`verifier fetch`, then `verifier on`) only when
+the user asks, and tell them it is experimental: its model failed its
+pre-registered gate. It never blocks a prompt or stops a turn; values it
+redacts appear as `verifier:s6-secrets` in `secretgate vault list`.
+
 ## Exceptions and pauses
 
 Prefer a targeted exception: inline `# pragma: allowlist secret` or

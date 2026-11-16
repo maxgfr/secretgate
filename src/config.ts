@@ -7,6 +7,7 @@ import type { UserAllowlist } from "./engine/allowlist.js";
 import { writeFileAtomic } from "./fs-atomic.js";
 import { canonical } from "./paths.js";
 import { defaultVaultHome } from "./vault/vault.js";
+import { readVerifierConfig, type VerifierConfig } from "./verifier/config.js";
 
 // Global config lives next to the vault (~/.secretgate/, overridable via
 // SECRETGATE_HOME): config.json for behavior toggles, allowlist.json for the
@@ -50,6 +51,8 @@ export interface SecretgateConfig {
   scopes: ScopeConfig[];
   /** A project `.secretgate.json` that could not be used — tool calls fail closed. */
   error?: { file: string; message: string };
+  /** The experimental verifier (global config only: off by default, see docs/verifier.md). */
+  verifier: VerifierConfig;
 }
 
 // JSON with comments and trailing commas (JSONC), as editors write it — the
@@ -194,6 +197,8 @@ export function loadConfig(cwd?: string): SecretgateConfig {
   return {
     restoreBash: base.restoreBash === true,
     hybrid: base.hybrid === "off" ? "off" : "auto",
+    // Only the user's own config.json: a repository cannot switch it on or off.
+    verifier: readVerifierConfig(base.verifier),
     allowlist: merged,
     scanAllowlist: forScan,
     untrusted,

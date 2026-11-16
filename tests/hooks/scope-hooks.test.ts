@@ -190,6 +190,14 @@ describe("tamper guard — the agent cannot quietly switch its own firewall off"
     expect((await handleClaudeCode("pre-tool-use", pre("Bash", { command: "secretgate enable" }))).stdout).toBe("{}");
   });
 
+  it("asks before the agent switches the verifier on or off or downloads its files; its status is free", async () => {
+    rmSync(join(proj, ".secretgate.json"));
+    for (const command of ["secretgate verifier off", "secretgate verifier on --threshold f2", "npx secretgate verifier fetch"])
+      expect(decision((await handleClaudeCode("pre-tool-use", pre("Bash", { command }))).stdout), command).toBe("ask");
+    for (const command of ["secretgate verifier", "secretgate verifier status"])
+      expect((await handleClaudeCode("pre-tool-use", pre("Bash", { command }))).stdout, command).toBe("{}");
+  });
+
   it("Codex cannot ask from a hook: it refuses and says to run it yourself", async () => {
     rmSync(join(proj, ".secretgate.json"));
     const r = JSON.parse((await handleCodex("pre-tool-use", pre("Bash", { command: "secretgate disable" }))).stdout);

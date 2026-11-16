@@ -26,8 +26,10 @@ function touchesOnly(call: NormalizedToolCall, file: string, cwd: string): boole
   return call.paths.length > 0 && call.paths.every((p) => canonical(resolve(cwd, expandHome(p))) === canonical(file));
 }
 
-// Subcommands that change what secretgate protects.
-const GUARDED = new Set(["disable", "allow", "uninstall", "trust", "vault clear"]);
+// Subcommands that change what secretgate protects. `verifier status` (and a
+// bare `verifier`) only reads; switching the verifier on or off, or
+// downloading its files, is the user's decision.
+const GUARDED = new Set(["disable", "allow", "uninstall", "trust", "vault clear", "verifier on", "verifier off", "verifier fetch"]);
 
 function tamperReason(call: NormalizedToolCall, cwd: string, analysis: ShellAnalysis | undefined): string | undefined {
   if (analysis) {

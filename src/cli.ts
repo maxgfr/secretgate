@@ -66,6 +66,7 @@ Commands:
   trust       Let the hooks honor this repo's .secretgate.json allowlist (--revoke to undo)
   scope       Show the project scope; \`scope check <path…>\` exits 1 if a path is outside it
   vault       Manage the placeholder vault (list | clear) — never prints secrets
+  verifier    The experimental, opt-in ML verifier (status | fetch | on [--threshold f1|f05|f2] | off)
   disable     Turn the firewall off for this run (--minutes N | --forever | --session, --project, --session <id>; --scope also lifts the project scope)
   enable      Turn it back on (--project, --session [id], --all)
   hook        Internal: agent hook entrypoint (secretgate hook <agent> <event>)
@@ -1328,6 +1329,10 @@ async function cmdStatus(_args: string[], io: Io): Promise<number> {
     `engines   built-in JS rules${gl ? (hybridOff ? ` (gitleaks at ${gl} is switched off: config hybrid = "off")` : ` + gitleaks binary in \`scan\` (${gl})`) : " (gitleaks binary not found — `scan` runs the JS engine only)"}\n`,
   );
 
+  // the experimental verifier: its code is loaded only when it is on
+  if (cfg.verifier.enabled || cfg.verifier.invalid) io.stdout((await import("./verifier/cli.js")).statusLine(cfg.verifier));
+  else io.stdout("verifier  off (experimental, opt-in: `secretgate verifier` for details)\n");
+
   // vault
   const vault = new Vault();
   const entries = vault.list();
@@ -1356,6 +1361,9 @@ const commands: Record<string, Command> = {
   install: cmdInstall,
   uninstall: cmdUninstall,
   status: cmdStatus,
+  verifier: async (args, io) => (await import("./verifier/cli.js")).cmdVerifier(args, io),
+  // Internal: the verifier's child process (src/verifier/child.ts).
+  "__verifier-job": async (_args, io) => (await import("./verifier/job.js")).cmdVerifierJob(() => readIoStdin(io), io.stdout),
   hook: cmdHook,
   "__verify-opencode": cmdVerifyOpencode,
 };

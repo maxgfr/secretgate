@@ -6,12 +6,14 @@ import { closeSync, openSync, realpathSync, renameSync, rmSync, statSync, writeS
 // another process) sees the old file or the new one, never half of either. The
 // temporary name is random and created exclusively; on any failure it is
 // removed rather than left next to the target.
-export function writeFileAtomic(path: string, content: string, mode = 0o644): void {
+export function writeFileAtomic(path: string, content: string | Uint8Array, mode = 0o644): void {
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", mode);
   try {
     try {
-      writeSync(fd, content);
+      if (typeof content === "string") writeSync(fd, content);
+      // A write can be short: loop until every byte is out.
+      else for (let at = 0; at < content.length; ) at += writeSync(fd, content, at, content.length - at);
     } finally {
       closeSync(fd);
     }
