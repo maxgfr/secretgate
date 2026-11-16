@@ -398,7 +398,7 @@ function postToolUse(input: Record<string, any>, cfg: SecretgateConfig, lib?: Ve
       let out = pass?.text ?? s;
       const extra = v.extra.get(s);
       if (extra && pass !== undefined) {
-        const left = v.deadline - performance.now();
+        const left = v.deadline - lib.verifierNow();
         // Redacting again costs about what the rules' pass over it cost.
         if (left > 0 && pass.ms <= left) {
           try {

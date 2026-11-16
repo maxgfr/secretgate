@@ -161,7 +161,9 @@ estimate cannot be the safety of a regex that may not change. So:
   that answer. Each distinct string is handled once (an output that repeats a
   string pays once), the cheapest rule pass first; a string whose rules' pass
   took longer than the time left is not redacted again; and past the deadline
-  the strings left keep the rules' result.
+  the strings left keep the rules' result. `tests/hooks/verifier-review4.test.ts`
+  checks this on a clock the test drives, so that the machine's load does not
+  decide it: past the deadline, the output is byte for byte the option-off one.
 - So the **worst-case added wall time per hook event is 1,000 ms for the child
   plus 250 ms after it, about 1.25 s** (a rule that is running when the deadline
   passes finishes first: the rules' deadline is checked between two rules),

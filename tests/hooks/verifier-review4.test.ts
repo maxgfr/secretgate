@@ -1,13 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleClaudeCode } from "../../src/hooks/claude-code.js";
 import { assetDir } from "../../src/verifier/assets.js";
 import { setJobRunner } from "../../src/verifier/child.js";
-import { recordHandled, takeHandled, verifyStrings } from "../../src/verifier/hook.js";
+import { REDACT_AGAIN_MS, recordHandled, setVerifierClock, takeHandled, verifyStrings } from "../../src/verifier/hook.js";
 import { runJob } from "../../src/verifier/job.js";
 import { type EngineLoader, setEngineLoader } from "../../src/verifier/verifier.js";
+import { FAKE } from "../fixtures/fake-tokens.js";
 
 // The second review's defects, with a FAKE engine run in this process: it
 // accepts a candidate when `accept` says so.
@@ -37,7 +38,10 @@ beforeEach(() => {
 afterEach(() => {
   setEngineLoader(undefined);
   setJobRunner(undefined);
+  setVerifierClock(undefined);
   delete process.env.SECRETGATE_HOME;
+  delete process.env.SECRETGATE_DEBUG;
+  delete process.env.SECRETGATE_DEBUG_FILE;
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -147,27 +151,78 @@ describe("2. object keys are never judged or rewritten", () => {
 });
 
 describe("3. one deadline for everything the verifier causes after its child", () => {
-  it("the reviewer's input: one value, then 20 identical 100 KB strings ending with it", async () => {
-    const PW = ["Qm7", "xR2", "pL9", "vN4", "kT8"].join("");
-    const B = `${"key".repeat(34_000)} ${PW}\n`;
-    const input = JSON.stringify({
-      session_id: "s1",
-      cwd: "/tmp",
-      tool_name: "mcp__srv__get",
-      tool_input: {},
-      tool_response: [{ type: "text", text: `DB_PASS=${PW}\n` }, ...Array.from({ length: 20 }, () => ({ type: "text", text: B }))],
+  // The deadline is read on a clock the test drives, never on the machine's:
+  // a loaded machine cannot make this pass or fail.
+  const PW = ["Qm7", "xR2", "pL9", "vN4", "kT8"].join("");
+  const texts = [`token: ${FAKE.githubPat}\n`, ...Array.from({ length: 5 }, (_, i) => `DB_PASS_${i}=${PW}${i}\n`)];
+  const input = JSON.stringify({
+    session_id: "s1",
+    cwd: "/tmp",
+    tool_name: "mcp__srv__get",
+    tool_input: {},
+    tool_response: texts.map((text) => ({ type: "text", text })),
+  });
+  const run = async () => (await handleClaudeCode("post-tool-use", input)).stdout;
+  const blocks = (stdout: string): string[] => JSON.parse(stdout).hookSpecificOutput.updatedToolOutput.map((b: { text: string }) => b.text);
+  // Each read of the clock moves it by `step`; the first read sets the deadline.
+  const ticking = (step: number) => {
+    let t = 0;
+    let reads = 0;
+    setVerifierClock(() => {
+      reads++;
+      const now = t;
+      t += step;
+      return now;
     });
-    const t0 = performance.now();
-    await handleClaudeCode("post-tool-use", input);
-    const off = performance.now() - t0;
+    return () => reads;
+  };
+  const debugOn = () => {
+    process.env.SECRETGATE_DEBUG = "verifier";
+    process.env.SECRETGATE_DEBUG_FILE = join(home, "debug.log");
+  };
+  const debugLines = () => {
+    const file = join(home, "debug.log");
+    return existsSync(file) ? readFileSync(file, "utf8") : "";
+  };
+
+  it("past the deadline, the strings left keep the rules' result, byte for byte as with the option off", async () => {
+    const off = blocks(await run());
+    expect(off[0]).toMatch(/^token: SECRETGATE_[0-9a-f]{12}\n$/);
+    expect(off.slice(1)).toEqual(texts.slice(1));
     on();
-    const t1 = performance.now();
-    const r = await handleClaudeCode("post-tool-use", input);
-    const added = performance.now() - t1 - off;
-    const { REDACT_AGAIN_MS } = await import("../../src/verifier/hook.js");
-    expect(added, `${added.toFixed(0)} ms added`).toBeLessThanOrEqual(REDACT_AGAIN_MS + (process.env.SECRETGATE_BOUND_STRICT === "1" ? 150 : 1000));
-    expect(out(r)[0].text).toMatch(/^DB_PASS=SECRETGATE_/);
-  }, 60_000);
+    debugOn();
+    // The clock has passed the deadline when the hook first looks at it again.
+    const reads = ticking(REDACT_AGAIN_MS + 1);
+    const late = blocks(await run());
+    expect(judged.length).toBe(5);
+    expect(late).toEqual(off);
+    expect(reads()).toBe(1 + 5);
+    expect(debugLines()).toContain("the event's deadline left 5 string(s) with the rules' redaction only");
+  });
+
+  it("a deadline reached midway: the strings handled in time are redacted, the others keep the rules' result", async () => {
+    const off = blocks(await run());
+    on();
+    debugOn();
+    // 100 per read against 250: the second and third reads are in time, the rest late.
+    ticking(100);
+    const mid = blocks(await run());
+    expect(mid[0]).toBe(off[0]);
+    const redacted = mid.slice(1).filter((t) => /^DB_PASS_\d=SECRETGATE_[0-9a-f]{12}\n$/.test(t));
+    const kept = mid.slice(1).filter((t) => texts.includes(t));
+    expect(redacted.length).toBe(2);
+    expect(kept.length).toBe(3);
+    expect(debugLines()).toContain("the event's deadline left 3 string(s) with the rules' redaction only");
+  });
+
+  it("with the clock still, every string it accepted in is redacted", async () => {
+    on();
+    setVerifierClock(() => 0);
+    const all = blocks(await run());
+    expect(all[0]).toMatch(/^token: SECRETGATE_[0-9a-f]{12}\n$/);
+    for (const t of all.slice(1)) expect(t).toMatch(/^DB_PASS_\d=SECRETGATE_[0-9a-f]{12}\n$/);
+    expect(all.join("")).not.toContain(PW);
+  });
 });
 
 describe("4. the session id is never a path", () => {

@@ -3988,12 +3988,20 @@ __export(hook_exports, {
   pruneHandled: () => pruneHandled,
   recordHandled: () => recordHandled,
   repositoryPath: () => repositoryPath,
+  setVerifierClock: () => setVerifierClock,
   takeHandled: () => takeHandled,
+  verifierNow: () => verifierNow,
   verifyStrings: () => verifyStrings
 });
 import { createHash as createHash4 } from "crypto";
 import { appendFileSync as appendFileSync2, lstatSync as lstatSync2, mkdirSync as mkdirSync6, opendirSync, readFileSync as readFileSync6, renameSync as renameSync4, rmSync as rmSync4, unlinkSync as unlinkSync2 } from "fs";
 import { basename as basename6, dirname as dirname7, join as join11 } from "path";
+function setVerifierClock(c) {
+  clock = c ?? realClock;
+}
+function verifierNow() {
+  return clock();
+}
 function applicableSpan(text, start, end, placeholders) {
   if (!(Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start && end <= text.length)) return false;
   if (isLow(text.charCodeAt(start)) && start > 0 && isHigh(text.charCodeAt(start - 1))) return false;
@@ -4022,7 +4030,7 @@ function verifyStrings(seen, o) {
       return none;
     }
     o.debug?.(`${o.label}: child answered in ${out.ms.toFixed(0)} ms; ${out.result.summary}`);
-    const deadline = performance.now() + REDACT_AGAIN_MS;
+    const deadline = clock() + REDACT_AGAIN_MS;
     const placeholdersOf = /* @__PURE__ */ new Map();
     const placeholders = (text) => {
       let p = placeholdersOf.get(text);
@@ -4106,7 +4114,7 @@ function takeHandled(session) {
   }
   return (s) => hashes.size > 0 && hashes.has(digest(s));
 }
-var REDACT_AGAIN_MS, overlaps, PLACEHOLDER2, finding, isHigh, isLow, handledDir, sessionFile, digest, HANDLED_MAX_AGE_MS, PRUNE_MAX_ENTRIES, RECORD_NAME;
+var REDACT_AGAIN_MS, realClock, clock, overlaps, PLACEHOLDER2, finding, isHigh, isLow, handledDir, sessionFile, digest, HANDLED_MAX_AGE_MS, PRUNE_MAX_ENTRIES, RECORD_NAME;
 var init_hook = __esm({
   "src/verifier/hook.ts"() {
     "use strict";
@@ -4117,6 +4125,8 @@ var init_hook = __esm({
     init_common();
     init_common();
     REDACT_AGAIN_MS = 250;
+    realClock = () => performance.now();
+    clock = realClock;
     overlaps = (a, b) => a.start < b.end && b.start < a.end;
     PLACEHOLDER2 = /SECRETGATE_[0-9a-f]{12,16}/g;
     finding = (text, start, end) => {
@@ -16009,7 +16019,7 @@ function postToolUse(input, cfg, lib) {
       let out = pass?.text ?? s;
       const extra = v.extra.get(s);
       if (extra && pass !== void 0) {
-        const left = v.deadline - performance.now();
+        const left = v.deadline - lib.verifierNow();
         if (left > 0 && pass.ms <= left) {
           try {
             out = redactText(s, vault, source, { allowlist: cfg.allowlist, deadlineMs: left }, () => extra).text;

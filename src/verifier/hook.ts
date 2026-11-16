@@ -15,6 +15,19 @@ export { debugFromEnv, repositoryPath, VERIFIER_RULE_ID } from "./common.js";
 /** The rules' deadline for re-redacting a string the verifier adds to; past it the string keeps the rules' redaction. */
 export const REDACT_AGAIN_MS = 250;
 
+// The clock the event's deadline is set and read on. Tests replace it, so that
+// the deadline path does not depend on how fast the machine is.
+const realClock = (): number => performance.now();
+let clock: () => number = realClock;
+/** For tests: the clock of `Verified.deadline` (undefined restores `performance.now`). */
+export function setVerifierClock(c: (() => number) | undefined): void {
+  clock = c ?? realClock;
+}
+/** The time now, on the clock of `Verified.deadline`. */
+export function verifierNow(): number {
+  return clock();
+}
+
 // The hook side of the experimental verifier (loaded only when it is on). The
 // rules' pass over the event comes first and is complete; this takes its
 // strings and their rule findings, sends them to the child process under the
@@ -45,7 +58,7 @@ export interface Verified {
   extra: Map<string, Finding[]>;
   /** whether the child answered (else nothing was judged) */
   completed: boolean;
-  /** `performance.now()` past which nothing more the verifier causes is done in this event: REDACT_AGAIN_MS after the child answered */
+  /** `verifierNow()` past which nothing more the verifier causes is done in this event: REDACT_AGAIN_MS after the child answered */
   deadline: number;
 }
 
@@ -98,7 +111,7 @@ export function verifyStrings(seen: readonly Seen[], o: VerifyOptions): Verified
     o.debug?.(`${o.label}: child answered in ${out.ms.toFixed(0)} ms; ${out.result.summary}`);
     // What the verifier causes after the child answered (the hook redacting
     // again the strings it adds to) runs under one deadline for the event.
-    const deadline = performance.now() + REDACT_AGAIN_MS;
+    const deadline = clock() + REDACT_AGAIN_MS;
     const placeholdersOf = new Map<string, Array<{ start: number; end: number }>>();
     const placeholders = (text: string) => {
       let p = placeholdersOf.get(text);
