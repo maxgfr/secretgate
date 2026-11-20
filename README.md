@@ -91,10 +91,11 @@ anything per-use.
   `openssl genrsa -out server.key` are fine; `cat`, `cp`, `curl -d @.env`,
   `source .env`, `< .env` are not.
 - **Experimental ML verifier** (opt-in, **off by default**): after the rules,
-  the 250 KB model `s6-secrets-verify-pico` judges the candidates they left in
-  tool output and redacts the ones it accepts, as `verifier:s6-secrets`. It
-  **failed its pre-registered gate** (line F1 0.856 against 0.733 for the best
-  rule scanner on 221 real repositories, +0.123 where +0.15 was asked) and is
+  the 250 KB model [`s6-secrets-verify-pico`](https://huggingface.co/maxgfr/s6-secrets-verify-pico)
+  from skycmd judges the candidates they left in tool output and redacts the
+  ones it accepts, as `verifier:s6-secrets`. It **failed its pre-registered
+  gate** (line F1 0.856 against 0.733 for the best rule scanner and 0.704 for
+  Gitleaks on 221 real repositories, +0.123 where +0.15 was asked) and is
   offered as an experiment. On 8,825 clean real files it redacts something in
   0.46% of them without a path (most tool output) and 0.27% with one (a Read);
   the model's own 0.35% was measured with the path. The rules' result is
