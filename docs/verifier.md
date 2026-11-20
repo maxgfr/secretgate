@@ -15,6 +15,16 @@ candidate in its context; the candidate is accepted when P is at least a
 threshold stored in the model file (`tau_f1` 0.2598 by default, also `tau_f05`
 0.4684 and `tau_f2` 0.0781).
 
+Where to read about the model itself:
+
+- its [model card](https://huggingface.co/maxgfr/s6-secrets-verify-pico) on
+  Hugging Face, which opens with its verdict (the failed gate below);
+- its [browser demo](https://huggingface.co/spaces/maxgfr/s6-secrets-verify-pico),
+  which runs the model on text you paste; the demo proposes candidates with a
+  simplified rule, not with secretgate's engine;
+- skycmd's [technical report](https://maxgfr.github.io/skycmd/paper/), which
+  places this result among the project's other pre-registered gates.
+
 **It failed its pre-registered gate.** It had to beat the best rule scanner by
 0.15 of line F1 over all the test repositories and reached +0.123. It is
 published as a result, not as a validated detector. The system "rules or
@@ -28,8 +38,8 @@ What was measured there, and nothing more is claimed here:
 
 | | the verifier | for comparison |
 |---|---|---|
-| line F1 on 221 real test repositories (Samsung CredData) | **0.856** (precision 0.839, recall 0.874) | secretgate's default rules 0.728; the best rule scanner (Betterleaks) 0.733; an open 17M-parameter model (cbx-secrets-detector-17M) 0.683 |
-| candidate F1 on issue reports with real values | **0.816** | Gitleaks 0.710 |
+| line F1 on 221 real test repositories (Samsung CredData) | **0.856** (precision 0.839, recall 0.874) | secretgate's default rules 0.728; the best rule scanner (Betterleaks 1.10.1) 0.733; Gitleaks 8.30.1 0.704 (precision 0.855, recall 0.598); an open 17M-parameter model (cbx-secrets-detector-17M) 0.683 |
+| candidate F1 on issue reports with real values | **0.816** | Gitleaks 8.30.1 0.710 |
 | clean real files with an accepted candidate (8,825 files), **with the file's path** | **0.35%** (31 files) | default rules 0.12% |
 | calibration (ECE, CredData test candidates) | 0.007 | |
 | time per candidate | about 1.6 ms natively, 2.6 ms in WebAssembly | |
@@ -45,6 +55,34 @@ and the hooks have a path for a Read only. Without the path, the same model
 accepts more on the clean files (below). **The rates that apply to the hooks
 are the option's own, measured at the end of this page: 0.46% of the clean files
 get a verifier redaction without a path (Bash output), 0.27% with it (Read).**
+
+## Should you turn it on?
+
+- **What it adds.** It runs in addition to the rules, never instead of them:
+  their findings are redacted exactly as with it off, and it can only add
+  redactions, for candidates no rule finding covers ([details](#the-rules-stay-the-authority)).
+- **What it measured.** Line F1 0.856 on 221 real repositories, against 0.733
+  for Betterleaks, 0.728 for secretgate's default rules and 0.704 for Gitleaks
+  (table above). It still failed its bar: +0.123 over the best rule scanner,
+  where +0.15 was asked.
+- **What it costs.** False redactions on clean files: 0.46% of them without a
+  path (Bash output), 0.27% with one (a Read), against 0.12% for the default
+  rules in the model's own evaluation ([details](#the-census-corpus-as-a-hook-pays-it)).
+  Added time per hook: median 44 to 59 ms, about 1.25 s at most ([details](#budget-a-hard-bound)).
+  Four data files to download ([sizes](#supply-chain)).
+- **What it cannot do.** It does not read raw text. It judges only the
+  candidates the frozen generator proposes (the rules with their filters off,
+  plus `generic-keyword` and `auth-scheme`; [details](#the-same-generator-the-same-inputs)),
+  so a secret no rule or keyword pattern proposes is never seen by it. On the
+  test repositories, skycmd's BENCH.md says the generator "overlaps 0.9260 of
+  the gated T rows and 0.8367 of all of them" (T rows: values CredData labels
+  as real credentials; "gated" leaves out the `UUID` rows), then: "Its misses
+  count as false negatives for every candidate-based system." The earlier
+  whole-text detector, `s6-secrets-pico`, flagged about 60% of real files that
+  hold no secret and was not adopted ([model-comparison.md](model-comparison.md)).
+- **Why it is off by default.** It failed its gate, and it redacts clean files
+  more often than the rules alone. It also does not run in the OpenCode
+  plugin, `secretgate scan`, `secretgate pipe`, or on prompts ([details](#what-it-does-in-each-hook)).
 
 ## Turning it on
 
