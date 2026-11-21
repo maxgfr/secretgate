@@ -20,7 +20,7 @@
 //    tau_f1 from the model file), against the skycmd evaluation: the state
 //    the model reads, P(real) and the accepted set.
 // 3. Clean text (--clean). The same on the census corpus of
-//    docs/model-comparison.md as the data froze it (eval/clean/corpus, the
+//    skycmd's docs/secretgate-model-comparison.md as the data froze it (eval/clean/corpus, the
 //    list of gen/clean-corpus.json): the generator with no source path, as the
 //    evaluation ran it, and the model's state built with the path and without.
 //

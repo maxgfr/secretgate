@@ -7,7 +7,7 @@
 //   nice -n 19 node scripts/verifier-measure.mjs --assets <dir> --clean-corpus <clean-corpus.json> --base <dir>
 //   nice -n 19 node scripts/verifier-measure.mjs --assets <dir> --tree <dir> [--read]
 //
-// --clean-corpus reads the list of the census corpus of docs/model-comparison.md
+// --clean-corpus reads the list of the census corpus of skycmd's docs/secretgate-model-comparison.md
 // as the s6-secrets v2 data froze it (`list`: repository and path, below
 // --base); --tree walks a directory. Each file is handed over as the stdout
 // of a Bash call (no path, as the census reads files), or with --read as a

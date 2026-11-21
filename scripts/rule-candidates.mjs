@@ -328,7 +328,7 @@ export function candidatesOf(text, engine, opts = {}) {
 
 // ---------------------------------------------------------------- files
 
-// The walk of scripts/model-compare.mjs's census, so counts compare.
+// The walk of the census in skycmd's docs/secretgate-model-comparison.md, so counts compare.
 export const DEFAULT_EXTENSIONS = new Set([".ts", ".js", ".mjs", ".cjs", ".json", ".md", ".toml", ".yml", ".yaml", ".rs"]);
 const SKIP_DIRS = new Set([".git", "target", ".claude", "coverage"]);
 

@@ -315,7 +315,7 @@ export function candidateRecords(text: string, opts: GeneratorOptions = {}): Can
  * minutes), `key=key=…` costs about a microsecond per keyword, and tool
  * output is text an attacker can write. The verifier skips a text whose
  * estimate is over its limit; the rules are not concerned. On the 8,825
- * files of the census corpus (docs/model-comparison.md) the largest estimate
+ * files of the census corpus (skycmd docs/secretgate-model-comparison.md) the largest estimate
  * was 8.2 million, for a 1.9 MB file the regex took 7 ms over.
  */
 const PER_KEYWORD_STEPS = 1500;

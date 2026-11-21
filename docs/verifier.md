@@ -77,9 +77,7 @@ get a verifier redaction without a path (Bash output), 0.27% with it (Read).**
   test repositories, skycmd's BENCH.md says the generator "overlaps 0.9260 of
   the gated T rows and 0.8367 of all of them" (T rows: values CredData labels
   as real credentials; "gated" leaves out the `UUID` rows), then: "Its misses
-  count as false negatives for every candidate-based system." The earlier
-  whole-text detector, `s6-secrets-pico`, flagged about 60% of real files that
-  hold no secret and was not adopted ([model-comparison.md](model-comparison.md)).
+  count as false negatives for every candidate-based system."
 - **Why it is off by default.** It failed its gate, and it redacts clean files
   more often than the rules alone. It also does not run in the OpenCode
   plugin, `secretgate scan`, `secretgate pipe`, or on prompts ([details](#what-it-does-in-each-hook)).
@@ -318,7 +316,7 @@ above tau, the evaluation's 6-decimal flags put it just below, and each build
 falls on one side. Every other accepted candidate is the same in all readings.
 
 **Proof 3, the clean files.** `scripts/verifier-proof.mjs --clean` does the same on the census corpus of
-[docs/model-comparison.md](model-comparison.md), as the s6-secrets v2 data froze
+[the rules' false-positive measurement](https://github.com/maxgfr/skycmd/blob/main/docs/secretgate-model-comparison.md) (in skycmd), as the s6-secrets v2 data froze
 it (8,825 files): the generator with no source path, as the evaluation ran it,
 gives the evaluation's 14,756 candidates; with the file's path below its
 repository, the state is the evaluation's for **14,756 of 14,756** (without a
