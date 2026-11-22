@@ -3800,6 +3800,9 @@ function preToolPolicy(call, cfg, cwd, opts) {
   });
 }
 
+// src/engine/scanner.ts
+import { isUtf8 } from "buffer";
+
 // src/engine/entropy.ts
 function shannonEntropy(s) {
   if (s.length === 0) return 0;
@@ -8365,7 +8368,7 @@ function pickSecret(match, secretGroup) {
   const [s, e] = indices[0];
   return { secret: match[0], start: s, end: e };
 }
-function scan(text, cfg = {}) {
+function scanRaw(text, cfg = {}) {
   if (text.length === 0) return [];
   if (cfg.sourcePath) {
     if (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath))) return [];
@@ -8464,6 +8467,61 @@ function dedupe(findings, text) {
     kept[kept.length - 1] = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
   }
   return kept;
+}
+function scan(text, cfg = {}) {
+  const deadline = cfg.deadlineMs === void 0 ? Infinity : performance.now() + cfg.deadlineMs;
+  const remaining = () => {
+    if (performance.now() > deadline) throw new ScanBudgetError(cfg.deadlineMs ?? 0);
+    return { ...cfg, ...Number.isFinite(deadline) ? { deadlineMs: deadline - performance.now() } : {} };
+  };
+  const findings = scanRaw(text, remaining());
+  if (cfg.sourcePath && (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath)) || isAllowedPath(cfg.sourcePath, cfg.allowlist))) return findings;
+  const cache = /* @__PURE__ */ new Map();
+  let bytes = 0;
+  const candidates = /(?:[A-Za-z0-9_+/-]|%[0-9a-fA-F]{2})+(?:={1,2})?/g;
+  for (const m of text.matchAll(candidates)) {
+    remaining();
+    const original = m[0], start = m.index;
+    if (original.length < 8 && !original.includes("%") || original.length > 16384 || alreadyRedacted(original) || isAllowedValue(original, cfg.allowlist))
+      continue;
+    const left = text.slice(Math.max(0, start - 256), start).split("\n").pop();
+    const end = start + original.length;
+    const right = text.slice(end, end + 256).split("\n")[0];
+    const key = left + "\0" + original + "\0" + right;
+    let hits = cache.get(key);
+    if (!hits) {
+      hits = [];
+      const decoded = [];
+      try {
+        if (/%[0-9a-f]{2}/i.test(original)) decoded.push(["percent", decodeURIComponent(original)]);
+        if (original.length >= 12 && original.length % 2 === 0 && /^[0-9a-f]+$/i.test(original)) {
+          const b = Buffer.from(original, "hex");
+          if (isUtf8(b)) decoded.push(["hex", b.toString("utf8")]);
+        }
+        if (original.length >= 8 && /^[A-Za-z0-9+/_-]+={0,2}$/.test(original)) {
+          const normalized = original.replaceAll("-", "+").replaceAll("_", "/");
+          const buffer = Buffer.from(normalized, "base64");
+          if (buffer.toString("base64").replace(/=+$/, "") === normalized.replace(/=+$/, "") && (!original.includes("=") || original.length % 4 === 0) && isUtf8(buffer))
+            decoded.push([/[-_]/.test(original) ? "base64url" : "base64", buffer.toString("utf8")]);
+        }
+      } catch {
+      }
+      if (decoded.length) {
+        if (cache.size >= 128) throw new ScanBudgetError(cfg.deadlineMs ?? 0);
+        for (const [encoding, value] of decoded) {
+          if ([...value].some((c) => c.charCodeAt(0) < 32 && !"	\n\r".includes(c))) continue;
+          bytes += Buffer.byteLength(value);
+          if (bytes > 262144) throw new ScanBudgetError(cfg.deadlineMs ?? 0);
+          for (const f of scanRaw(left + value + right, remaining())) {
+            if (f.start >= left.length && f.end <= left.length + value.length) hits.push({ ruleId: f.ruleId, entropy: f.entropy, encoding });
+          }
+        }
+        cache.set(key, hits);
+      }
+    }
+    for (const hit of hits) findings.push({ ...hit, match: original, secret: original, start, end, line: text.slice(0, start).split("\n").length - 1 });
+  }
+  return dedupe(findings, text);
 }
 
 // src/redact.ts
