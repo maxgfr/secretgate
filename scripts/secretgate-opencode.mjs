@@ -8365,18 +8365,13 @@ function pickSecret(match, secretGroup) {
   const [s, e] = indices[0];
   return { secret: match[0], start: s, end: e };
 }
-function scan(text, cfg = {}) {
+function scanRaw(text, cfg, deadline, merge = true) {
   if (text.length === 0) return [];
-  if (cfg.sourcePath) {
-    if (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath))) return [];
-    if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
-  }
   const subject = blanked(text);
   const lower = subject.toLowerCase();
   const starts = lineStarts(text);
   const pragmaLines = cfg.pragmas === false ? /* @__PURE__ */ new Set() : pragmaAllowedLines(text);
   const findings = [];
-  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
   for (const rule of COMPILED) {
     if (performance.now() > deadline) throw new ScanBudgetError(cfg.deadlineMs);
     if (isDisabledRule(rule.id, cfg.allowlist)) continue;
@@ -8415,7 +8410,7 @@ function scan(text, cfg = {}) {
       findings.push({ ruleId: rule.id, match: fullMatch, secret, start, end, entropy, line });
     }
   }
-  const kept = dedupe(findings, text);
+  const kept = merge ? dedupe(findings, text) : findings;
   if (isDisabledRule(AWS_SECRET_RULE, cfg.allowlist)) return kept;
   return withAwsSecretKeys(kept, text, starts, pragmaLines, cfg);
 }
@@ -8461,9 +8456,213 @@ function dedupe(findings, text) {
     }
     const named = preferF ? f : other;
     const secret = text.slice(other.start, f.end);
-    kept[kept.length - 1] = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
+    const merged = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
+    delete merged.encoding;
+    kept[kept.length - 1] = merged;
   }
   return kept;
+}
+var RUN_CLASS = new Uint8Array(128);
+var SEXTET = new Int8Array(128).fill(-1);
+var NIBBLE = new Int8Array(128).fill(-1);
+{
+  const b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 62; i++) {
+    RUN_CLASS[b64.charCodeAt(i)] = 1;
+    SEXTET[b64.charCodeAt(i)] = i;
+  }
+  for (const [c, cls, v] of [
+    ["+", 2, 62],
+    ["/", 2, 63],
+    ["-", 3, 62],
+    ["_", 3, 63]
+  ]) {
+    RUN_CLASS[c.charCodeAt(0)] = cls;
+    SEXTET[c.charCodeAt(0)] = v;
+  }
+  for (let i = 0; i < 16; i++) {
+    NIBBLE["0123456789abcdef".charCodeAt(i)] = i;
+    NIBBLE["0123456789ABCDEF".charCodeAt(i)] = i;
+  }
+}
+var UTF8 = new TextDecoder("utf-8", { fatal: true });
+var isControl = (c) => c < 32 ? c !== 9 && c !== 10 && c !== 13 : c >= 127 && c <= 159;
+function utf8Step(b, owed) {
+  if (owed > 0) return b >= 128 && b <= 191 ? owed - 1 : -1;
+  if (b < 128) return isControl(b) ? -1 : 0;
+  return b >= 194 && b <= 223 ? 1 : b >= 224 && b <= 239 ? 2 : b >= 240 && b <= 244 ? 3 : -1;
+}
+function hexIsText(text, start, end) {
+  let owed = 0;
+  for (let i = start; i < end; i += 2) {
+    owed = utf8Step(NIBBLE[text.charCodeAt(i)] << 4 | NIBBLE[text.charCodeAt(i + 1)], owed);
+    if (owed < 0) return false;
+  }
+  return owed === 0;
+}
+function base64IsText(text, start, end) {
+  let owed = 0;
+  let acc = 0;
+  let bits = 0;
+  for (let i = start; i < end; i++) {
+    acc = (acc << 6 | SEXTET[text.charCodeAt(i)]) & 16383;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      owed = utf8Step(acc >> bits & 255, owed);
+      if (owed < 0) return false;
+    }
+  }
+  return owed === 0;
+}
+var HAS_ESCAPE = 1;
+var NOT_HEX = 2;
+var BASE64_ONLY = 4;
+var BASE64URL_ONLY = 8;
+function decodeRun(text, start, end, pad, seen) {
+  const length = end - start;
+  let value;
+  let encoding;
+  if (seen & HAS_ESCAPE) {
+    const raw = text.slice(start, end);
+    try {
+      value = decodeURIComponent(raw);
+    } catch {
+      return void 0;
+    }
+    if (value === raw) return void 0;
+    encoding = "percent";
+  } else {
+    if (!(seen & NOT_HEX) && pad === 0 && length >= 16 && length % 2 === 0) {
+      if (!hexIsText(text, start, end)) return void 0;
+      encoding = "hex";
+    } else {
+      if (length < 12 || pad > 0 && length % 4 !== 0) return void 0;
+      if (seen & BASE64_ONLY && seen & BASE64URL_ONLY) return void 0;
+      const body = end - pad;
+      const rem = (body - start) % 4;
+      if (rem === 1 || rem > 1 && (SEXTET[text.charCodeAt(body - 1)] & (rem === 2 ? 15 : 3)) !== 0) return void 0;
+      if (!base64IsText(text, start, body)) return void 0;
+      encoding = seen & BASE64URL_ONLY ? "base64url" : "base64";
+    }
+    try {
+      value = UTF8.decode(Buffer.from(text.slice(start, end - pad), encoding));
+    } catch {
+      return void 0;
+    }
+  }
+  if (value.length < 8) return void 0;
+  for (let i = 0; i < value.length; i++) if (isControl(value.charCodeAt(i))) return void 0;
+  return { value, encoding };
+}
+function scan(text, cfg = {}) {
+  if (text.length === 0) return [];
+  if (cfg.sourcePath && (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath)) || isAllowedPath(cfg.sourcePath, cfg.allowlist))) return [];
+  const deadline = cfg.deadlineMs !== void 0 ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
+  const plain = scanRaw(text, cfg, deadline);
+  const runs = [];
+  const pieces = [];
+  let length = 0;
+  const push = (piece) => {
+    pieces.push(piece);
+    length += piece.length;
+  };
+  const lineEndFrom = (from) => {
+    const nl = text.indexOf("\n", from);
+    return nl === -1 ? text.length : nl;
+  };
+  let line = 0;
+  let lineStart = 0;
+  let lineEnd = lineEndFrom(0);
+  let open = false;
+  let copied = 0;
+  const marked = text.includes("SECRETGATE_");
+  const isEscape = (i) => text.charCodeAt(i) === 37 && NIBBLE[text.charCodeAt(i + 1)] >= 0 && NIBBLE[text.charCodeAt(i + 2)] >= 0;
+  let runsSeen = 0;
+  for (let i = 0; i < text.length; ) {
+    const start = i;
+    let units = 0;
+    let seen = 0;
+    for (; ; ) {
+      const c = text.charCodeAt(i);
+      const cls = c < 128 ? RUN_CLASS[c] : 0;
+      if (cls !== 0) {
+        if (NIBBLE[c] < 0) seen |= NOT_HEX;
+        if (cls === 2) seen |= BASE64_ONLY;
+        else if (cls === 3) seen |= BASE64URL_ONLY;
+        i++;
+      } else if (c === 37 && isEscape(i)) {
+        seen |= HAS_ESCAPE;
+        i += 3;
+      } else break;
+      units++;
+    }
+    if (units === 0) {
+      i++;
+      continue;
+    }
+    let pad = 0;
+    while (pad < 2 && text.charCodeAt(i) === 61) {
+      pad++;
+      i++;
+    }
+    if (units < 8) continue;
+    if ((++runsSeen & 255) === 0 && performance.now() > deadline) throw new ScanBudgetError(cfg.deadlineMs);
+    if (marked && alreadyRedacted(text.slice(start, i))) continue;
+    const decoded = decodeRun(text, start, i, pad, seen);
+    if (decoded === void 0 || isAllowedValue(text.slice(start, i), cfg.allowlist)) continue;
+    const end = i;
+    if (start > lineEnd) {
+      if (open) push(text.slice(copied, lineEnd));
+      open = false;
+      do {
+        lineStart = lineEnd + 1;
+        lineEnd = lineEndFrom(lineStart);
+        line++;
+      } while (start > lineEnd);
+    }
+    if (!open) {
+      if (length > 0) push("\n");
+      open = true;
+      copied = lineStart;
+    }
+    push(text.slice(copied, start));
+    runs.push({ from: length, to: length + decoded.value.length, start, end, line, encoding: decoded.encoding });
+    push(decoded.value);
+    copied = end;
+  }
+  if (runs.length === 0) return plain;
+  if (open) push(text.slice(copied, lineEnd));
+  const decodedFindings = scanRaw(pieces.join(""), { ...cfg, pragmas: false }, deadline, false);
+  const best = new Array(runs.length);
+  for (const f of decodedFindings) {
+    let lo = 0;
+    let hi = runs.length - 1;
+    while (lo < hi) {
+      const mid = lo + hi + 1 >> 1;
+      if (runs[mid].from <= f.start) lo = mid;
+      else hi = mid - 1;
+    }
+    const r = runs[lo];
+    if (f.start < r.from || f.end > r.to) continue;
+    const prev = best[lo];
+    const rank = prev === void 0 ? 1 : specificity(f.ruleId) - specificity(prev.ruleId) || f.end - f.start - (prev.end - prev.start);
+    if (rank > 0) best[lo] = f;
+  }
+  let pragmaLines;
+  const mapped = [];
+  let p = 0;
+  for (let i = 0; i < runs.length; i++) {
+    const f = best[i];
+    if (f === void 0) continue;
+    const r = runs[i];
+    if (cfg.pragmas !== false && (pragmaLines ??= pragmaAllowedLines(text)).has(r.line)) continue;
+    while (p < plain.length && plain[p].end <= r.start) p++;
+    if (p < plain.length && plain[p].start <= r.start && r.end <= plain[p].end) continue;
+    const original = text.slice(r.start, r.end);
+    mapped.push({ ruleId: f.ruleId, match: original, secret: original, start: r.start, end: r.end, entropy: f.entropy, line: r.line, encoding: r.encoding });
+  }
+  return mapped.length === 0 ? plain : dedupe([...plain, ...mapped], text);
 }
 
 // src/redact.ts

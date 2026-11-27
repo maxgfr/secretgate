@@ -174,10 +174,15 @@ interface ScanHit {
 // (same secret already found → skipped; the user allowlist still applies).
 async function gitleaksExtra(bin: string, text: string, found: Finding[], allowlist: UserAllowlist): Promise<Finding[]> {
   const known = new Set(found.map((f) => f.secret));
+  // gitleaks decodes too, and reports the DECODED value: a secret that is not
+  // in the text as written, on a line where the JS engine already flagged an
+  // encoded string, is that string again.
+  const encodedLines = new Set(found.filter((f) => f.encoding !== undefined).map((f) => f.line));
   const extra: Finding[] = [];
   let lineStarts: number[] | undefined;
   for (const g of await scanWithGitleaks(text, { bin })) {
     if (!g.secret || known.has(g.secret) || isNonSecret(g.secret) || isAllowedValue(g.secret, allowlist) || isDisabledRule(g.ruleId, allowlist)) continue;
+    if (g.startLine !== undefined && encodedLines.has(g.startLine - 1) && !text.includes(g.secret)) continue;
     // gitleaks says which line; the first occurrence is only a fallback (a
     // repeated secret would otherwise always point at its first line).
     lineStarts ??= [0, ...[...text.matchAll(/\n/g)].map((m) => m.index + 1)];
@@ -315,6 +320,7 @@ async function cmdScan(args: string[], io: Io): Promise<number> {
             entropy: Number(finding.entropy.toFixed(3)),
             length: finding.secret.length,
             sha256: hashPrefix(finding.secret),
+            ...(finding.encoding !== undefined ? { encoding: finding.encoding } : {}),
           })),
         },
         null,

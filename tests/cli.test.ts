@@ -115,4 +115,45 @@ describe("scan — gitleaks hybrid findings", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  // gitleaks decodes base64 too and reports the decoded value, which is not in
+  // the file as written: on a line where the JS engine flagged the encoded
+  // string, it is the same secret again.
+  it("leave out the decoded value of an encoded string the JS engine flagged", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "sg-hybrid-"));
+    const bin = join(dir, "bin");
+    const repo = join(dir, "repo");
+    const savedPath = process.env.PATH;
+    const savedCwd = process.cwd();
+    try {
+      for (const d of [bin, repo]) mkdirSync(d, { recursive: true });
+      const token = "ghp_" + "Ab3dE6gH9jK2mN5pQ8rS1tU4vW7xY0zC3fG6";
+      const found = [
+        { RuleID: "github-pat", Secret: token, StartLine: 2 },
+        // Absent from the text too, but on no line of an encoded finding: kept.
+        { RuleID: "stub", Secret: "absent-value-9", StartLine: 3 },
+      ];
+      writeFileSync(join(bin, "gitleaks"), `#!/bin/sh\ncat > /dev/null\necho '${JSON.stringify(found)}' > "$8"\nexit 99\n`);
+      chmodSync(join(bin, "gitleaks"), 0o755);
+      writeFileSync(join(repo, "a.txt"), `token ${FAKE.githubPat}\nblob: ${Buffer.from(token).toString("base64")}\nplain line\n`);
+      process.env.PATH = `${bin}:${savedPath}`;
+      process.chdir(repo);
+      vi.resetModules();
+      const { run: freshRun } = await import("../src/cli.js");
+      const { io, out } = capture();
+      await freshRun(["scan", ".", "--json"], io);
+      const findings = JSON.parse(out.join("")).findings as Array<{ line: number; ruleId: string; encoding?: string }>;
+      expect(findings.map((f) => [f.line, f.ruleId, f.encoding])).toEqual([
+        // Not in the text, the stub's value is placed at offset 0 (as today).
+        [1, "gitleaks:stub", undefined],
+        [1, "github-pat", undefined],
+        [2, "github-pat", "base64"],
+      ]);
+      expect(findings.filter((f) => "encoding" in f)).toHaveLength(1);
+    } finally {
+      process.env.PATH = savedPath;
+      process.chdir(savedCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
