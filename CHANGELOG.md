@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here, generated automatically from the Conventional Commits by semantic-release.
 
+# [1.10.0](https://github.com/maxgfr/secretgate/compare/v1.9.0...v1.10.0) (2026-11-27)
+
+
+### Features
+
+* **scanner:** find secrets behind one layer of base64, hex or percent-encoding ([880e2fa](https://github.com/maxgfr/secretgate/commit/880e2fa2926554618e3817730c32937d16b74c85))
+
 # [1.9.0](https://github.com/maxgfr/secretgate/compare/v1.8.1...v1.9.0) (2026-11-16)
 
 
