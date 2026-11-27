@@ -14,7 +14,12 @@ export interface Finding {
   entropy: number;
   /** 0-based line index of the secret start */
   line: number;
+  /** Set when the secret was found DECODED: the span is the encoded string as
+   *  written, the rule the one that matched its decoded value. */
+  encoding?: Encoding;
 }
+
+export type Encoding = "base64" | "base64url" | "hex" | "percent";
 
 export interface ScanConfig {
   /** enables path-based allowlists (upstream global + user globs) */
@@ -520,12 +525,13 @@ function pickSecret(match: RegExpExecArray, secretGroup: number | undefined): { 
   return { secret: match[0], start: s, end: e };
 }
 
-export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
+// One pass of every rule over `text`. The path exemptions are scan's, and so
+// is the deadline: an absolute `performance.now()` time both passes share,
+// while the error still names the budget the caller asked for. With `merge`
+// false, overlapping findings stay as the rules made them, for the decoded
+// pass to map back one by one (see scan).
+function scanRaw(text: string, cfg: ScanConfig, deadline: number, merge = true): Finding[] {
   if (text.length === 0) return [];
-  if (cfg.sourcePath) {
-    if (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath!))) return [];
-    if (isAllowedPath(cfg.sourcePath, cfg.allowlist)) return [];
-  }
 
   // Everything AROUND a value is read from a copy in which each placeholder is
   // blanked: the rules' patterns and keywords, the name a value is assigned
@@ -539,7 +545,6 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
   const starts = lineStarts(text);
   const pragmaLines = cfg.pragmas === false ? new Set<number>() : pragmaAllowedLines(text);
   const findings: Finding[] = [];
-  const deadline = cfg.deadlineMs !== undefined ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
 
   for (const rule of COMPILED) {
     // Check the wall-clock budget between rules (a single rule stays linear;
@@ -598,7 +603,7 @@ export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
     }
   }
 
-  const kept = dedupe(findings, text);
+  const kept = merge ? dedupe(findings, text) : findings;
   if (isDisabledRule(AWS_SECRET_RULE, cfg.allowlist)) return kept;
   return withAwsSecretKeys(kept, text, starts, pragmaLines, cfg);
 }
@@ -674,7 +679,295 @@ function dedupe(findings: Finding[], text: string): Finding[] {
     }
     const named = preferF ? f : other;
     const secret = text.slice(other.start, f.end);
-    kept[kept.length - 1] = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
+    const merged: Finding = { ...named, match: secret, secret, start: other.start, end: f.end, entropy: shannonEntropy(secret), line: other.line };
+    // Wider than the encoded string, the span is no longer one as written.
+    delete merged.encoding;
+    kept[kept.length - 1] = merged;
   }
   return kept;
+}
+
+// ---------------------------------------------------------------- encoded secrets
+// A secret is often handed over encoded: a base64'd .env or kubeconfig, a hex
+// dump, a token percent-encoded in a URL. No rule matches it as written, so
+// scan reads the text twice:
+//   1. every rule over the text as it is;
+//   2. every rule, once, over a synthetic text: each line holding a run that
+//      decodes, with the run replaced by what it decodes to. A finding there
+//      counts only if it lies inside a decoded value, and it is reported on
+//      the ENCODED string as written: that whole string is redacted (half of a
+//      base64 run hides nothing) and restored as it was.
+// The rules read the decoded value in its own line, so `password="<base64>"`
+// is still an assignment; pragmas, disabled rules, path scopes and the user's
+// allowlists apply as to any finding (the hash of the encoded string, or of
+// the secret found once it is decoded, allows it).
+//
+// A decoded value is never longer than its encoding and only lines holding one
+// are kept, so the synthetic text is at most the size of the original: one
+// extra rule pass at worst, under the same deadline. There is no cap on how
+// many runs are decoded, on purpose. A cap that throws fails closed on
+// ordinary files (a page of percent-encoded links, a bundle); a cap that stops
+// decoding quietly lets an attacker put that many decoys before the real
+// secret. The wall-clock deadline is the one bound, as it is for the rules.
+//
+// One layer, one encoding per run (percent, else hex, else base64): a run that
+// decodes to binary, to control characters or to fewer than 8 characters is
+// left as it is. An encoding inside another, base64 wrapped over several lines
+// and a secret split between encoded and plain text are not reconstructed.
+
+// Character classes of an encoded run, by char code: 1 a letter or a digit,
+// 2 `+` or `/` (base64), 3 `-` or `_` (base64url), 0 none.
+const RUN_CLASS = new Uint8Array(128);
+// The value of a base64 character (either alphabet) and of a hex digit, -1 for none.
+const SEXTET = new Int8Array(128).fill(-1);
+const NIBBLE = new Int8Array(128).fill(-1);
+{
+  const b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  for (let i = 0; i < 62; i++) {
+    RUN_CLASS[b64.charCodeAt(i)] = 1;
+    SEXTET[b64.charCodeAt(i)] = i;
+  }
+  for (const [c, cls, v] of [
+    ["+", 2, 62],
+    ["/", 2, 63],
+    ["-", 3, 62],
+    ["_", 3, 63],
+  ] as const) {
+    RUN_CLASS[c.charCodeAt(0)] = cls;
+    SEXTET[c.charCodeAt(0)] = v;
+  }
+  for (let i = 0; i < 16; i++) {
+    NIBBLE["0123456789abcdef".charCodeAt(i)] = i;
+    NIBBLE["0123456789ABCDEF".charCodeAt(i)] = i;
+  }
+}
+const UTF8 = new TextDecoder("utf-8", { fatal: true });
+
+// What text never holds: C0 controls but tab and line breaks, DEL, the C1 range.
+const isControl = (c: number): boolean => (c < 0x20 ? c !== 0x09 && c !== 0x0a && c !== 0x0d : c >= 0x7f && c <= 0x9f);
+
+// One byte of a UTF-8 stream, given how many continuation bytes are still
+// owed: how many are owed after it, or -1 if no text has it here. A necessary
+// check only (the decoder settles overlong forms and surrogates), and enough
+// to turn down a run that is no encoding at all within its first few bytes,
+// before anything is allocated for it. Every identifier of twelve letters is
+// a base64 run, and a bundle holds thousands.
+function utf8Step(b: number, owed: number): number {
+  if (owed > 0) return b >= 0x80 && b <= 0xbf ? owed - 1 : -1;
+  if (b < 0x80) return isControl(b) ? -1 : 0;
+  return b >= 0xc2 && b <= 0xdf ? 1 : b >= 0xe0 && b <= 0xef ? 2 : b >= 0xf0 && b <= 0xf4 ? 3 : -1;
+}
+
+function hexIsText(text: string, start: number, end: number): boolean {
+  let owed = 0;
+  for (let i = start; i < end; i += 2) {
+    owed = utf8Step((NIBBLE[text.charCodeAt(i)]! << 4) | NIBBLE[text.charCodeAt(i + 1)]!, owed);
+    if (owed < 0) return false;
+  }
+  return owed === 0;
+}
+
+function base64IsText(text: string, start: number, end: number): boolean {
+  let owed = 0;
+  let acc = 0;
+  let bits = 0;
+  for (let i = start; i < end; i++) {
+    acc = ((acc << 6) | SEXTET[text.charCodeAt(i)]!) & 0x3fff;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      owed = utf8Step((acc >> bits) & 0xff, owed);
+      if (owed < 0) return false;
+    }
+  }
+  return owed === 0;
+}
+
+// What the scan of a run found in it (see scan).
+const HAS_ESCAPE = 1;
+const NOT_HEX = 2;
+const BASE64_ONLY = 4; // `+` or `/`
+const BASE64URL_ONLY = 8; // `-` or `_`
+
+/** What `text[start, end)` decodes to as text, and how, if it does. `pad`
+ *  counts the `=` it ends with. */
+function decodeRun(text: string, start: number, end: number, pad: number, seen: number): { value: string; encoding: Encoding } | undefined {
+  const length = end - start;
+  let value: string;
+  let encoding: Encoding;
+  if (seen & HAS_ESCAPE) {
+    const raw = text.slice(start, end);
+    try {
+      value = decodeURIComponent(raw);
+    } catch {
+      return undefined; // not UTF-8
+    }
+    if (value === raw) return undefined;
+    encoding = "percent";
+  } else {
+    if (!(seen & NOT_HEX) && pad === 0 && length >= 16 && length % 2 === 0) {
+      if (!hexIsText(text, start, end)) return undefined;
+      encoding = "hex";
+    } else {
+      // Padding only completes a group of four.
+      if (length < 12 || (pad > 0 && length % 4 !== 0)) return undefined;
+      if (seen & BASE64_ONLY && seen & BASE64URL_ONLY) return undefined; // two alphabets mixed
+      // Canonical only: one character over a group of four is no base64, and
+      // an encoder leaves the bits past the last byte at zero. Decoders accept
+      // either, which would take twice as many runs for base64.
+      const body = end - pad;
+      const rem = (body - start) % 4;
+      if (rem === 1 || (rem > 1 && (SEXTET[text.charCodeAt(body - 1)]! & (rem === 2 ? 0x0f : 0x03)) !== 0)) return undefined;
+      if (!base64IsText(text, start, body)) return undefined;
+      encoding = seen & BASE64URL_ONLY ? "base64url" : "base64";
+    }
+    try {
+      // Checked as UTF-8 already, but for the forms only a decoder knows.
+      value = UTF8.decode(Buffer.from(text.slice(start, end - pad), encoding));
+    } catch {
+      return undefined;
+    }
+  }
+  if (value.length < 8) return undefined;
+  for (let i = 0; i < value.length; i++) if (isControl(value.charCodeAt(i))) return undefined;
+  return { value, encoding };
+}
+
+interface DecodedRun {
+  /** the decoded value's span in the synthetic text */
+  from: number;
+  to: number;
+  /** the encoded run's span and line in the original text */
+  start: number;
+  end: number;
+  line: number;
+  encoding: Encoding;
+}
+
+export function scan(text: string, cfg: ScanConfig = {}): Finding[] {
+  if (text.length === 0) return [];
+  if (cfg.sourcePath && (GLOBAL_PATHS.some((re) => re.test(cfg.sourcePath!)) || isAllowedPath(cfg.sourcePath, cfg.allowlist))) return [];
+  const deadline = cfg.deadlineMs !== undefined ? performance.now() + cfg.deadlineMs : Number.POSITIVE_INFINITY;
+  const plain = scanRaw(text, cfg, deadline);
+
+  // The synthetic text, line by line: what each line holding a decoded run
+  // reads once its runs are decoded, the lines joined by "\n".
+  const runs: DecodedRun[] = [];
+  const pieces: string[] = [];
+  let length = 0;
+  const push = (piece: string): void => {
+    pieces.push(piece);
+    length += piece.length;
+  };
+  const lineEndFrom = (from: number): number => {
+    const nl = text.indexOf("\n", from);
+    return nl === -1 ? text.length : nl;
+  };
+  let line = 0;
+  let lineStart = 0;
+  let lineEnd = lineEndFrom(0);
+  let open = false; // whether the current line is being copied
+  let copied = 0; // up to where it is
+  const marked = text.includes("SECRETGATE_");
+  const isEscape = (i: number): boolean => text.charCodeAt(i) === 37 && NIBBLE[text.charCodeAt(i + 1)]! >= 0 && NIBBLE[text.charCodeAt(i + 2)]! >= 0;
+  let runsSeen = 0;
+  for (let i = 0; i < text.length; ) {
+    // A run: letters, digits, `+/-_` and `%XX` escapes, then at most two `=`
+    // of padding. By hand rather than by a regex: it visits every character
+    // once and allocates nothing for a run that cannot decode, which is what
+    // keeps this close to free on text that holds no encoding.
+    const start = i;
+    let units = 0;
+    let seen = 0;
+    for (;;) {
+      const c = text.charCodeAt(i);
+      const cls = c < 128 ? RUN_CLASS[c]! : 0;
+      if (cls !== 0) {
+        if (NIBBLE[c]! < 0) seen |= NOT_HEX;
+        if (cls === 2) seen |= BASE64_ONLY;
+        else if (cls === 3) seen |= BASE64URL_ONLY;
+        i++;
+      } else if (c === 37 && isEscape(i)) {
+        seen |= HAS_ESCAPE;
+        i += 3;
+      } else break;
+      units++;
+    }
+    if (units === 0) {
+      i++;
+      continue;
+    }
+    let pad = 0;
+    while (pad < 2 && text.charCodeAt(i) === 61) {
+      pad++;
+      i++;
+    }
+    // Eight units at least: nothing shorter decodes to the eight characters a
+    // value needs.
+    if (units < 8) continue;
+    if ((++runsSeen & 0xff) === 0 && performance.now() > deadline) throw new ScanBudgetError(cfg.deadlineMs!);
+    if (marked && alreadyRedacted(text.slice(start, i))) continue;
+    const decoded = decodeRun(text, start, i, pad, seen);
+    if (decoded === undefined || isAllowedValue(text.slice(start, i), cfg.allowlist)) continue;
+    const end = i;
+    if (start > lineEnd) {
+      if (open) push(text.slice(copied, lineEnd));
+      open = false;
+      do {
+        lineStart = lineEnd + 1;
+        lineEnd = lineEndFrom(lineStart);
+        line++;
+      } while (start > lineEnd);
+    }
+    if (!open) {
+      if (length > 0) push("\n");
+      open = true;
+      copied = lineStart;
+    }
+    push(text.slice(copied, start));
+    runs.push({ from: length, to: length + decoded.value.length, start, end, line, encoding: decoded.encoding });
+    push(decoded.value);
+    copied = end;
+  }
+  if (runs.length === 0) return plain;
+  if (open) push(text.slice(copied, lineEnd));
+
+  // Pragmas are read from the original lines below, not from decoded text.
+  // Unmerged, each finding is kept or dropped on its own span: merged with one
+  // that reaches into the plain text, a finding inside a decoded value would
+  // be lost with it.
+  const decodedFindings = scanRaw(pieces.join(""), { ...cfg, pragmas: false }, deadline, false);
+  const best: Array<Finding | undefined> = new Array(runs.length);
+  for (const f of decodedFindings) {
+    // The last run whose value starts at or before the finding.
+    let lo = 0;
+    let hi = runs.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (runs[mid]!.from <= f.start) lo = mid;
+      else hi = mid - 1;
+    }
+    const r = runs[lo]!;
+    if (f.start < r.from || f.end > r.to) continue; // in the plain text: pass 1's
+    // One finding per run, named as dedupe would name it.
+    const prev = best[lo];
+    const rank = prev === undefined ? 1 : specificity(f.ruleId) - specificity(prev.ruleId) || f.end - f.start - (prev.end - prev.start);
+    if (rank > 0) best[lo] = f;
+  }
+
+  let pragmaLines: Set<number> | undefined;
+  const mapped: Finding[] = [];
+  let p = 0; // plain findings are sorted and disjoint
+  for (let i = 0; i < runs.length; i++) {
+    const f = best[i];
+    if (f === undefined) continue;
+    const r = runs[i]!;
+    if (cfg.pragmas !== false && (pragmaLines ??= pragmaAllowedLines(text)).has(r.line)) continue;
+    // Already redacted whole by a plain finding: that one is kept.
+    while (p < plain.length && plain[p]!.end <= r.start) p++;
+    if (p < plain.length && plain[p]!.start <= r.start && r.end <= plain[p]!.end) continue;
+    const original = text.slice(r.start, r.end);
+    mapped.push({ ruleId: f.ruleId, match: original, secret: original, start: r.start, end: r.end, entropy: f.entropy, line: r.line, encoding: r.encoding });
+  }
+  return mapped.length === 0 ? plain : dedupe([...plain, ...mapped], text);
 }

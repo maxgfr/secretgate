@@ -68,7 +68,11 @@ anything per-use.
   basic-auth URLs), **quoted passwords with punctuation** that gitleaks' generic
   rule misses, the AWS secret access key written next to its key id (a
   credentials CSV row, `<key id>:<secret key>`), and Groq, Replicate and xAI
-  keys and Discord webhook URLs, which gitleaks has no rule for. Zero runtime dependencies, single bundled `.mjs`, ~50ms per scan.
+  keys and Discord webhook URLs, which gitleaks has no rule for. Secrets behind
+  a single layer of base64, base64url, hex or percent-encoding are found too,
+  and the encoded string is redacted whole (and restored as written); nested
+  encodings, base64 wrapped across lines and secrets split between encoded and
+  plain text are not decoded. Zero runtime dependencies, single bundled `.mjs`, ~50ms per scan.
   If the real `gitleaks` binary is installed, `secretgate scan` runs it as a
   second engine and reports what it adds (`--no-gitleaks`, or `"hybrid": "off"`
   in `~/.secretgate/config.json`, to skip it). Hooks always use the JS engine only.
